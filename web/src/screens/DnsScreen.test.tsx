@@ -153,6 +153,9 @@ describe('DnsScreen', () => {
     renderDns(rwCaps, onSaved);
 
     expect(await screen.findByDisplayValue('cloudflare-dns.com')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Resolver mode' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Served segments' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Local names & DHCP leases' })).toBeInTheDocument();
     // Add a blank upstream row before a populated row to verify blank-row pruning aligns 422 indices.
     fireEvent.click(screen.getByRole('button', { name: 'Add upstream' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add upstream' }));

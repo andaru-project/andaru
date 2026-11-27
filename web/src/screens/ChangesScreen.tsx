@@ -137,8 +137,8 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   return (
     <Stack>
       <div><Title order={2}>Review and apply</Title><Text c="dimmed">Saved changes take effect only when applied, and stay only when confirmed.</Text></div>
-      {stateError && <Alert color="red" role="alert" title="Changes request failed">{stateError}</Alert>}
-      {review.error && <Alert color="red" role="alert" title="Review request failed"><Stack gap="xs"><Text size="sm">{review.error}</Text><Group><Button size="xs" variant="default" loading={review.loading} onClick={reload}>Reload</Button></Group></Stack></Alert>}
+      {stateError && (connected || !state) && <Alert color="red" role="alert" title="Changes request failed">{stateError}</Alert>}
+      {review.error && (connected || !detail) && <Alert color="red" role="alert" title="Review request failed"><Stack gap="xs"><Text size="sm">{review.error}</Text><Group><Button size="xs" variant="default" loading={review.loading} onClick={reload}>Reload</Button></Group></Stack></Alert>}
       {stale && !review.error && <Alert color="yellow" role="status" title={stale}><Button size="xs" variant="default" loading={review.loading} onClick={reload}>Reload</Button></Alert>}
       {message && <Alert color="blue" role="status">{message}</Alert>}
       {refused.length > 0 && <Alert color="red" title="The engine refused the apply"><FindingsList findings={refused} /></Alert>}

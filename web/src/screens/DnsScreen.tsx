@@ -7,7 +7,7 @@ import {
   checkDns, dnsDraftOf, dnsErrors, dnsListenAddresses, dnsPayload, isDnsEligibleSegment, pruneDnsDraft, type DnsDraft,
 } from '../dnsEdit';
 import type { DnsMode, DnsService, DnsUpstreamProtocol, SavedObject, Session, Snapshot } from '../types';
-import { useResource } from '../useResource';
+import { useConnected, useResource } from '../useResource';
 import { virtualAddressKind } from '../virtualIps';
 import { zoneColorMap } from '../zones';
 import { ZoneBadge } from './ZoneBadge';
@@ -22,6 +22,7 @@ interface DnsScreenProps {
 const mono = { input: 'mono-input' };
 
 export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenProps) {
+  const connected = useConnected();
   const canWrite = session.capabilities.includes('configuration.write');
 
   const readSeq = useRef(0);
@@ -277,7 +278,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
         <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
       </Group>
 
-      {resource.error && <Alert color="red" role="alert" title="DNS request failed">{resource.error}</Alert>}
+      {resource.error && (connected || !resource.data) && <Alert color="red" role="alert" title="DNS request failed">{resource.error}</Alert>}
 
       {notice && (
         <Alert color="yellow" role="status" withCloseButton onClose={() => setNotice('')}>{notice}</Alert>
@@ -298,9 +299,9 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
       )}
 
       {!showForm ? (
-        <Paper withBorder p="md" radius="sm">
+        <Paper component="section" withBorder p="md" aria-labelledby="dns-off">
           <Stack gap="sm" align="flex-start">
-            <Text fw={600}>DNS service is off</Text>
+            <Title order={3} size="h5" id="dns-off">DNS service is off</Title>
             <Text size="sm" c="dimmed">
               Enable the DNS service to run a recursive or forwarding resolver on selected segments, serve local hostnames, and automatically register DHCP leases.
             </Text>
@@ -314,7 +315,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
           <Stack>
             {!dns && (
               <Text size="sm" c="dimmed">
-                Saving enables the DNS service in the draft configuration. Nothing changes on the box until applied.
+                Saving enables the DNS service in the draft configuration. Nothing changes until applied.
               </Text>
             )}
             {failure && <Alert ref={failureRef} color="red" role="alert" title="The DNS service was not saved">{failure}</Alert>}
@@ -326,8 +327,9 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
 
             <Fieldset variant="unstyled" disabled={!canWrite || busy || disabling}>
               <Stack>
-                <Fieldset legend="Resolver mode">
+                <Paper component="section" withBorder p="md" aria-labelledby="dns-resolver-mode">
                   <Stack gap="sm">
+                    <Title order={3} size="h5" id="dns-resolver-mode">Resolver mode</Title>
                     <SegmentedControl
                       aria-label="Resolver mode"
                       value={activeDraft.mode}
@@ -431,10 +433,11 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                       </Stack>
                     )}
                   </Stack>
-                </Fieldset>
+                </Paper>
 
-                <Fieldset legend="Served segments">
+                <Paper component="section" withBorder p="md" aria-labelledby="dns-served-segments">
                   <Stack gap="xs">
+                    <Title order={3} size="h5" id="dns-served-segments">Served segments</Title>
                     <Text size="xs" c="dimmed">
                       Segments where the DNS service listens on port 53. Requires a static IPv4 or static IPv6 address on the segment.
                     </Text>
@@ -524,10 +527,11 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                       </Text>
                     ) : null}
                   </Stack>
-                </Fieldset>
+                </Paper>
 
-                <Fieldset legend="Local names & DHCP leases">
+                <Paper component="section" withBorder p="md" aria-labelledby="dns-local-names">
                   <Stack gap="xs">
+                    <Title order={3} size="h5" id="dns-local-names">Local names &amp; DHCP leases</Title>
                     <TextInput
                       label="Local domain"
                       description="Domain suffix for local hostnames and registered DHCP leases (defaults to home.arpa)."
@@ -552,7 +556,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                       onChange={(e) => patchDraft({ registerLeases: e.currentTarget.checked })}
                     />
                   </Stack>
-                </Fieldset>
+                </Paper>
               </Stack>
             </Fieldset>
 

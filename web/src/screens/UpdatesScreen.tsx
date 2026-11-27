@@ -34,14 +34,14 @@ function shortDigest(digest?: string): string {
   return digest.length > 24 ? `${digest.slice(0, 19)}…` : digest;
 }
 
-const stateMeta: Record<UpdateStatus['state'], { color: string; label: string }> = {
+const runningBadgeMeta: Record<UpdateStatus['state'], { color: string; label: string }> = {
   unchecked: { color: 'gray', label: 'Not checked yet' },
   up_to_date: { color: 'green', label: 'Up to date' },
-  available: { color: 'orange', label: 'Update available' },
-  staged: { color: 'teal', label: 'Staged — reboot required' },
+  available: { color: 'blue', label: 'Active' },
+  staged: { color: 'blue', label: 'Active' },
   checking: { color: 'blue', label: 'Checking…' },
-  staging: { color: 'blue', label: 'Downloading and staging…' },
-  rolling_back: { color: 'yellow', label: 'Queueing rollback…' },
+  staging: { color: 'blue', label: 'Active' },
+  rolling_back: { color: 'blue', label: 'Active' },
   error: { color: 'red', label: 'Check failed' },
   unsupported: { color: 'gray', label: 'Not available on this host' },
 };
@@ -57,7 +57,7 @@ function DeploymentRows({ deployment }: { deployment: UpdateDeployment }) {
       {deployment.signature && (
         <Row label="Signature">
           <Badge size="xs" variant="light" color={deployment.signature === 'containerPolicy' ? 'green' : 'gray'} className="plain-badge">
-            {deployment.signature === 'containerPolicy' ? 'Verified (cosign policy)' : deployment.signature}
+            {deployment.signature === 'containerPolicy' ? 'Verified' : deployment.signature}
           </Badge>
         </Row>
       )}
@@ -165,7 +165,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
       {actionError && <Alert color="red" role="alert" title="Update action failed">{actionError}</Alert>}
       {rebooting && (
         <Alert color="teal" role="status" title="Rebooting appliance">
-          The box is restarting into the staged image. Connectivity will pause briefly and this page will reconnect once Andaru is back.
+          Restarting into the queued image. Connection will pause briefly and reconnect once Andaru is back.
         </Alert>
       )}
       {!canManage && (
@@ -177,7 +177,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
       <Loaded resource={update} what="software update status">
         {(status) => {
           if (!status) return null;
-          const badge = stateMeta[status.state] ?? stateMeta.unsupported;
+          const badge = runningBadgeMeta[status.state] ?? runningBadgeMeta.unsupported;
           const inProgress = busy !== null || activeOp;
 
           if (!status.supported) {
@@ -210,7 +210,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
               <Paper component="section" withBorder p="md" aria-labelledby="updates-current">
                 <Group justify="space-between" mb="sm">
                   <Title order={3} size="h5" id="updates-current">Running image</Title>
-                  <Badge color={badge.color} variant={status.state === 'available' || status.rebootNeeded ? 'filled' : 'light'}>
+                  <Badge color={badge.color} variant="light">
                     {badge.label}
                   </Badge>
                 </Group>
@@ -275,9 +275,9 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
                 <DeploymentSection
                   id="updates-rollback"
                   title="Previous image (rollback)"
-                  badgeColor="gray"
+                  badgeColor={status.state === 'rolling_back' ? 'yellow' : 'gray'}
                   badgeVariant="light"
-                  badgeLabel={status.rollbackQueued ? 'Queued' : 'Retained'}
+                  badgeLabel={status.state === 'rolling_back' ? 'Queueing rollback…' : status.rollbackQueued ? 'Queued' : 'Retained'}
                   deployment={status.rollback}
                   action={
                     canManage && !status.rollbackQueued ? (
@@ -303,11 +303,12 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
         opened={confirmKind !== null}
         onClose={() => setConfirmKind(null)}
         title={confirmKind === 'reboot' ? 'Reboot appliance now?' : 'Roll back to previous version?'}
+        lockScroll={false}
       >
         <Stack>
           <Text size="sm">
             {confirmKind === 'reboot'
-              ? 'Rebooting switches the box into the staged image. Network traffic through this firewall will pause until startup completes.'
+              ? 'Rebooting switches to the queued image. Network traffic through this firewall will pause until startup completes.'
               : 'Rolling back queues the previous deployment for the next boot without rebooting immediately.'}
           </Text>
           <Group justify="flex-end">

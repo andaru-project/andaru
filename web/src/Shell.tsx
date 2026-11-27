@@ -35,7 +35,7 @@ import { UsersScreen } from './screens/UsersScreen';
 import { VirtualIpsScreen } from './screens/VirtualIpsScreen';
 import { ZonesScreen } from './screens/ZonesScreen';
 import type { NotificationList, Session, User } from './types';
-import { useEvents, useResource, useVisiblePoll, type Resource } from './useResource';
+import { ConnectionContext, useEvents, useResource, useVisiblePoll, type Resource } from './useResource';
 
 interface ShellProps {
   api: ApiClient;
@@ -205,16 +205,20 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   }, [upgradePending, pathname, navigate]);
 
   // When the API answers again, show what the server says rather than what was last seen.
+  const reloadSystem = system.reload;
+  const reloadUpdate = update.reload;
   const wasConnected = useRef(connected);
   useEffect(() => {
     if (connected && !wasConnected.current) {
       void reloadChanges();
       void reloadNotifications();
-      // A check that failed while the box did not answer is tried again; the head may not have moved.
+      void reloadSystem();
+      void reloadUpdate();
+      // A check that failed while disconnected is tried again; the head may not have moved.
       if (upgradeError) void reloadUpgrade();
     }
     wasConnected.current = connected;
-  }, [connected, reloadChanges, reloadNotifications, upgradeError, reloadUpgrade]);
+  }, [connected, reloadChanges, reloadNotifications, reloadSystem, reloadUpdate, upgradeError, reloadUpgrade]);
 
   const groups = [
     {
@@ -323,6 +327,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   ];
 
   return (
+    <ConnectionContext.Provider value={connected}>
     <AppShell className="app-shell" data-nav-open={opened || undefined} header={{ height: 56 }} navbar={{ width: 240, breakpoint: 900, collapsed: { mobile: !opened } }} padding="md">
       <AppShell.Header className="app-header">
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
@@ -374,12 +379,11 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
       </AppShell.Navbar>
       <AppShell.Main>
         <Stack>
-          {!connected && <Alert color="red" role="alert" title="Connection lost">The box does not answer. Pages show the last data it sent.</Alert>}
           {accountError && <Alert color="red" role="alert" title="Account request failed">{accountError}</Alert>}
           {/* Review and apply owns these controls on its own page. */}
-          {/* The Changes page says this itself. Elsewhere, a state that cannot be read must not look like nothing pending. */}
-          {!onChangesPage && changes.error && <Alert color="orange" role="alert" title="Whether changes are pending cannot be read">{changes.error}</Alert>}
-          {upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Whether the settings wait for decisions cannot be read">{upgrade.error}</Alert>}
+          {/* While disconnected, the header indicator already owns the offline state; only show server read failures while connected. */}
+          {connected && !onChangesPage && changes.error && <Alert color="orange" role="alert" title="Could not check pending changes">{changes.error}</Alert>}
+          {connected && upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Could not check upgrade status">{upgrade.error}</Alert>}
           {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
           {capabilities.has('configuration.apply') && changes.data?.head === '0' && pathname !== '/setup' && (
             <Alert color="blue" role="status" title="Initial setup">
@@ -436,5 +440,6 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         </Stack>
       </Modal>
     </AppShell>
+    </ConnectionContext.Provider>
   );
 }

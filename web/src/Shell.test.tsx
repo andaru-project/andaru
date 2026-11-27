@@ -185,7 +185,58 @@ it('hides the pending notice and nav badge when a newer saved version has unappl
 it('says so when the change state cannot be read: no news must not look like nothing pending', async () => {
   fetchRoutes({ '/api/v1/applies': () => jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'The applies are unavailable.', details: [] } }), '/api/v1/versions?': { state: 'saved', items: [] } });
   mount('/system/session');
-  expect(await screen.findByText('Whether changes are pending cannot be read')).toBeInTheDocument();
+  expect(await screen.findByText('Could not check pending changes')).toBeInTheDocument();
+});
+
+it('suppresses duplicate connection-lost banners and stale Loaded errors when disconnected, and reloads system and updates on reconnect', async () => {
+  let down = false;
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': () => (down ? Promise.reject(new TypeError('offline')) : jsonResponse(200, unapplied)),
+    '/api/v1/versions?': { state: 'saved', items: [{ id: '5', createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 }] },
+    '/api/v1/status/system': () => (down ? Promise.reject(new TypeError('offline')) : jsonResponse(200, { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null })),
+    '/api/v1/system/update': () => (down ? Promise.reject(new TypeError('offline')) : jsonResponse(200, {
+      supported: true,
+      state: 'staged',
+      booted: { version: '0.5.0-a.4', signature: 'containerPolicy' },
+      staged: { version: '0.5.0-a.5', signature: 'containerPolicy' },
+      rebootNeeded: true,
+    })),
+    'POST /api/v1/config/upgrade/preview': () => (down ? Promise.reject(new TypeError('offline')) : jsonResponse(200, { savedVersion: '5', questions: [] })),
+  });
+  const api = new ApiClient('csrf');
+  const full = session(['configuration.read', 'status.read', 'configuration.apply']);
+  const onLogout = vi.fn();
+  const onSessionLost = vi.fn();
+  const shell = (connected: boolean) => (
+    <MemoryRouter initialEntries={['/system/updates']}>
+      <Shell api={api} session={full} connected={connected} onLogout={onLogout} onSessionLost={onSessionLost} />
+    </MemoryRouter>
+  );
+  const view = render(shell(true));
+  expect(await screen.findByText('0.5.0-a.4')).toBeInTheDocument();
+
+  // Drop connection and trigger failed reads via event stream error.
+  down = true;
+  view.rerender(shell(false));
+  act(() => { openStreams()[0].fail(false); });
+  await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/applies').length).toBeGreaterThanOrEqual(2));
+
+  // Only the header badge indicates Connection lost; no redundant alert banners or inline disconnect error.
+  expect(screen.getByText('Connection lost', { selector: '.mantine-Badge-label' })).toBeInTheDocument();
+  expect(screen.queryByText(/The box does not answer/i)).not.toBeInTheDocument();
+  expect(screen.queryByText('Could not check pending changes')).not.toBeInTheDocument();
+  expect(screen.queryByText('Could not check upgrade status')).not.toBeInTheDocument();
+  expect(screen.queryByText(/Cannot reach the Andaru service/i)).not.toBeInTheDocument();
+
+  // Reconnecting reloads system and update status automatically.
+  const updateReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/update').length;
+  const systemReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/system').length;
+  down = false;
+  view.rerender(shell(true));
+  await waitFor(() => {
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/update').length).toBe(updateReadsBefore + 1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/system').length).toBe(systemReadsBefore + 1);
+  });
 });
 
 it.each(['/changes', '/changes/'])('leaves the apply controls to the Review and apply page at %s', async (path) => {
@@ -320,7 +371,7 @@ it('says when it cannot tell whether decisions wait', async () => {
     'POST /api/v1/config/upgrade/preview': jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }),
   });
   mount('/system/session');
-  expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
+  expect(await screen.findByText('Could not check upgrade status')).toBeInTheDocument();
 });
 
 it('asks again every 15 seconds whether decisions wait, while it cannot tell', async () => {
@@ -332,7 +383,7 @@ it('asks again every 15 seconds whether decisions wait, while it cannot tell', a
     'POST /api/v1/config/upgrade/preview': () => (down ? jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }) : jsonResponse(200, { savedVersion: '5', questions: [question] })),
   });
   mount('/system/session');
-  expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
+  expect(await screen.findByText('Could not check upgrade status')).toBeInTheDocument();
   const previews = () => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length;
   const before = previews();
   down = false;

@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { ApiClient } from '../api';
 import { fetchRoutes } from '../test/fetch';
 import { session } from '../test/fixtures';
-import { render, screen } from '../test/render';
+import { render, screen, within } from '../test/render';
 import type { UpdateStatus } from '../types';
 import { useResource } from '../useResource';
 import { UpdatesScreen } from './UpdatesScreen';
@@ -75,9 +75,17 @@ it('shows available update, stages it, and confirms reboot with CSRF header', as
   expect(await screen.findByText('0.5.0-a.4')).toBeInTheDocument();
   expect(screen.getByText('0.5.0-a.5')).toBeInTheDocument();
   expect(screen.getByText('0.5.0-a.3')).toBeInTheDocument();
+  expect(screen.getAllByText('Verified')).toHaveLength(3);
+  expect(screen.queryByText(/cosign/i)).not.toBeInTheDocument();
+
+  const runningSection = screen.getByRole('region', { name: 'Running image' });
+  expect(within(runningSection).getByText('Active')).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('button', { name: 'Download and stage update' }));
   expect(await screen.findByRole('button', { name: 'Reboot to apply' })).toBeInTheDocument();
+  expect(within(runningSection).getByText('Active')).toBeInTheDocument();
+  expect(within(runningSection).queryByText(/staged/i)).not.toBeInTheDocument();
+  expect(within(screen.getByRole('region', { name: 'Staged for next boot' })).getByText('Reboot required')).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('button', { name: 'Reboot to apply' }));
   expect(await screen.findByText('Reboot appliance now?')).toBeInTheDocument();

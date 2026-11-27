@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { ApiError, apiErrorMessage } from './api';
+
+export const ConnectionContext = createContext(true);
+
+export function useConnected(): boolean {
+  return useContext(ConnectionContext);
+}
 
 export interface Resource<T> {
   data?: T;
