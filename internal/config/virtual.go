@@ -346,8 +346,12 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken
 	v := d.VirtualAddresses[i]
 	byID := func(id string) int { return slices.IndexFunc(d.Segments, func(s segment) bool { return s.ID == id }) }
 	seg, host := byID(v.Segment), byID(v.HostSegment)
-	if seg < 0 {
+	switch {
+	case seg < 0:
 		bad(p+"/segment", "Expected an existing segment.")
+	case slices.ContainsFunc(d.Links, func(l link) bool { return l.ID == d.Segments[seg].Link && l.Kind == "pppoe" }):
+		// A point-to-point link has no neighbours to answer; the provider routes whatever it gives the firewall there.
+		bad(p+"/segment", "Expected a segment on an Ethernet, VLAN, bridge or bond link: a PPPoE link has no neighbours to answer. For a prefix the provider routes over it, use a held block.")
 	}
 	switch {
 	case host < 0:

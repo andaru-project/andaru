@@ -660,11 +660,14 @@ func refusedWith(t *testing.T, d map[string]any, path, message string) {
 	}
 }
 
-// ndpFixture adds a proxy NDP entry to the virtual address fixture: the WAN on a static 2001:db8:1::/64 answers for an
-// inside host on the LAN.
+// ndpFixture adds a proxy NDP entry to the virtual address fixture: the WAN, moved from PPPoE to its VLAN, on a static
+// 2001:db8:1::/64 answers for an inside host on the LAN.
 func ndpFixture(t *testing.T) map[string]any {
 	t.Helper()
 	d := vipFixture(t)
+	d["links"] = slices.DeleteFunc(linksOf(d), func(l any) bool { return l.(map[string]any)["kind"] == "pppoe" })
+	item(segmentsOf(d), 0)["link"] = "lnk_00000000-0000-4000-8000-000000000002"
+	v4(d, 0)["mode"] = "dhcp"
 	item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"2001:db8:1::2/64"}, "gateway": "2001:db8:1::1"}
 	d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipP, "name": "host", "kind": "proxyNdp",
 		"segment": item(segmentsOf(d), 0)["id"], "hostSegment": item(segmentsOf(d), 1)["id"], "address": "2001:db8:1::50"})
@@ -765,6 +768,12 @@ func TestProxyNDPValidation(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a PPPoE uplink", func(t *testing.T) {
+		d := vipFixture(t)
+		d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipP, "name": "host", "kind": "proxyNdp",
+			"segment": item(segmentsOf(d), 0)["id"], "hostSegment": item(segmentsOf(d), 1)["id"], "address": "2001:db8:1::50"})
+		refusedWith(t, d, "/virtualAddresses/2/segment", "a PPPoE link has no neighbours to answer. For a prefix the provider routes over it, use a held block.")
+	})
 	t.Run("a host segment on a proxy ARP entry", func(t *testing.T) {
 		d := proxyFixture(t)
 		item(d["virtualAddresses"].([]any), 2)["hostSegment"] = item(segmentsOf(d), 0)["id"]

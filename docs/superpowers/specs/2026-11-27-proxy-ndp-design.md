@@ -31,6 +31,7 @@ Kernel 6.12, systemd 257 (Debian 13), 2026-11-27, in network namespaces. The pro
 **Validation of a `proxyNdp` entry:**
 - `address` is one IPv6 address, global unicast: not unique local, link-local, multicast, loopback, unspecified or IPv4-mapped. A length is refused, because the kernel's proxy table holds single addresses: "Expected one global unicast IPv6 address, without a length."
 - `segment` and `hostSegment` exist and differ.
+- `segment` is not on a PPPoE link, refused at `/segment`: a point-to-point link has no neighbours to answer, and a prefix the provider routes over it belongs on a held block.
 - `hostSegment` has IPv6: with mode `none` it has no link-local address and sends no router advertisements, so the host has no route back. Refused at `/hostSegment`.
 - When the segment has static IPv6 addresses, the address lies on one of their subnets. For a segment addressed by SLAAC, DHCPv6 or PPPoE, the renderer warns instead (below).
 - The address is none of a segment's addresses and overlaps no other virtual address of any kind. It is not inside the static subnets of any segment but `segment`, the host segment's included: a host there already has a route.
