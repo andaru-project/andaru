@@ -164,5 +164,5 @@ table inet andaru {
 
 ### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
 ### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19
-### warning PROXY_ARP_REQUIRED "/nat/oneToOne/3/external" This address is on the 10.0.0.0/16 uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP is tracked in #43.
+### warning PROXY_ARP_REQUIRED "/nat/oneToOne/3/external" This address is on the 10.0.0.0/16 uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses, or answer for it with a proxyArp virtual address on that segment.
 ### realizable=true

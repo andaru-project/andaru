@@ -378,7 +378,7 @@ func (f *filter) checkExternal(external netip.Prefix, path string) {
 			return v.proxied() && v.Segment == s.ID && x.IsValid() && x.Bits() <= external.Bits() && x.Contains(external.Addr())
 		})
 		if subnet.IsValid() && !held {
-			r.find("warning", "PROXY_ARP_REQUIRED", path, "This address is on the "+subnet.String()+" uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP is tracked in #43.")
+			r.find("warning", "PROXY_ARP_REQUIRED", path, "This address is on the "+subnet.String()+" uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses, or answer for it with a proxyArp virtual address on that segment.")
 		}
 	}
 }
