@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/securefs"
 	"golang.org/x/sys/unix"
@@ -34,8 +35,12 @@ type Store struct {
 	closeOnce          sync.Once
 	closeErr           error
 	// saved is told of each new head once it is committed.
-	saved func(Version)
+	saved   func(Version)
+	catalog *addon.Catalog
 }
+
+// SetCatalog attaches the validated add-on catalog so add-on writes are checked against their manifests.
+func (s *Store) SetCatalog(cat *addon.Catalog) { s.catalog = cat }
 
 func unavailable() *Fault {
 	return fault("STORE_UNAVAILABLE", "", "Configuration storage is unavailable; inspect the engine journal.")
@@ -129,7 +134,7 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		return nil, diagnostic("open-secret", e)
 	}
 	// Additive history tables let older stores accept newer configuration collections.
-	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL+dhcp6DDL+vipDDL+roleDDL+firewallDDL+writerDDL+notificationDDL); e != nil {
+	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL+dhcp6DDL+vipDDL+roleDDL+firewallDDL+writerDDL+notificationDDL+addonDDL); e != nil {
 		cfg.Close()
 		sec.Close()
 		return nil, diagnostic("open-config-policy-table", e)
@@ -491,7 +496,7 @@ func (s *Store) prepareSave(ctx context.Context, actor authz.Actor, input Change
 	if len(current.questions) > 0 {
 		return nil, ErrUpgradePending
 	}
-	p.prepared, e = prepareChanges(&current, input, next, time.Now().UTC())
+	p.prepared, e = prepareChangesWithCatalog(&current, input, next, time.Now().UTC(), s.catalog)
 	if e != nil {
 		return nil, e
 	}

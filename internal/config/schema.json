@@ -35,6 +35,73 @@
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
     },
+    "addonID": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}(\\.[a-z][a-z0-9-]{0,31})+$"
+    },
+    "addonInterface": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,14}$"
+        },
+        "zone": {
+          "$ref": "#/$defs/zoneID"
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "addonBusGrantMap": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": ["granted", "denied"]
+      }
+    },
+    "addonBusGrants": {
+      "type": "object",
+      "properties": {
+        "publish": { "$ref": "#/$defs/addonBusGrantMap" },
+        "subscribe": { "$ref": "#/$defs/addonBusGrantMap" }
+      },
+      "additionalProperties": false
+    },
+    "addonStored": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/addonID" },
+        "enabled": { "type": "boolean" },
+        "settings": { "type": "object" },
+        "interfaces": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/addonInterface" }
+        },
+        "busGrants": { "$ref": "#/$defs/addonBusGrants" }
+      },
+      "required": ["id", "enabled"],
+      "additionalProperties": false
+    },
+    "addonWrite": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/addonID" },
+        "enabled": { "type": "boolean" },
+        "settings": { "type": "object" },
+        "interfaces": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/addonInterface" }
+        },
+        "busGrants": { "$ref": "#/$defs/addonBusGrants" }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "addonView": {
+      "$ref": "#/$defs/addonStored"
+    },
     "identity": {
       "type": "object",
       "properties": {
@@ -1509,6 +1576,13 @@
             }
           },
           "additionalProperties": false
+        },
+        "addons": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/addonStored"
+          }
         }
       },
       "required": [
@@ -1658,6 +1732,13 @@
             }
           },
           "additionalProperties": false
+        },
+        "addons": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/addonView"
+          }
         }
       },
       "required": [
@@ -2681,6 +2762,39 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": { "const": "create" },
+                  "collection": { "enum": ["addons"] },
+                  "value": { "$ref": "#/$defs/addonWrite" }
+                },
+                "required": ["op", "collection", "value"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": { "const": "replace" },
+                  "collection": { "enum": ["addons"] },
+                  "id": { "$ref": "#/$defs/addonID" },
+                  "expectedVersion": { "$ref": "#/$defs/version" },
+                  "value": { "$ref": "#/$defs/addonWrite" }
+                },
+                "required": ["op", "collection", "id", "value"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": { "const": "delete" },
+                  "collection": { "enum": ["addons"] },
+                  "id": { "$ref": "#/$defs/addonID" },
+                  "expectedVersion": { "$ref": "#/$defs/version" }
+                },
+                "required": ["op", "collection", "id"],
+                "additionalProperties": false
               }
             ]
           },
@@ -2745,6 +2859,9 @@
         },
         {
           "$ref": "#/$defs/channelView"
+        },
+        {
+          "$ref": "#/$defs/addonView"
         }
       ]
     },

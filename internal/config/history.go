@@ -173,7 +173,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	state.secretBody = sb
 	for _, h := range heldSecrets(&d) {
 		if !h.ref.Unresolved {
-			if _, ok := state.Secrets.Scopes["core"][h.ref.Secret]; !ok {
+			if _, ok := state.Secrets.Scopes[h.scope][h.ref.Secret]; !ok {
 				return state, info, diagnostic("load-secret-missing-ref", nil)
 			}
 		}
@@ -504,14 +504,15 @@ type RealizationInput struct {
 	SavedVersion  Version
 	Value         json.RawMessage
 	Secrets       map[string]string
+	AddonSecrets  map[string]map[string]string
 	Authorization authz.Snapshot
 }
 
-// SameRealization reports whether two saved versions realize the same network: their declarations agree except
-// for the settings that take effect when saved, notifications, and the secrets their links use agree. An apply of
-// one over the other would change nothing, so the other needs no apply (#218).
+// SameRealization reports whether two saved versions realize the same network and add-ons: their declarations
+// agree except for the settings that take effect when saved, notifications, and the secrets their links and
+// enabled add-ons use agree. An apply of one over the other would change nothing, so the other needs no apply (#218).
 func SameRealization(a, b RealizationInput) bool {
-	return maps.Equal(a.Secrets, b.Secrets) && bytes.Equal(realized(a.Value), realized(b.Value))
+	return maps.Equal(a.Secrets, b.Secrets) && sameAddonSecrets(a.AddonSecrets, b.AddonSecrets) && bytes.Equal(realized(a.Value), realized(b.Value))
 }
 
 // realized is a declaration without the settings an apply does not realize; one it cannot read is kept whole.
@@ -536,6 +537,36 @@ func realized(value json.RawMessage) []byte {
 		}
 		if err == nil {
 			d["links"], err = json.Marshal(links)
+		}
+	}
+	var addons []map[string]json.RawMessage
+	if err == nil && len(d["addons"]) > 0 && json.Unmarshal(d["addons"], &addons) == nil {
+		for _, a := range addons {
+			var settings map[string]json.RawMessage
+			if json.Unmarshal(a["settings"], &settings) == nil && settings != nil {
+				for k, rawVal := range settings {
+					var sv map[string]json.RawMessage
+					if json.Unmarshal(rawVal, &sv) == nil && sv != nil {
+						if _, hasSecret := sv["secret"]; hasSecret {
+							delete(sv, "updatedAt")
+							delete(sv, "version")
+							settings[k], err = json.Marshal(sv)
+						}
+					}
+					if err != nil {
+						break
+					}
+				}
+				if err == nil {
+					a["settings"], err = json.Marshal(settings)
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		if err == nil {
+			d["addons"], err = json.Marshal(addons)
 		}
 	}
 	if err != nil {
@@ -585,6 +616,24 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 		for _, l := range state.Config.Links {
 			if l.Password != nil {
 				result.Secrets[l.Password.Secret] = state.Secrets.Scopes["core"][l.Password.Secret].Value
+			}
+		}
+		for i := range state.Config.Addons {
+			a := &state.Config.Addons[i]
+			if !a.Enabled {
+				continue
+			}
+			scoped := state.Secrets.Scopes[addonSecretScope(a.ID)]
+			for _, k := range addonSettingSecretKeys(a.Settings) {
+				if ref, ok := addonSecretRef(a.Settings[k]); ok && !ref.Unresolved {
+					if result.AddonSecrets == nil {
+						result.AddonSecrets = map[string]map[string]string{}
+					}
+					if result.AddonSecrets[a.ID] == nil {
+						result.AddonSecrets[a.ID] = map[string]string{}
+					}
+					result.AddonSecrets[a.ID][ref.Secret] = scoped[ref.Secret].Value
+				}
 			}
 		}
 		return nil

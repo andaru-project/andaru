@@ -103,10 +103,18 @@ type emailView struct {
 
 // viewSecret is a reference's view: whether it is set, and its version, never its value.
 func viewSecret(ref *secretReference, secrets secretDocument) (*secretView, error) {
+	return viewSecretInScope(ref, "core", secrets)
+}
+
+func viewSecretInScope(ref *secretReference, scope string, secrets secretDocument) (*secretView, error) {
 	if ref == nil {
 		return nil, nil
 	}
-	meta, ok := secrets.Scopes["core"][ref.Secret]
+	var meta secretEntry
+	var ok bool
+	if scoped := secrets.Scopes[scope]; scoped != nil {
+		meta, ok = scoped[ref.Secret]
+	}
 	if !ok && !ref.Unresolved {
 		return nil, fault("STORE_UNAVAILABLE", "", "Secret reference is unavailable.")
 	}
@@ -163,6 +171,25 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 			}
 		}
 		v = view
+	case *addonConfig:
+		view := *x
+		if len(x.Settings) > 0 {
+			cp := make(map[string]any, len(x.Settings))
+			scope := addonSecretScope(x.ID)
+			for k, val := range x.Settings {
+				if ref, ok := addonSecretRef(val); ok {
+					sv, err := viewSecretInScope(ref, scope, secrets)
+					if err != nil {
+						return ObjectView{}, err
+					}
+					cp[k] = sv
+				} else {
+					cp[k] = val
+				}
+			}
+			view.Settings = cp
+		}
+		v = view
 	}
 	if v == nil {
 		return ObjectView{}, fault("NOT_FOUND", "", "Object does not exist.")
@@ -192,13 +219,22 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 		}
 		channels = append(channels, v.Value)
 	}
+	addons := make([]json.RawMessage, 0, len(s.Config.Addons))
+	for i := range s.Config.Addons {
+		a := &s.Config.Addons[i]
+		v, e := viewObject(a, s.Versions[objectKey{"addons", a.ID}].Version, s.Secrets)
+		if e != nil {
+			return SnapshotView{}, e
+		}
+		addons = append(addons, v.Value)
+	}
 	used := map[string]bool{}
 	for _, h := range heldSecrets(&s.Config) {
-		if !h.ref.Unresolved {
+		if h.scope == "core" && !h.ref.Unresolved {
 			used[h.ref.Secret] = true
 		}
 	}
-	// The whole declaration, every section included, with each link and channel as its secret-free view.
+	// The whole declaration, every section included, with each link, channel, and add-on as its secret-free view.
 	var d map[string]json.RawMessage
 	whole, e := json.Marshal(s.Config)
 	if e == nil {
@@ -212,6 +248,11 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 	}
 	if len(channels) > 0 {
 		if d["notifications"], e = json.Marshal(map[string]any{"channels": channels}); e != nil {
+			return SnapshotView{}, e
+		}
+	}
+	if len(addons) > 0 {
+		if d["addons"], e = json.Marshal(addons); e != nil {
 			return SnapshotView{}, e
 		}
 	}

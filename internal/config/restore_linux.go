@@ -213,13 +213,19 @@ func sameSecrets(a, b []byte) bool {
 		return true
 	}
 	var x, y secretDocument
-	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil || len(x.Scopes["core"]) != len(y.Scopes["core"]) {
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil || len(x.Scopes) != len(y.Scopes) {
 		return false
 	}
-	for name, s := range x.Scopes["core"] {
-		t, ok := y.Scopes["core"][name]
-		if !ok || s.Kind != t.Kind || s.Value != t.Value || s.Version != t.Version {
+	for scope, xs := range x.Scopes {
+		ys, ok := y.Scopes[scope]
+		if !ok || len(xs) != len(ys) {
 			return false
+		}
+		for name, s := range xs {
+			t, ok := ys[name]
+			if !ok || s.Kind != t.Kind || s.Value != t.Value || s.Version != t.Version {
+				return false
+			}
 		}
 	}
 	return true
@@ -235,36 +241,52 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 	secrets := current.Secrets
 	if decoded.secrets != nil {
 		secrets = emptySecrets()
-		core := decoded.secrets.Scopes["core"]
-		for name, entry := range core {
-			secrets.Scopes["core"][name] = secretEntry{Kind: entry.Kind, Value: entry.Value, Version: next, UpdatedAt: now.Format(time.RFC3339Nano)}
-			old, exists := current.Secrets.Scopes["core"][name]
-			if !exists {
-				preview.SecretChanges.Created++
-			} else if old.Kind != entry.Kind || old.Value != entry.Value {
-				preview.SecretChanges.Updated++
+		for scope, entries := range decoded.secrets.Scopes {
+			if scope != "core" && len(entries) == 0 {
+				continue
+			}
+			if secrets.Scopes[scope] == nil {
+				secrets.Scopes[scope] = map[string]secretEntry{}
+			}
+			oldScope := current.Secrets.Scopes[scope]
+			for name, entry := range entries {
+				secrets.Scopes[scope][name] = secretEntry{Kind: entry.Kind, Value: entry.Value, Version: next, UpdatedAt: now.Format(time.RFC3339Nano)}
+				old, exists := oldScope[name]
+				if !exists {
+					preview.SecretChanges.Created++
+				} else if old.Kind != entry.Kind || old.Value != entry.Value {
+					preview.SecretChanges.Updated++
+				}
 			}
 		}
-		for name := range current.Secrets.Scopes["core"] {
-			if _, ok := core[name]; !ok {
-				preview.SecretChanges.Deleted++
+		for scope, oldEntries := range current.Secrets.Scopes {
+			newEntries := decoded.secrets.Scopes[scope]
+			for name := range oldEntries {
+				if _, ok := newEntries[name]; !ok {
+					preview.SecretChanges.Deleted++
+				}
 			}
 		}
 	}
 	unresolved, blocked := map[string]bool{}, map[string]bool{}
 	for _, h := range heldSecrets(&candidate) {
 		reference := h.ref
-		entry, exists := secrets.Scopes["core"][reference.Secret]
+		scoped := secrets.Scopes[h.scope]
+		entry, exists := scoped[reference.Secret]
 		if decoded.configuration != nil && !decoded.ownSecrets && (decoded.secrets == nil || !exists) {
-			reference.Unresolved = true
+			h.setUnresolved()
+		}
+		label := reference.Secret
+		if h.scope != "core" {
+			label = h.scope + "/" + reference.Secret
 		}
 		switch {
 		case exists && entry.Kind != secretKind(h.key.Collection):
-			blocked[reference.Secret] = true // a restore keeps the binding a save keeps: a channel never holds a password
+			blocked[label] = true // a restore keeps the binding a save keeps: a channel never holds a password
 		case reference.Unresolved:
-			unresolved[reference.Secret] = true
+			unresolved[label] = true
 		case !exists:
-			blocked[reference.Secret] = true
+			blocked[label] = true
 		}
 	}
 	for name := range unresolved {

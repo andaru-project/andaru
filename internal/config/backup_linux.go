@@ -47,11 +47,21 @@ func (s *Store) Export(ctx context.Context, includeSecrets bool) (result BackupD
 			result.Configuration = state.storedBody
 		}
 		if includeSecrets {
-			core := make(map[string]backupSecretEntry, len(state.Secrets.Scopes["core"]))
-			for name, entry := range state.Secrets.Scopes["core"] {
-				core[name] = backupSecretEntry{Kind: entry.Kind, Value: entry.Value}
+			scopes := make(map[string]map[string]backupSecretEntry, len(state.Secrets.Scopes))
+			for scope, entries := range state.Secrets.Scopes {
+				if scope != "core" && len(entries) == 0 {
+					continue
+				}
+				copied := make(map[string]backupSecretEntry, len(entries))
+				for name, entry := range entries {
+					copied[name] = backupSecretEntry{Kind: entry.Kind, Value: entry.Value}
+				}
+				scopes[scope] = copied
 			}
-			result.ConfigurationSecrets, err = canonical(backupSecretDocument{SchemaVersion: 1, Scopes: map[string]map[string]backupSecretEntry{"core": core}})
+			if scopes["core"] == nil {
+				scopes["core"] = map[string]backupSecretEntry{}
+			}
+			result.ConfigurationSecrets, err = canonical(backupSecretDocument{SchemaVersion: 1, Scopes: scopes})
 			return err
 		}
 		return nil
@@ -73,18 +83,35 @@ func (input RestoreDocuments) Portable(target Version) (RestoreDocuments, error)
 	if err := json.Unmarshal(input.ConfigurationSecrets, &stored); err != nil {
 		return input, boundaryFault(err)
 	}
-	restored := len(stored.Scopes["core"]) == 0
-	for _, entry := range stored.Scopes["core"] {
-		restored = restored || entry.Version == target
+	total := 0
+	matched := false
+	for _, entries := range stored.Scopes {
+		total += len(entries)
+		for _, entry := range entries {
+			if entry.Version == target {
+				matched = true
+			}
+		}
 	}
+	restored := total == 0 || matched
 	if !restored {
 		return RestoreDocuments{Configuration: input.Configuration}, nil
 	}
-	core := make(map[string]backupSecretEntry, len(stored.Scopes["core"]))
-	for name, entry := range stored.Scopes["core"] {
-		core[name] = backupSecretEntry{Kind: entry.Kind, Value: entry.Value}
+	scopes := make(map[string]map[string]backupSecretEntry, len(stored.Scopes))
+	for scope, entries := range stored.Scopes {
+		if scope != "core" && len(entries) == 0 {
+			continue
+		}
+		copied := make(map[string]backupSecretEntry, len(entries))
+		for name, entry := range entries {
+			copied[name] = backupSecretEntry{Kind: entry.Kind, Value: entry.Value}
+		}
+		scopes[scope] = copied
 	}
-	secrets, err := canonical(backupSecretDocument{SchemaVersion: 1, Scopes: map[string]map[string]backupSecretEntry{"core": core}})
+	if scopes["core"] == nil {
+		scopes["core"] = map[string]backupSecretEntry{}
+	}
+	secrets, err := canonical(backupSecretDocument{SchemaVersion: 1, Scopes: scopes})
 	return RestoreDocuments{Configuration: input.Configuration, ConfigurationSecrets: secrets}, err
 }
 

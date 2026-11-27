@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
 )
 
@@ -159,7 +160,7 @@ func initialState() savedState {
 var (
 	orderedCollections = []string{"rules", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -246,6 +247,9 @@ func objects(d *declaration) map[objectKey]any {
 	for i := range d.Notifications.Channels {
 		m[objectKey{"notifications.channels", d.Notifications.Channels[i].ID}] = &d.Notifications.Channels[i]
 	}
+	for i := range d.Addons {
+		m[objectKey{"addons", d.Addons[i].ID}] = &d.Addons[i]
+	}
 	if d.DNS != nil {
 		m[listKey("dns")] = d.DNS
 	}
@@ -253,6 +257,10 @@ func objects(d *declaration) map[objectKey]any {
 }
 
 func prepareChanges(current *savedState, input Changes, next Version, now time.Time) (preparedChange, error) {
+	return prepareChangesWithCatalog(current, input, next, now, nil)
+}
+
+func prepareChangesWithCatalog(current *savedState, input Changes, next Version, now time.Time, catalog *addon.Catalog) (preparedChange, error) {
 	var empty preparedChange
 	if len(input.Operations) == 0 || len(input.Operations) > 100 {
 		return empty, fault("VALIDATION_FAILED", "/operations", "Expected 1 to 100 operations.")
@@ -385,10 +393,17 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			continue
 		}
 		values[i] = value
+		scopeID := op.ID
+		if op.Collection == "addons" && op.Op == "create" {
+			if id, ok := value["id"].(string); ok {
+				scopeID = id
+			}
+		}
+		scope := secretScopeForOp(op.Collection, scopeID)
 		for _, f := range secretFields(op.Collection, value) {
 			if pw, ok := f.parent[f.name].(map[string]any); ok {
 				if _, set := pw["set"]; set {
-					pick(secretPrecondition(current.Secrets, pw, input.path(i, f.path+"/expectedVersion", true)), i)
+					pick(secretPrecondition(current.Secrets, scope, pw, input.path(i, f.path+"/expectedVersion", true)), i)
 				}
 			}
 		}
@@ -423,6 +438,21 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			continue
 		}
 		if op.Op == "create" {
+			if op.Collection == "addons" {
+				id, ok := value["id"].(string)
+				if !ok || !addonIDPattern.MatchString(id) {
+					pick(fault("VALIDATION_FAILED", input.path(i, "/id", true), "Add-on create requires a valid catalog id."), i)
+					continue
+				}
+				key := objectKey{op.Collection, id}
+				if _, exists := before[key]; exists || duplicates[key] {
+					pick(fault("VALIDATION_FAILED", input.path(i, "/id", true), "Add-on is already configured."), i)
+					continue
+				}
+				duplicates[key] = true
+				keys[i] = key
+				continue
+			}
 			if _, exists := value["id"]; exists {
 				pick(fault("VALIDATION_FAILED", input.path(i, "/id", true), "Creation IDs are assigned by the engine."), i)
 				continue
@@ -460,6 +490,9 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		origins[key] = i
 		if op.Op == "delete" {
 			deleted[key] = true
+			if op.Collection == "addons" {
+				delete(current.Secrets.Scopes, addonSecretScope(key.ID))
+			}
 			continue
 		}
 		if op.Op == "order" {
@@ -467,22 +500,27 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		}
 		value := values[i]
 		resolveReferences(value, op.Collection, labels)
+		scope := secretScopeForOp(op.Collection, key.ID)
 		for _, f := range secretFields(op.Collection, value) {
 			if pw, ok := f.parent[f.name].(map[string]any); ok {
 				name, _ := pw["secret"].(string)
 				set, setting := pw["set"].(string)
+				setterKey := scope + "\x00" + name
 				if setting {
-					if _, dup := setters[name]; dup {
+					if _, dup := setters[setterKey]; dup {
 						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "Duplicate secret set command.")
 					}
-					setters[name] = heldSecret{key: key, path: f.path}
-					old, exists := current.Secrets.Scopes["core"][name]
+					setters[setterKey] = heldSecret{key: key, scope: scope, path: f.path}
+					if current.Secrets.Scopes[scope] == nil {
+						current.Secrets.Scopes[scope] = map[string]secretEntry{}
+					}
+					old, exists := current.Secrets.Scopes[scope][name]
 					if exists && old.Kind != secretKind(op.Collection) {
 						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "This secret belongs to another kind of object.")
 					}
 					if !exists || old.Value != set {
-						current.Secrets.Scopes["core"][name] = secretEntry{Kind: secretKind(op.Collection), Value: set, UpdatedAt: now.UTC().Format(time.RFC3339Nano), Version: next}
-						changedSecrets[name] = true
+						current.Secrets.Scopes[scope][name] = secretEntry{Kind: secretKind(op.Collection), Value: set, UpdatedAt: now.UTC().Format(time.RFC3339Nano), Version: next}
+						changedSecrets[setterKey] = true
 					}
 				}
 				reference := map[string]any{"secret": name}
@@ -533,6 +571,9 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		return empty, e
 	}
 	if d.Notifications.Channels, e = rewrite(d.Notifications.Channels, "notifications.channels", writes, deleted, createKeys, func(x channel) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.Addons, e = rewrite(d.Addons, "addons", writes, deleted, createKeys, func(x addonConfig) string { return x.ID }); e != nil {
 		return empty, e
 	}
 	if d.DHCP6, e = rewrite(d.DHCP6, "dhcp6", writes, deleted, createKeys, func(x dhcp6Entry) string { return x.ID }); e != nil {
@@ -608,9 +649,18 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		return empty, boundaryFault(e)
 	}
 	d = validated
+	if catalog != nil {
+		writtenKeys := make(map[objectKey]bool, len(writes))
+		for k := range writes {
+			writtenKeys[k] = true
+		}
+		if catErrs := validateAddonsAgainstCatalog(catalog, &d, writtenKeys); len(catErrs) > 0 {
+			return empty, rebaseValidation(validationError(catErrs), &d, origins, input)
+		}
+	}
 	for _, h := range heldSecrets(&d) {
 		if !h.ref.Unresolved {
-			if _, ok := current.Secrets.Scopes["core"][h.ref.Secret]; !ok {
+			if _, ok := current.Secrets.Scopes[h.scope][h.ref.Secret]; !ok {
 				return empty, rebaseValidation(validationError{{h.path, "Named secret does not exist."}}, &d, origins, input)
 			}
 		}
@@ -618,7 +668,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	// A reference this batch writes must name a secret of its collection's kind (secretKind), unresolved or not. The
 	// refusal tells a client that a secret of another kind exists, as a version precondition already does; never its value.
 	for _, h := range heldSecrets(&d) {
-		entry, exists := current.Secrets.Scopes["core"][h.ref.Secret]
+		entry, exists := current.Secrets.Scopes[h.scope][h.ref.Secret]
 		if !exists && h.ref.Unresolved || entry.Kind == secretKind(h.key.Collection) {
 			continue
 		}
@@ -626,7 +676,8 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			return empty, rebaseValidation(validationError{{h.path, "This secret belongs to another kind of object."}}, &d, origins, input)
 		}
 		// A secret this batch creates may not take a name an unwritten object of the other kind holds unresolved.
-		if setter, set := setters[h.ref.Secret]; set && changedSecrets[h.ref.Secret] {
+		setterKey := h.scope + "\x00" + h.ref.Secret
+		if setter, set := setters[setterKey]; set && changedSecrets[setterKey] {
 			return empty, fault("VALIDATION_FAILED", input.path(origins[setter.key], setter.path, true), "Another kind of object holds this secret's name.")
 		}
 	}
@@ -635,7 +686,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		if c.Webhook == nil || c.Webhook.URL.Unresolved {
 			continue
 		}
-		if _, written := writes[objectKey{"notifications.channels", c.ID}]; !written && !changedSecrets[c.Webhook.URL.Secret] {
+		if _, written := writes[objectKey{"notifications.channels", c.ID}]; !written && !changedSecrets["core\x00"+c.Webhook.URL.Secret] {
 			continue
 		}
 		if !webhookURL(current.Secrets.Scopes["core"][c.Webhook.URL.Secret].Value) {
@@ -700,7 +751,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		}
 	}
 	for _, h := range heldSecrets(&d) {
-		if changedSecrets[h.ref.Secret] {
+		if changedSecrets[h.scope+"\x00"+h.ref.Secret] {
 			resultSet[h.key] = true
 			if _, exists := changes[h.key]; !exists {
 				changes[h.key] = objectChange{Collection: h.key.Collection, ID: h.key.ID}
@@ -900,6 +951,8 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.VirtualAddresses[n].ID
 	case col == "notifications.channels" && n < len(d.Notifications.Channels):
 		id = d.Notifications.Channels[n].ID
+	case col == "addons" && n < len(d.Addons):
+		id = d.Addons[n].ID
 	case col == "dhcp6" && n < len(d.DHCP6):
 		id = d.DHCP6[n].ID
 	case col == "nat.portForwards" && n < len(d.NAT.PortForwards):
@@ -993,9 +1046,16 @@ func heldUnresolved(old any, path, name string) bool {
 // rebaseSecrets blames the earliest batch operation whose own secret entry fails validation.
 func rebaseSecrets(failure validationError, doc secretDocument, head Version, setters map[string]heldSecret, origins map[objectKey]int, input Changes) *Fault {
 	best, path := -1, ""
-	for _, name := range slices.Sorted(maps.Keys(setters)) {
-		setter := setters[name]
-		one := secretDocument{SchemaVersion: doc.SchemaVersion, Scopes: map[string]map[string]secretEntry{"core": {name: doc.Scopes["core"][name]}}}
+	for _, key := range slices.Sorted(maps.Keys(setters)) {
+		setter := setters[key]
+		scope, name, _ := strings.Cut(key, "\x00")
+		scopes := map[string]map[string]secretEntry{"core": {}}
+		if scope == "core" {
+			scopes["core"][name] = doc.Scopes["core"][name]
+		} else {
+			scopes[scope] = map[string]secretEntry{name: doc.Scopes[scope][name]}
+		}
+		one := secretDocument{SchemaVersion: doc.SchemaVersion, Scopes: scopes}
 		if validateSecrets(one, head) != nil && (best < 0 || origins[setter.key] < best) {
 			best, path = origins[setter.key], setter.path
 		}
