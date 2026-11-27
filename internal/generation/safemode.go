@@ -108,6 +108,7 @@ func (r Realizer) applySafeModeOnBoot() {
 // and starts enabled add-on units of the live generation unless boot safe mode is active.
 // If starting live add-ons fails, the hold file is restored before unlocking so callers retry cleanly.
 func (r Realizer) ReleaseAddonsHold(ctx context.Context) error {
+	locked := false
 	if r.StateDir != "" {
 		if _, err := os.Stat(r.dir()); err == nil {
 			unlock, err := r.lock()
@@ -115,19 +116,24 @@ func (r Realizer) ReleaseAddonsHold(ctx context.Context) error {
 				return err
 			}
 			defer unlock()
+			locked = true
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
-	if err := os.Remove(r.Root + AddonsHeldFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	rmErr := os.Remove(r.Root + AddonsHeldFile)
+	hadHold := rmErr == nil
+	if rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+		return rmErr
 	}
-	if ReadSafeMode(r.Root, r.StateDir).Active {
+	if !locked || ReadSafeMode(r.Root, r.StateDir).Active {
 		return nil
 	}
 	if err := r.startLiveAddonsLocked(ctx); err != nil {
-		// Restore the hold flag fail-closed so the engine's retry loop attempts release again.
-		_ = writeAtomic(r.Root+AddonsHeldFile, []byte("1\n"), 0o644)
+		// Restore the hold flag fail-closed if it was held so the engine's retry loop attempts release again.
+		if hadHold {
+			_ = writeAtomic(r.Root+AddonsHeldFile, []byte("1\n"), 0o644)
+		}
 		return err
 	}
 	return nil

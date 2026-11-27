@@ -207,16 +207,26 @@ func has(set []placed, path string) bool {
 
 // place swaps files only. It writes before it removes, so /run never holds less than one complete configuration.
 func (r Realizer) place(from, to []placed) error {
-	// Before overwriting any add-on file whose content changed, invalidate its started stamp so an
-	// interrupted activation or rollback never mistakes the old stamp for a still-matching container.
-	for _, slug := range addonSlugs(to) {
+	// Before overwriting or removing add-on files, invalidate started stamps for changed or removed
+	// add-ons so an interrupted activation or rollback never mistakes an old stamp for a matching container.
+	toSlugs := addonSlugs(to)
+	for _, slug := range toSlugs {
 		stamp := r.Root + addonStampPath(slug)
 		if started, err := os.ReadFile(stamp); err == nil && string(started) != addonSum(slug, to) {
 			_ = os.Remove(stamp)
 		}
 	}
+	for _, slug := range addonSlugs(from) {
+		if !slices.Contains(toSlugs, slug) {
+			_ = os.Remove(r.Root + addonStampPath(slug))
+		}
+	}
 	for _, f := range to {
 		target := r.Root + f.path
+		// Preserve inode, SELinux :Z MCS label, and :U container UID ownership on unchanged add-on secrets.
+		if isAddonSecret(f.path) && sameRegularFile(target, f.data, f.mode) {
+			continue
+		}
 		dirMode := fs.FileMode(0o755)
 		if strings.HasPrefix(f.path, addonRuntimeDir) {
 			if err := os.MkdirAll(r.Root+strings.TrimSuffix(addonRuntimeDir, "/"), 0o700); err != nil {

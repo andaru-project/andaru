@@ -129,6 +129,31 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 	if err := r.Confirm(t.Context(), id1); err != nil {
 		t.Fatalf("Confirm gen 1: %v", err)
 	}
+	// Verify unchanged add-on secret preserves its inode across an unrelated apply (preserving :Z/:U).
+	secPath := root + "/run/andaru-addons/tailscale/secrets/andaru-addon-tailscale-auth_key.secret"
+	origInfo, err := os.Lstat(secPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m1b, f1b := testAddonFiles("http://127.0.0.1:9002/healthz", "TS_HOSTNAME=gw1\n")
+	m1b.SavedVersion = "1b"
+	id1b, err := Create(Dir(dir), m1b, f1b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Activate(t.Context(), id1b); err != nil {
+		t.Fatalf("Activate unchanged add-on gen 1b: %v", err)
+	}
+	afterInfo, err := os.Lstat(secPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(origInfo, afterInfo) {
+		t.Fatal("unchanged add-on secret inode was replaced during unrelated apply (would strip :Z/:U)")
+	}
+	if err := r.Confirm(t.Context(), id1b); err != nil {
+		t.Fatalf("Confirm gen 1b: %v", err)
+	}
 
 	// ReferencedAddonImages reports gen 1's digest.
 	refs, err := ReferencedAddonImages(dir)

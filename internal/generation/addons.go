@@ -495,8 +495,17 @@ func (r Realizer) AddonControl(ctx context.Context, action, slug string) error {
 	return nil
 }
 
+func sameRegularFile(path string, want []byte, mode fs.FileMode) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode || info.Size() != int64(len(want)) {
+		return false
+	}
+	got, err := os.ReadFile(path)
+	return err == nil && string(got) == string(want)
+}
+
 // ReferencedAddonImages returns all immutable Image= digests referenced by Confirmed, LastKnownGood, Pending, or Live generations.
-// Acquires generations/lock when the generations directory exists so concurrent transitions are serialized.
+// Acquires generations/lock with a bounded non-blocking retry loop when the generations directory exists.
 func ReferencedAddonImages(stateDir string) (map[string]bool, error) {
 	refs := map[string]bool{}
 	dir := Dir(stateDir)
@@ -508,8 +517,14 @@ func ReferencedAddonImages(stateDir string) (map[string]bool, error) {
 		return nil, err
 	}
 	defer lockFile.Close()
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return nil, fmt.Errorf("lock generations: %w", err)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if (!errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR)) || time.Now().After(deadline) {
+			return nil, fmt.Errorf("lock generations: %w", err)
+		}
 	}
 	p, err := readPointers(dir)
 	if err != nil {
