@@ -75,7 +75,7 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | --- | --- |
 | `GET /api/v1/status/links` | Complete current snapshot as `{"items":[...]}` |
 | `GET /api/v1/status/lldp` | Live LLDP (802.1AB) neighbors reported by systemd-networkd (`networkctl lldp`) as `{"items":[...]}` |
-| `GET /api/v1/status/offloads` | Live state of the offloads Andaru manages on each Ethernet device (`ethtool --json -k`) as `{"items":[...]}`: whether each runs and whether the device can change it |
+| `GET /api/v1/status/offloads` | Live state of the offloads Andaru manages on each Ethernet device (`ethtool --json -k`) as `{"items":[...]}`: whether each runs, whether the device can change it, and what leaving it at Default runs on that device when known |
 | `GET /api/v1/status/usage` | How hard the box is working now: processor tick counters, load, memory and swap, the room on each device and ZFS pool (one row each, however often it is mounted; FUSE, network and memory file systems are not listed), the connection-tracking table, temperatures. Read at each request; the processor counters are cumulative |
 | `GET /api/v1/status/traffic` | The last hour of every network interface's cumulative counters, read every 5 seconds and kept in the engine's memory only. `?since=` with the time of the newest reading a client holds gives only what came after |
 | `GET /api/v1/status/system` | What the box is, read from `/proc` and `/sys` at each request: the Andaru version, the kernel, the CPU and its features, the hardware as its firmware names it. What a machine does not report is an empty string or list, and a null boot time |

@@ -885,3 +885,91 @@ path.traffic-sent {
     transform: rotate(90deg);
   }
 }
+
+/* Each Ethernet offload: its name, its live state badge, and its saved mode on one aligned line. */
+.offload-header,
+.offload-row {
+  align-items: center;
+  display: grid;
+  gap: var(--mantine-spacing-xs);
+  grid-template-columns: minmax(0, 1fr) 9.25rem;
+}
+
+.offload-list--live .offload-header,
+.offload-list--live .offload-row {
+  grid-template-columns: minmax(0, 1fr) minmax(4.75rem, auto) 9.25rem;
+}
+
+.offload-header {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding-bottom: 0.25rem;
+  text-transform: uppercase;
+}
+
+.offload-row {
+  border-top: 1px solid var(--mantine-color-default-border);
+  padding-block: 0.45rem;
+}
+
+.offload-name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.offload-label {
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.offload-live {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.offload-live .mantine-Badge-root {
+  min-width: max-content;
+}
+
+/* Visually hidden above the stacking breakpoint where the column header carries "Current"; read by assistive tech. */
+.offload-live-label {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+
+@media (max-width: 28em) {
+  .offload-header {
+    display: none;
+  }
+
+  .offload-row {
+    grid-template-columns: 1fr;
+  }
+
+  .offload-list--live .offload-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .offload-list--live .offload-select {
+    grid-column: 1 / -1;
+  }
+
+  .offload-live-label {
+    clip-path: none;
+    color: var(--mantine-color-dimmed);
+    font-size: var(--mantine-font-size-xs);
+    height: auto;
+    overflow: visible;
+    position: static;
+    width: auto;
+  }
+}

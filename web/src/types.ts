@@ -242,10 +242,11 @@ export type OffloadKey =
   | 'receiveChecksum' | 'transmitChecksum' | 'tcpSegmentation' | 'tcp6Segmentation' | 'genericSegmentation' | 'genericReceive'
   | 'genericReceiveHardware' | 'largeReceive' | 'vlanReceiveAcceleration' | 'vlanTransmitAcceleration' | 'vlanReceiveFilter' | 'ntupleFilter';
 
-// An offload as a device runs it now; fixed: the device cannot change it.
+// An offload as a device runs it now; fixed: the device cannot change it; default: what Default runs on this card.
 export interface OffloadState {
   active: boolean;
   fixed: boolean;
+  default?: boolean;
 }
 
 export interface DeviceOffloads {

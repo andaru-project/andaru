@@ -1,5 +1,5 @@
-import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, PasswordInput, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { Alert, Badge, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, PasswordInput, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure, type ApiClient } from '../api';
 import { bondModes, draftOf, foldHiddenRaErrors, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, modeLabel, newZoneOption, offloadOptions, raModeDescription, raModes, raPriorities, removeOperations, supportsRouterAdvertisements, transmitHashPolicies, validatePppoePassword, validatePppoeUsername, validatePref64, validateRaDnsServers, vlanParentOptions, words, type InterfaceDraft } from '../interfaceEdit';
 import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, OffloadKey, RaMode, RaPriority, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from '../types';
@@ -21,7 +21,15 @@ interface InterfaceEditorProps {
   onSave(operations: ConfigBatchOperation[]): Promise<void>;
 }
 
-const offloadModes = [{ value: 'default', label: 'Default' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+const offloadModesUnknown = [{ value: 'default', label: 'Default' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+const offloadModesOn = [{ value: 'default', label: 'Default (On)' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+const offloadModesOff = [{ value: 'default', label: 'Default (Off)' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+
+function offloadModeOptions(cardDefault?: boolean) {
+  if (cardDefault === true) return offloadModesOn;
+  if (cardDefault === false) return offloadModesOff;
+  return offloadModesUnknown;
+}
 
 // Each managed offload: what the device runs now, and whether the saved link turns it on, off or leaves the default.
 function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
@@ -32,6 +40,7 @@ function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
   onSessionLost(): void;
   onChange(next: Partial<Record<OffloadKey, boolean>>): void;
 }) {
+  const idPrefix = useId();
   // null: the device is not on the box; undefined: nothing to ask.
   const load = useCallback(async () => (api && mac ? (await api.deviceOffloads()).items.find((d) => d.permanentAddress.toLowerCase() === mac.toLowerCase()) ?? null : undefined), [api, mac]);
   const live = useResource(load, onSessionLost);
@@ -41,24 +50,60 @@ function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
     else next[key] = mode === 'on';
     onChange(next);
   };
+  const showLive = Boolean(api && mac) && live.data !== null && !live.error;
   return (
     <Fieldset legend="Offloads">
       <Stack gap="xs">
-        <Text size="sm" c="dimmed">Default leaves an offload as the driver set it. Changes apply live, and a rollback undoes them.</Text>
+        <Text size="sm" c="dimmed">Default keeps the driver&apos;s setting (LRO stays off unless enabled). Changes apply live, and a rollback undoes them.</Text>
         {live.error && <Text size="sm" c="red" role="alert">Live offload state is unavailable: {live.error}</Text>}
         {live.data === null && <Text size="sm" c="dimmed">The device is not present: its live state is unknown.</Text>}
         {error && <Text size="sm" c="red" role="alert">{error}</Text>}
-        <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="xs">
+        <div className={showLive ? 'offload-list--live' : undefined}>
+          <div className="offload-header" aria-hidden="true">
+            <span>Offload</span>
+            {showLive && <span>Current</span>}
+            <span>Setting</span>
+          </div>
           {offloadOptions.map(({ key, label }) => {
             const state = live.data?.offloads[key];
             const saved = value[key];
-            const now = state ? `${state.active ? 'On' : 'Off'} now${state.fixed ? ', fixed by the device' : ''}` : live.data ? 'Not reported by the device' : live.loading ? 'Reading…' : undefined;
+            const id = `${idPrefix}-${key}`;
+            const liveId = showLive ? `${id}-live` : undefined;
+            const noteId = state?.fixed ? `${id}-note` : undefined;
+            const describedBy = [liveId, noteId].filter(Boolean).join(' ') || undefined;
             return (
-              <NativeSelect key={key} label={label} description={now} data={offloadModes} value={saved === undefined ? 'default' : saved ? 'on' : 'off'}
-                disabled={Boolean(state?.fixed) && saved === undefined} onChange={(event) => choose(key, event.currentTarget.value)} />
+              <div key={key} className="offload-row">
+                <div className="offload-name">
+                  <label htmlFor={id} className="offload-label">{label}</label>
+                  {state?.fixed && <Text id={noteId} size="xs" c="dimmed">Not configurable</Text>}
+                </div>
+                {showLive && (
+                  <div id={liveId} className="offload-live">
+                    <span className="offload-live-label">Current: </span>
+                    {state ? (
+                      <Badge variant="dot" color={state.active ? 'green' : 'gray'} className="plain-badge">
+                        {state.active ? 'On' : 'Off'}
+                      </Badge>
+                    ) : live.data ? (
+                      <Text size="xs" c="dimmed">Not reported</Text>
+                    ) : (
+                      <Text size="xs" c="dimmed">Reading…</Text>
+                    )}
+                  </div>
+                )}
+                <NativeSelect
+                  id={id}
+                  attributes={describedBy ? { input: { 'aria-describedby': describedBy } } : undefined}
+                  className="offload-select"
+                  data={offloadModeOptions(state?.default)}
+                  value={saved === undefined ? 'default' : saved ? 'on' : 'off'}
+                  disabled={Boolean(state?.fixed) && saved === undefined}
+                  onChange={(event) => choose(key, event.currentTarget.value)}
+                />
+              </div>
             );
           })}
-        </SimpleGrid>
+        </div>
       </Stack>
     </Fieldset>
   );

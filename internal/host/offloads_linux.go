@@ -63,9 +63,13 @@ func ParseFeatures(data []byte) (map[string]Feature, error) {
 }
 
 // OffloadState is one managed offload as a device runs it. Fixed: the device cannot change it.
+// Default is what leaving the offload at the default runs on this device; nil when unknown.
+// FixedActive is true when at least one constituent kernel feature is fixed active (internal only).
 type OffloadState struct {
-	Active bool `json:"active"`
-	Fixed  bool `json:"fixed"`
+	Active      bool  `json:"active"`
+	Fixed       bool  `json:"fixed"`
+	Default     *bool `json:"default,omitempty"`
+	FixedActive bool  `json:"-"`
 }
 
 // DeviceOffloads is the live offload state of one Ethernet device.
@@ -91,6 +95,7 @@ func ManagedOffloads(features map[string]Feature) map[string]OffloadState {
 				seen = true
 				state.Active = state.Active || f.Active
 				state.Fixed = state.Fixed && f.Fixed
+				state.FixedActive = state.FixedActive || (f.Fixed && f.Active)
 			}
 		}
 		if seen {
