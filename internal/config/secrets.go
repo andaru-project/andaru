@@ -51,10 +51,8 @@ func secretPrecondition(doc secretDocument, scope string, pw map[string]any, pat
 		return fault("INVALID_REQUEST", path, "Invalid secret version.")
 	}
 	actual := Version("0")
-	if scoped := doc.Scopes[scope]; scoped != nil {
-		if old, ok := scoped[name]; ok {
-			actual = old.Version
-		}
+	if old, ok := doc.Scopes[scope][name]; ok {
+		actual = old.Version
 	}
 	if v != actual {
 		f := fault("PRECONDITION_FAILED", "", "")

@@ -512,7 +512,22 @@ type RealizationInput struct {
 // agree except for the settings that take effect when saved, notifications, and the secrets their links and
 // enabled add-ons use agree. An apply of one over the other would change nothing, so the other needs no apply (#218).
 func SameRealization(a, b RealizationInput) bool {
-	return maps.Equal(a.Secrets, b.Secrets) && sameAddonSecrets(a.AddonSecrets, b.AddonSecrets) && bytes.Equal(realized(a.Value), realized(b.Value))
+	return maps.Equal(a.Secrets, b.Secrets) && maps.EqualFunc(a.AddonSecrets, b.AddonSecrets, maps.Equal) && bytes.Equal(realized(a.Value), realized(b.Value))
+}
+
+func stripSecretViewMeta(raw json.RawMessage, requireSecretKey bool) (json.RawMessage, error) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return raw, nil
+	}
+	if requireSecretKey {
+		if _, hasSecret := m["secret"]; !hasSecret {
+			return raw, nil
+		}
+	}
+	delete(m, "updatedAt")
+	delete(m, "version")
+	return json.Marshal(m)
 }
 
 // realized is a declaration without the settings an apply does not realize; one it cannot read is kept whole.
@@ -522,55 +537,48 @@ func realized(value json.RawMessage) []byte {
 		return value
 	}
 	delete(d, "notifications")
-	// A link password's view says when its secret last changed; the secret itself is compared in SameRealization, so a
-	// password changed and changed back realizes as before.
+	// A secret view says when its secret last changed; the secret itself is compared in SameRealization, so a
+	// secret changed and changed back realizes as before.
 	var links []map[string]json.RawMessage
-	var err error
 	if json.Unmarshal(d["links"], &links) == nil {
 		for _, l := range links {
-			var p map[string]json.RawMessage
-			if json.Unmarshal(l["password"], &p) == nil && p != nil && err == nil {
-				delete(p, "updatedAt")
-				delete(p, "version")
-				l["password"], err = json.Marshal(p)
+			stripped, err := stripSecretViewMeta(l["password"], false)
+			if err != nil {
+				return value
 			}
+			l["password"] = stripped
 		}
-		if err == nil {
-			d["links"], err = json.Marshal(links)
+		raw, err := json.Marshal(links)
+		if err != nil {
+			return value
 		}
+		d["links"] = raw
 	}
 	var addons []map[string]json.RawMessage
-	if err == nil && len(d["addons"]) > 0 && json.Unmarshal(d["addons"], &addons) == nil {
+	if len(d["addons"]) > 0 && json.Unmarshal(d["addons"], &addons) == nil {
 		for _, a := range addons {
 			var settings map[string]json.RawMessage
-			if json.Unmarshal(a["settings"], &settings) == nil && settings != nil {
-				for k, rawVal := range settings {
-					var sv map[string]json.RawMessage
-					if json.Unmarshal(rawVal, &sv) == nil && sv != nil {
-						if _, hasSecret := sv["secret"]; hasSecret {
-							delete(sv, "updatedAt")
-							delete(sv, "version")
-							settings[k], err = json.Marshal(sv)
-						}
-					}
-					if err != nil {
-						break
-					}
-				}
-				if err == nil {
-					a["settings"], err = json.Marshal(settings)
-				}
+			if json.Unmarshal(a["settings"], &settings) != nil || settings == nil {
+				continue
 			}
+			for k, rawVal := range settings {
+				stripped, err := stripSecretViewMeta(rawVal, true)
+				if err != nil {
+					return value
+				}
+				settings[k] = stripped
+			}
+			rawSettings, err := json.Marshal(settings)
 			if err != nil {
-				break
+				return value
 			}
+			a["settings"] = rawSettings
 		}
-		if err == nil {
-			d["addons"], err = json.Marshal(addons)
+		raw, err := json.Marshal(addons)
+		if err != nil {
+			return value
 		}
-	}
-	if err != nil {
-		return value
+		d["addons"] = raw
 	}
 	out, err := json.Marshal(d) // with its keys sorted, so both read alike
 	if err != nil {

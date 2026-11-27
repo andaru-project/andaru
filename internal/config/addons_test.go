@@ -288,3 +288,106 @@ func TestAddonWebUIRejectsManagementHost(t *testing.T) {
 		t.Fatalf("expected rejection when webui hostnameSetting matches host %q", host)
 	}
 }
+
+func TestAddonRecoveryDisabledZoneMalformedSecretAndReinstall(t *testing.T) {
+	ctx := t.Context()
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	store.SetCatalog(testCatalog(t))
+	actor := authz.Actor{Kind: "system", ID: "root"}
+
+	zRes, err := store.Save(ctx, actor, Changes{Operations: []Operation{
+		{Op: "create", Collection: "zones", LocalID: "ts", Value: json.RawMessage(`{"name":"Tailscale"}`)},
+		{Op: "create", Collection: "zones", LocalID: "fb", Value: json.RawMessage(`{"name":"Fallback"}`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsZone, fbZone := zRes.Created["ts"], zRes.Created["fb"]
+
+	// Malformed secretWrite (non-string set / unknown field) must be rejected, never silently stripped.
+	for _, bad := range []string{
+		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":"auth_key","set":123,"expectedVersion":"0"}}}`,
+		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":"auth_key","bogus":1}}}`,
+		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"hostname":{"secret":"not_a_secret_prop","set":"x","expectedVersion":"0"}}}`,
+	} {
+		if _, err := store.Save(ctx, actor, Changes{Operations: []Operation{
+			{Op: "create", Collection: "addons", Value: json.RawMessage(bad)},
+		}}); err == nil {
+			t.Fatalf("expected rejection for malformed secretWrite: %s", bad)
+		}
+	}
+
+	// Single-object ObjectChange create populates Created["object"].
+	objCh, err := ObjectChange("create", "addons", "", nil, json.RawMessage(
+		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"hostname":"gw","fallbackZone":"`+fbZone+`","authKey":{"secret":"auth_key","set":"tskey-1","expectedVersion":"0"}},"interfaces":[{"name":"tailscale0","zone":"`+tsZone+`"}]}`,
+	))
+	if err != nil {
+		t.Fatalf("ObjectChange: %v", err)
+	}
+	createRes, err := store.Save(ctx, actor, objCh)
+	if err != nil {
+		t.Fatalf("ObjectChange create addon: %v", err)
+	}
+	if createRes.Created["object"] != "org.andaru.tailscale" {
+		t.Fatalf("Created = %+v", createRes.Created)
+	}
+
+	// Cold recovery verification must succeed with scoped add-on secrets.
+	if err := VerifyRecoveryState(ctx, dir); err != nil {
+		t.Fatalf("VerifyRecoveryState failed with add-on secret: %v", err)
+	}
+
+	// Deleting a zone referenced by a DISABLED add-on (either interface or zone-reference setting) must fail.
+	v1 := createRes.SavedVersion
+	if _, err := store.Save(ctx, actor, Changes{Operations: []Operation{
+		{Op: "delete", Collection: "zones", ID: tsZone, ExpectedVersion: &zRes.SavedVersion},
+	}}); err == nil {
+		t.Fatal("expected deleting zone referenced by disabled add-on interface to fail")
+	}
+	if _, err := store.Save(ctx, actor, Changes{Operations: []Operation{
+		{Op: "delete", Collection: "zones", ID: fbZone, ExpectedVersion: &zRes.SavedVersion},
+	}}); err == nil {
+		t.Fatal("expected deleting zone referenced by disabled add-on setting to fail")
+	}
+
+	// Uninstall then reinstall under the same catalog id succeeds (no UNIQUE creation constraint collision).
+	if _, err := store.Save(ctx, actor, Changes{Operations: []Operation{
+		{Op: "delete", Collection: "addons", ID: "org.andaru.tailscale", ExpectedVersion: &v1},
+	}}); err != nil {
+		t.Fatalf("uninstall addon: %v", err)
+	}
+	if _, err := store.Save(ctx, actor, Changes{Operations: []Operation{
+		{Op: "create", Collection: "addons", Value: json.RawMessage(`{"id":"org.andaru.tailscale","enabled":false,"settings":{"hostname":"gw2","authKey":{"secret":"auth_key","set":"tskey-2","expectedVersion":"0"}},"interfaces":[{"name":"tailscale0","zone":"` + tsZone + `"}]}`)},
+	}}); err != nil {
+		t.Fatalf("reinstall addon: %v", err)
+	}
+
+	// Config-only restore without the add-on prunes its orphaned addon:<id> secret scope.
+	emptyStore := openAddonTestStore(t)
+	emptyExport, err := emptyStore.Export(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headSnap, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Restore(ctx, actor, headSnap.SavedVersion, RestoreDocuments{Configuration: emptyExport.Configuration}); err != nil {
+		t.Fatalf("config-only restore: %v", err)
+	}
+	afterRestore, err := store.Export(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(afterRestore.ConfigurationSecrets), "addon:org.andaru.tailscale") {
+		t.Fatalf("orphaned addon secret scope survived config-only restore: %s", afterRestore.ConfigurationSecrets)
+	}
+}

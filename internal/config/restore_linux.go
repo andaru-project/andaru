@@ -213,22 +213,14 @@ func sameSecrets(a, b []byte) bool {
 		return true
 	}
 	var x, y secretDocument
-	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil || len(x.Scopes) != len(y.Scopes) {
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
 		return false
 	}
-	for scope, xs := range x.Scopes {
-		ys, ok := y.Scopes[scope]
-		if !ok || len(xs) != len(ys) {
-			return false
-		}
-		for name, s := range xs {
-			t, ok := ys[name]
-			if !ok || s.Kind != t.Kind || s.Value != t.Value || s.Version != t.Version {
-				return false
-			}
-		}
-	}
-	return true
+	return maps.EqualFunc(x.Scopes, y.Scopes, func(xs, ys map[string]secretEntry) bool {
+		return maps.EqualFunc(xs, ys, func(s, t secretEntry) bool {
+			return s.Kind == t.Kind && s.Value == t.Value && s.Version == t.Version
+		})
+	})
 }
 
 func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time) (preparedChange, RestorePreview, error) {
@@ -239,6 +231,27 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		candidate = *decoded.configuration
 	}
 	secrets := current.Secrets
+	secretsPruned := false
+	if decoded.secrets == nil && decoded.configuration != nil {
+		// Prune add-on secret scopes whose add-ons are absent from the restored configuration so orphaned
+		// scopes do not linger invisibly or conflict with future reinstalls.
+		presentAddons := make(map[string]bool, len(candidate.Addons))
+		for _, a := range candidate.Addons {
+			presentAddons[addonSecretScope(a.ID)] = true
+		}
+		pruned := emptySecrets()
+		for scope, entries := range current.Secrets.Scopes {
+			if scope != "core" && !presentAddons[scope] {
+				preview.SecretChanges.Deleted += len(entries)
+				secretsPruned = true
+				continue
+			}
+			pruned.Scopes[scope] = maps.Clone(entries)
+		}
+		if secretsPruned {
+			secrets = pruned
+		}
+	}
 	if decoded.secrets != nil {
 		secrets = emptySecrets()
 		for scope, entries := range decoded.secrets.Scopes {
@@ -309,7 +322,7 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		}
 	}
 	secretBody := current.secretBody
-	if decoded.secrets != nil {
+	if decoded.secrets != nil || secretsPruned {
 		var err error
 		secretBody, err = canonical(secrets)
 		if err != nil {

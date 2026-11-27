@@ -402,6 +402,16 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 		scope := secretScopeForOp(op.Collection, scopeID)
 		for _, f := range secretFields(op.Collection, value) {
 			if pw, ok := f.parent[f.name].(map[string]any); ok {
+				if op.Collection == "addons" {
+					if known, isSec := addonPropIsSecretRef(catalog, scopeID, f.name); known && !isSec {
+						pick(fault("VALIDATION_FAILED", input.path(i, f.path, true), "Setting is not a secret-reference property."), i)
+						continue
+					}
+					if fe := validateAddonSecretWrite(pw, input.path(i, f.path, true)); fe != nil {
+						pick(fe, i)
+						continue
+					}
+				}
 				if _, set := pw["set"]; set {
 					pick(secretPrecondition(current.Secrets, scope, pw, input.path(i, f.path+"/expectedVersion", true)), i)
 				}
@@ -440,7 +450,7 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 		if op.Op == "create" {
 			if op.Collection == "addons" {
 				id, ok := value["id"].(string)
-				if !ok || !addonIDPattern.MatchString(id) {
+				if !ok || !addon.ValidID(id) {
 					pick(fault("VALIDATION_FAILED", input.path(i, "/id", true), "Add-on create requires a valid catalog id."), i)
 					continue
 				}
@@ -451,6 +461,14 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 				}
 				duplicates[key] = true
 				keys[i] = key
+				if op.LocalID != "" {
+					if !localLabel(op.LocalID) || labels[op.LocalID] != "" {
+						pick(fault("VALIDATION_FAILED", input.path(i, "/localId", false), "Invalid or duplicate local label."), i)
+					} else {
+						labels[op.LocalID] = id
+						created[op.LocalID] = id
+					}
+				}
 				continue
 			}
 			if _, exists := value["id"]; exists {
@@ -650,15 +668,13 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 	}
 	d = validated
 	if catalog != nil {
-		writtenKeys := make(map[objectKey]bool, len(writes))
-		for k := range writes {
-			writtenKeys[k] = true
-		}
-		if catErrs := validateAddonsAgainstCatalog(catalog, &d, writtenKeys); len(catErrs) > 0 {
+		if catErrs := validateAddonsAgainstCatalog(catalog, &d, writes); len(catErrs) > 0 {
 			return empty, rebaseValidation(validationError(catErrs), &d, origins, input)
 		}
+		normalizeDeclaration(&d)
 	}
-	for _, h := range heldSecrets(&d) {
+	held := heldSecrets(&d)
+	for _, h := range held {
 		if !h.ref.Unresolved {
 			if _, ok := current.Secrets.Scopes[h.scope][h.ref.Secret]; !ok {
 				return empty, rebaseValidation(validationError{{h.path, "Named secret does not exist."}}, &d, origins, input)
@@ -667,7 +683,7 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 	}
 	// A reference this batch writes must name a secret of its collection's kind (secretKind), unresolved or not. The
 	// refusal tells a client that a secret of another kind exists, as a version precondition already does; never its value.
-	for _, h := range heldSecrets(&d) {
+	for _, h := range held {
 		entry, exists := current.Secrets.Scopes[h.scope][h.ref.Secret]
 		if !exists && h.ref.Unresolved || entry.Kind == secretKind(h.key.Collection) {
 			continue
@@ -750,7 +766,7 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 			changes[listKey(op.Collection)] = objectChange{Collection: op.Collection, ID: op.Collection}
 		}
 	}
-	for _, h := range heldSecrets(&d) {
+	for _, h := range held {
 		if changedSecrets[h.scope+"\x00"+h.ref.Secret] {
 			resultSet[h.key] = true
 			if _, exists := changes[h.key]; !exists {

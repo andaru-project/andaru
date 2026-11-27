@@ -103,7 +103,7 @@ func TestParseManifestValid(t *testing.T) {
 	if m.ID != "org.andaru.tailscale" || m.Slug != "tailscale" {
 		t.Fatalf("identity = %q/%q", m.ID, m.Slug)
 	}
-	if m.Runtime.StopTimeoutSeconds != 5 || m.Runtime.SettingsActivation != "recreate" {
+	if m.Runtime.StopTimeoutSeconds == nil || *m.Runtime.StopTimeoutSeconds != 5 || m.Runtime.SettingsActivation != "recreate" {
 		t.Fatalf("defaults not applied: %+v", m.Runtime)
 	}
 }
@@ -323,5 +323,65 @@ func TestManifestCaseCollisionAndWebUIOrigin(t *testing.T) {
 		`"endpoints": [{ "name": "ui", "protocol": "https", "port": 8443, "exposure": "managed" }], "webui": { "title": "UI", "permission": "view", "endpoint": "ui", "path": "/" }, "logs": [`, 1)
 	if _, err := ParseManifest([]byte(noHostWebUI)); err == nil || !strings.Contains(err.Error(), "/webui/hostnameSetting") {
 		t.Fatalf("expected missing hostnameSetting rejection, got %v", err)
+	}
+}
+
+func TestManifestHardeningRegressions(t *testing.T) {
+	// Registry with host:port accepted; unqualified image rejected.
+	withPort := strings.Replace(validTailscaleManifest, "ghcr.io/tailscale/tailscale@sha256:", "registry.local:5000/org/tailscale@sha256:", 1)
+	if _, err := ParseManifest([]byte(withPort)); err != nil {
+		t.Fatalf("expected host:port registry to pass, got %v", err)
+	}
+	unqualified := strings.Replace(validTailscaleManifest, "ghcr.io/tailscale/tailscale@sha256:", "tailscale/tailscale@sha256:", 1)
+	if _, err := ParseManifest([]byte(unqualified)); err == nil {
+		t.Fatal("expected unqualified image without registry domain to be rejected")
+	}
+
+	// Explicit stopTimeoutSeconds: 0 rejected rather than defaulted.
+	zeroStop := strings.Replace(validTailscaleManifest, `"network": "host",`, `"network": "host", "stopTimeoutSeconds": 0,`, 1)
+	if _, err := ParseManifest([]byte(zeroStop)); err == nil || !strings.Contains(err.Error(), "stopTimeoutSeconds") {
+		t.Fatalf("expected stopTimeoutSeconds=0 rejection, got %v", err)
+	}
+
+	// Newline in static runtime.env value rejected.
+	nlEnv := strings.Replace(validTailscaleManifest, `"TS_USERSPACE": "false"`, `"TS_USERSPACE": "false\nEVIL=1"`, 1)
+	if _, err := ParseManifest([]byte(nlEnv)); err == nil {
+		t.Fatal("expected newline in runtime.env to be rejected")
+	}
+
+	// Storage mountPath under /run/andaru rejected.
+	reservedMount := strings.Replace(validTailscaleManifest, `"/var/lib/tailscale"`, `"/run/andaru/secrets"`, 1)
+	if _, err := ParseManifest([]byte(reservedMount)); err == nil || !strings.Contains(err.Error(), "/run/andaru") {
+		t.Fatalf("expected /run/andaru storage mount rejection, got %v", err)
+	}
+
+	// Reserved "number" type rejected (Andaru canonical JSON profile is integer-only).
+	numProp := strings.Replace(validTailscaleManifest, `"type": "boolean",`, `"type": "number",`, 1)
+	if _, err := ParseManifest([]byte(numProp)); err == nil || !strings.Contains(err.Error(), "integer-only") {
+		t.Fatalf("expected reserved number type rejection, got %v", err)
+	}
+
+	// Settings hostile inputs: NUL byte, newline in env-bound setting, IPv6 zone ID.
+	m, err := ParseManifest([]byte(`{
+	  "manifestVersion": 1, "id": "org.test.probe", "slug": "probe", "name": "Probe", "version": "1.0.0",
+	  "application": {"name":"Probe","version":"1"}, "requires": [{"name":"andaru.extension-api","version":"1.0.0"}],
+	  "permissions": [{"name":"view","title":"View"}],
+	  "runtime": {"image":"ghcr.io/org/probe@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","network":"host"},
+	  "properties": [
+	    {"name":"note","type":"string","title":"Note","binding":{"type":"environment","name":"NOTE"}},
+	    {"name":"addr","type":"string","format":"ipv6","title":"Addr"}
+	  ]
+	}`))
+	if err != nil {
+		t.Fatalf("parse probe manifest: %v", err)
+	}
+	if _, errs := ValidateSettings(m, map[string]any{"note": "a\nB=1"}, nil); len(errs) == 0 {
+		t.Fatal("expected newline in env-bound string setting to be rejected")
+	}
+	if _, errs := ValidateSettings(m, map[string]any{"note": "a\x00b"}, nil); len(errs) == 0 {
+		t.Fatal("expected NUL byte in string setting to be rejected")
+	}
+	if _, errs := ValidateSettings(m, map[string]any{"addr": "fe80::1%eth0"}, nil); len(errs) == 0 {
+		t.Fatal("expected IPv6 zone ID to be rejected")
 	}
 }

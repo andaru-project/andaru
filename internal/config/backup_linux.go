@@ -47,21 +47,7 @@ func (s *Store) Export(ctx context.Context, includeSecrets bool) (result BackupD
 			result.Configuration = state.storedBody
 		}
 		if includeSecrets {
-			scopes := make(map[string]map[string]backupSecretEntry, len(state.Secrets.Scopes))
-			for scope, entries := range state.Secrets.Scopes {
-				if scope != "core" && len(entries) == 0 {
-					continue
-				}
-				copied := make(map[string]backupSecretEntry, len(entries))
-				for name, entry := range entries {
-					copied[name] = backupSecretEntry{Kind: entry.Kind, Value: entry.Value}
-				}
-				scopes[scope] = copied
-			}
-			if scopes["core"] == nil {
-				scopes["core"] = map[string]backupSecretEntry{}
-			}
-			result.ConfigurationSecrets, err = canonical(backupSecretDocument{SchemaVersion: 1, Scopes: scopes})
+			result.ConfigurationSecrets, err = exportBackupSecrets(state.Secrets)
 			return err
 		}
 		return nil
@@ -97,8 +83,13 @@ func (input RestoreDocuments) Portable(target Version) (RestoreDocuments, error)
 	if !restored {
 		return RestoreDocuments{Configuration: input.Configuration}, nil
 	}
-	scopes := make(map[string]map[string]backupSecretEntry, len(stored.Scopes))
-	for scope, entries := range stored.Scopes {
+	secrets, err := exportBackupSecrets(stored)
+	return RestoreDocuments{Configuration: input.Configuration, ConfigurationSecrets: secrets}, err
+}
+
+func exportBackupSecrets(doc secretDocument) ([]byte, error) {
+	scopes := make(map[string]map[string]backupSecretEntry, len(doc.Scopes))
+	for scope, entries := range doc.Scopes {
 		if scope != "core" && len(entries) == 0 {
 			continue
 		}
@@ -111,8 +102,7 @@ func (input RestoreDocuments) Portable(target Version) (RestoreDocuments, error)
 	if scopes["core"] == nil {
 		scopes["core"] = map[string]backupSecretEntry{}
 	}
-	secrets, err := canonical(backupSecretDocument{SchemaVersion: 1, Scopes: scopes})
-	return RestoreDocuments{Configuration: input.Configuration, ConfigurationSecrets: secrets}, err
+	return canonical(backupSecretDocument{SchemaVersion: 1, Scopes: scopes})
 }
 
 // RestorableHere reports whether a backup's documents restore in this Andaru: they read, and without provisional
@@ -160,9 +150,11 @@ func decodeBackupDocuments(input RestoreDocuments) (decodedBackup, error) {
 		if err = json.Unmarshal(input.ConfigurationSecrets, &secrets); err != nil {
 			return decoded, fault("INVALID_REQUEST", "/configurationSecrets", "Invalid configuration-secret backup document.")
 		}
-		for _, entry := range secrets.Scopes["core"] {
-			if len(entry.Value) > 4096 || strings.ContainsRune(entry.Value, 0) {
-				return decoded, fault("VALIDATION_FAILED", "/configurationSecrets", "Invalid configuration-secret value.")
+		for _, entries := range secrets.Scopes {
+			for _, entry := range entries {
+				if len(entry.Value) > 4096 || strings.ContainsRune(entry.Value, 0) {
+					return decoded, fault("VALIDATION_FAILED", "/configurationSecrets", "Invalid configuration-secret value.")
+				}
 			}
 		}
 		decoded.secrets = &secrets

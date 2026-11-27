@@ -40,6 +40,7 @@ type Store struct {
 }
 
 // SetCatalog attaches the validated add-on catalog so add-on writes are checked against their manifests.
+// It must be called before the store is shared across goroutines.
 func (s *Store) SetCatalog(cat *addon.Catalog) { s.catalog = cat }
 
 func unavailable() *Fault {
@@ -134,7 +135,7 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		return nil, diagnostic("open-secret", e)
 	}
 	// Additive history tables let older stores accept newer configuration collections.
-	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL+dhcp6DDL+vipDDL+roleDDL+firewallDDL+writerDDL+notificationDDL+addonDDL); e != nil {
+	if _, e = cfg.ExecContext(ctx, additiveDDL); e != nil {
 		cfg.Close()
 		sec.Close()
 		return nil, diagnostic("open-config-policy-table", e)

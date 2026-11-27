@@ -14,6 +14,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,18 +29,25 @@ const (
 )
 
 var (
-	idPattern          = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}(\.[a-z][a-z0-9-]{0,31})+$`)
-	slugPattern        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-	propNamePattern    = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
-	envNamePattern     = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
-	argNamePattern     = regexp.MustCompile(`^--?[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
-	ifNamePattern      = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,14}$`)
-	secretNamePattern  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
-	imageDigestPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*(\.[a-z0-9._-]+)?(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$`)
-	hostnamePattern    = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
-	i18nKeyPattern     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
-	permNamePattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	idPattern         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}(\.[a-z][a-z0-9-]{0,31})+$`)
+	slugPattern       = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	propNamePattern   = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
+	envNamePattern    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
+	argNamePattern    = regexp.MustCompile(`^--?[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+	ifNamePattern     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,14}$`)
+	secretNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+	repoSegPattern    = regexp.MustCompile(`^[a-z0-9]+([._-][a-z0-9]+)*$`)
+	sha256HexPattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	hostnamePattern   = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
+	i18nKeyPattern    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
+	permNamePattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 )
+
+// ValidID reports whether id matches the add-on reverse-DNS identifier contract.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
+
+// ValidInterfaceName reports whether name is a valid, non-reserved add-on interface name.
+func ValidInterfaceName(name string) bool { return validAddonInterfaceName(name) }
 
 // ErrUnsupportedManifestVersion reports a manifest whose manifestVersion or requires cannot run on this Andaru.
 var ErrUnsupportedManifestVersion = errors.New("unsupported add-on manifest version or API requirement")
@@ -159,7 +167,7 @@ type Runtime struct {
 	Args               []string          `json:"args,omitempty"`
 	Env                map[string]string `json:"env,omitempty"`
 	SettingsActivation string            `json:"settingsActivation,omitempty"`
-	StopTimeoutSeconds int               `json:"stopTimeoutSeconds,omitempty"`
+	StopTimeoutSeconds *int              `json:"stopTimeoutSeconds,omitempty"`
 }
 
 type InterfaceSpec struct {
@@ -220,7 +228,7 @@ type MetricSpec struct {
 type HealthSpec struct {
 	Endpoint           string   `json:"endpoint,omitempty"`
 	Path               string   `json:"path,omitempty"`
-	ExpectedStatus     int      `json:"expectedStatus,omitempty"`
+	ExpectedStatus     *int     `json:"expectedStatus,omitempty"`
 	HealthCmd          []string `json:"healthCmd,omitempty"`
 	IntervalSeconds    int      `json:"intervalSeconds,omitempty"`
 	TimeoutSeconds     int      `json:"timeoutSeconds,omitempty"`
@@ -307,8 +315,9 @@ func ParseManifest(raw []byte) (*Manifest, error) {
 	if m.Runtime.SettingsActivation == "" {
 		m.Runtime.SettingsActivation = "recreate"
 	}
-	if m.Runtime.StopTimeoutSeconds == 0 {
-		m.Runtime.StopTimeoutSeconds = 5
+	if m.Runtime.StopTimeoutSeconds == nil {
+		defaultStop := 5
+		m.Runtime.StopTimeoutSeconds = &defaultStop
 	}
 	if errs := validateManifest(&m); len(errs) > 0 {
 		return nil, ValidationError(errs)
@@ -367,7 +376,6 @@ func checkCompatibility(top map[string]json.RawMessage) error {
 		return ValidationError{{Path: "/requires", Message: "requires must be a non-empty array"}}
 	}
 	seenReq := map[string]bool{}
-	hasAPI := false
 	for i, req := range reqs {
 		p := fmt.Sprintf("/requires/%d", i)
 		if req.Name == "" || req.Version == "" {
@@ -377,17 +385,12 @@ func checkCompatibility(top map[string]json.RawMessage) error {
 			return ValidationError{{Path: p + "/name", Message: "duplicate requirement"}}
 		}
 		seenReq[req.Name] = true
-		if req.Name == ExtensionAPIName {
-			hasAPI = true
-			if !compatibleAPI1(req.Version) {
-				return fmt.Errorf("%w: %s %q is not satisfied by 1.0.0", ErrUnsupportedManifestVersion, req.Name, req.Version)
-			}
-		} else {
+		if req.Name != ExtensionAPIName {
 			return fmt.Errorf("%w: unknown requirement %q", ErrUnsupportedManifestVersion, req.Name)
 		}
-	}
-	if !hasAPI {
-		return ValidationError{{Path: "/requires", Message: fmt.Sprintf("must require %s", ExtensionAPIName)}}
+		if !compatibleAPI1(req.Version) {
+			return fmt.Errorf("%w: %s %q is not satisfied by 1.0.0", ErrUnsupportedManifestVersion, req.Name, req.Version)
+		}
 	}
 	return nil
 }
@@ -412,7 +415,7 @@ func compatibleAPI1(expr string) bool {
 		if !ok {
 			return false
 		}
-		cmp := compareSemver([3]int{1, 0, 0}, v)
+		cmp := slices.Compare([]int{1, 0, 0}, v[:])
 		switch op {
 		case "=":
 			if cmp != 0 {
@@ -449,28 +452,18 @@ func parseSemver3(s string) ([3]int, bool) {
 		if part == "" || (len(part) > 1 && part[0] == '0') {
 			return [3]int{}, false
 		}
-		n := 0
 		for _, c := range part {
 			if c < '0' || c > '9' {
 				return [3]int{}, false
 			}
-			n = n*10 + int(c-'0')
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return [3]int{}, false
 		}
 		out[i] = n
 	}
 	return out, true
-}
-
-func compareSemver(a, b [3]int) int {
-	for i := range 3 {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return 0
 }
 
 // checkUnknownFields walks the raw JSON object tree and reports every unknown key with its JSON Pointer path.
@@ -650,6 +643,8 @@ func validateManifest(m *Manifest) []FieldError {
 		}
 		if !validContainerPath(st.MountPath) {
 			bad(p+"/mountPath", "mountPath must be a clean absolute container path")
+		} else if st.MountPath == "/run/andaru" || strings.HasPrefix(st.MountPath, "/run/andaru/") {
+			bad(p+"/mountPath", "/run/andaru is reserved for platform secrets and bus mounts")
 		} else if mounts[st.MountPath] {
 			bad(p+"/mountPath", "duplicate storage mountPath")
 		} else {
@@ -743,9 +738,11 @@ func validateManifest(m *Manifest) []FieldError {
 			bad(p+"/endpoint", "undeclared endpoint")
 		} else if ep.Exposure != "internal" {
 			bad(p+"/endpoint", "metrics endpoint must have internal exposure")
+		} else if ep.Protocol != "http" && ep.Protocol != "https" {
+			bad(p+"/endpoint", "metrics endpoint must use http or https protocol")
 		}
-		if !strings.HasPrefix(mt.Path, "/") {
-			bad(p+"/path", "metrics path must start with /")
+		if !validURLPath(mt.Path) {
+			bad(p+"/path", "metrics path must start with / and contain no whitespace or control characters")
 		}
 		if mt.Format != "prometheus" {
 			bad(p+"/format", `metrics format must be "prometheus"`)
@@ -759,18 +756,41 @@ func validateManifest(m *Manifest) []FieldError {
 		if hasHTTP == hasCmd {
 			bad("/health", "health must declare either an internal HTTP endpoint or healthCmd, not both")
 		}
+		if m.Health.IntervalSeconds < 0 {
+			bad("/health/intervalSeconds", "intervalSeconds must be >= 0")
+		}
+		if m.Health.TimeoutSeconds < 0 {
+			bad("/health/timeoutSeconds", "timeoutSeconds must be >= 0")
+		}
+		if m.Health.StartPeriodSeconds < 0 {
+			bad("/health/startPeriodSeconds", "startPeriodSeconds must be >= 0")
+		}
+		if m.Health.IntervalSeconds > 0 && m.Health.TimeoutSeconds > m.Health.IntervalSeconds {
+			bad("/health/timeoutSeconds", "timeoutSeconds must be <= intervalSeconds")
+		}
 		if hasHTTP {
 			ep, ok := endpoints[m.Health.Endpoint]
 			if !ok {
 				bad("/health/endpoint", "undeclared endpoint")
 			} else if ep.Exposure != "internal" {
 				bad("/health/endpoint", "health endpoint must have internal exposure")
+			} else if ep.Protocol != "http" && ep.Protocol != "https" {
+				bad("/health/endpoint", "health endpoint must use http or https protocol")
 			}
-			if !strings.HasPrefix(m.Health.Path, "/") {
-				bad("/health/path", "health path must start with /")
+			if !validURLPath(m.Health.Path) {
+				bad("/health/path", "health path must start with / and contain no whitespace or control characters")
 			}
-			if m.Health.ExpectedStatus != 0 && (m.Health.ExpectedStatus < 100 || m.Health.ExpectedStatus > 599) {
+			if m.Health.ExpectedStatus != nil && (*m.Health.ExpectedStatus < 100 || *m.Health.ExpectedStatus > 599) {
 				bad("/health/expectedStatus", "expectedStatus must be a valid HTTP status code")
+			}
+		} else if hasCmd {
+			if m.Health.ExpectedStatus != nil {
+				bad("/health/expectedStatus", "expectedStatus is only valid for HTTP health checks")
+			}
+			for i, arg := range m.Health.HealthCmd {
+				if arg == "" || hasControlChar(arg) {
+					bad(fmt.Sprintf("/health/healthCmd/%d", i), "healthCmd arguments must be non-empty and contain no control characters")
+				}
 			}
 		}
 	}
@@ -800,11 +820,13 @@ func validateManifest(m *Manifest) []FieldError {
 		if !perms[m.WebUI.Permission] {
 			bad("/webui/permission", "undeclared permission")
 		}
-		if _, ok := endpoints[m.WebUI.Endpoint]; !ok {
+		if ep, ok := endpoints[m.WebUI.Endpoint]; !ok {
 			bad("/webui/endpoint", "undeclared endpoint")
+		} else if ep.Protocol != "http" && ep.Protocol != "https" {
+			bad("/webui/endpoint", "webui endpoint must use http or https protocol")
 		}
-		if !strings.HasPrefix(m.WebUI.Path, "/") {
-			bad("/webui/path", "webui path must start with /")
+		if !validURLPath(m.WebUI.Path) {
+			bad("/webui/path", "webui path must start with / and contain no whitespace or control characters")
 		}
 		if m.WebUI.HostnameSetting == "" {
 			bad("/webui/hostnameSetting", "hostnameSetting is required so the add-on WebUI uses a separate origin from Andaru")
@@ -820,8 +842,8 @@ func validateManifest(m *Manifest) []FieldError {
 
 func validateRuntime(m *Manifest, usedEnv map[string]string, bad func(string, string)) {
 	rt := m.Runtime
-	if !imageDigestPattern.MatchString(rt.Image) {
-		bad("/runtime/image", "runtime image must be pinned by immutable @sha256 digest")
+	if !validDigestImage(rt.Image) {
+		bad("/runtime/image", "runtime image must be a registry-qualified reference pinned by immutable @sha256 digest")
 	}
 	if rt.Network != "host" {
 		bad("/runtime/network", `only "host" networking is supported in Slice 6`)
@@ -861,18 +883,92 @@ func validateRuntime(m *Manifest, usedEnv map[string]string, bad func(string, st
 	if rt.SettingsActivation != "recreate" {
 		bad("/runtime/settingsActivation", `only "recreate" settingsActivation is supported in Slice 6`)
 	}
-	if rt.StopTimeoutSeconds < 1 || rt.StopTimeoutSeconds > 10 {
+	if rt.StopTimeoutSeconds == nil || *rt.StopTimeoutSeconds < 1 || *rt.StopTimeoutSeconds > 10 {
 		bad("/runtime/stopTimeoutSeconds", "stopTimeoutSeconds must be between 1 and 10")
 	}
-	for k := range rt.Env {
-		p := "/runtime/env/" + escapePointer(k)
-		if !envNamePattern.MatchString(k) {
-			bad(p, "invalid environment variable name")
-		} else if strings.HasPrefix(k, "ANDARU_") {
-			bad(p, "ANDARU_ prefix is reserved for platform-injected variables")
-		} else {
-			usedEnv[k] = p
+	for i, c := range rt.Command {
+		if c == "" || strings.ContainsRune(c, 0) {
+			bad(fmt.Sprintf("/runtime/command/%d", i), "command element must be non-empty and contain no NUL bytes")
 		}
+	}
+	for i, a := range rt.Args {
+		if strings.ContainsRune(a, 0) {
+			bad(fmt.Sprintf("/runtime/args/%d", i), "argument must not contain NUL bytes")
+		}
+	}
+	envKeys := make([]string, 0, len(rt.Env))
+	for k := range rt.Env {
+		envKeys = append(envKeys, k)
+	}
+	slices.Sort(envKeys)
+	for _, k := range envKeys {
+		p := "/runtime/env/" + escapePointer(k)
+		reserveEnv(k, p, usedEnv, bad)
+		v := rt.Env[k]
+		if strings.ContainsRune(v, 0) || strings.ContainsAny(v, "\r\n") {
+			bad(p, "environment value must not contain NUL bytes or newlines")
+		}
+	}
+}
+
+func validDigestImage(ref string) bool {
+	name, digest, ok := strings.Cut(ref, "@sha256:")
+	if !ok || !sha256HexPattern.MatchString(digest) {
+		return false
+	}
+	registry, repo, ok := strings.Cut(name, "/")
+	if !ok || registry == "" || repo == "" {
+		return false
+	}
+	host := registry
+	if h, port, hasPort := strings.Cut(registry, ":"); hasPort {
+		host = h
+		p, err := strconv.Atoi(port)
+		if err != nil || p < 1 || p > 65535 {
+			return false
+		}
+	}
+	if host != "localhost" && (!strings.Contains(host, ".") || len(host) > 253 || !hostnamePattern.MatchString(host)) {
+		return false
+	}
+	for _, seg := range strings.Split(repo, "/") {
+		if !repoSegPattern.MatchString(seg) {
+			return false
+		}
+	}
+	return true
+}
+
+func validURLPath(p string) bool {
+	if !strings.HasPrefix(p, "/") {
+		return false
+	}
+	for _, r := range p {
+		if r <= 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func hasControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func reserveEnv(name, path string, usedEnv map[string]string, bad func(string, string)) {
+	if !envNamePattern.MatchString(name) {
+		bad(path, "invalid environment variable name")
+	} else if strings.HasPrefix(name, "ANDARU_") {
+		bad(path, "ANDARU_ prefix is reserved for platform-injected variables")
+	} else if prev, dup := usedEnv[name]; dup {
+		bad(path, fmt.Sprintf("environment variable %q already bound at %s", name, prev))
+	} else {
+		usedEnv[name] = path
 	}
 }
 
@@ -889,13 +985,7 @@ func validAddonInterfaceName(name string) bool {
 }
 
 func validContainerPath(p string) bool {
-	if !strings.HasPrefix(p, "/") || p == "/" || strings.ContainsRune(p, 0) {
-		return false
-	}
-	if path.Clean(p) != p {
-		return false
-	}
-	return !slices.Contains(strings.Split(p, "/"), "..")
+	return strings.HasPrefix(p, "/") && p != "/" && !strings.ContainsRune(p, 0) && path.Clean(p) == p
 }
 
 func validRelativePath(p string) bool {
@@ -918,7 +1008,7 @@ var (
 
 func validateBus(slug string, b *BusSpec, bad func(string, string)) {
 	allowedNotify := "notification/addon." + slug
-	checkList := func(list []BusTopicSpec, basePath string, isPublish bool) {
+	checkList := func(list []BusTopicSpec, basePath, dir string, forbidden []string) {
 		seen := map[string]bool{}
 		for i, item := range list {
 			p := fmt.Sprintf("%s/%d", basePath, i)
@@ -939,28 +1029,19 @@ func validateBus(slug string, b *BusSpec, bad func(string, string)) {
 				bad(p+"/topic", "first topic level may not be a wildcard")
 				continue
 			}
-			if isPublish {
-				if item.Topic == allowedNotify {
-					continue
-				}
-				for _, fb := range forbiddenBusPublish {
-					if filtersOverlap(item.Topic, fb) {
-						bad(p+"/topic", fmt.Sprintf("publish topic %q overlaps forbidden namespace %q", item.Topic, fb))
-						break
-					}
-				}
-			} else {
-				for _, fb := range forbiddenBusSubscribe {
-					if filtersOverlap(item.Topic, fb) {
-						bad(p+"/topic", fmt.Sprintf("subscribe topic %q overlaps forbidden namespace %q", item.Topic, fb))
-						break
-					}
+			if dir == "publish" && item.Topic == allowedNotify {
+				continue
+			}
+			for _, fb := range forbidden {
+				if filtersOverlap(item.Topic, fb) {
+					bad(p+"/topic", fmt.Sprintf("%s topic %q overlaps forbidden namespace %q", dir, item.Topic, fb))
+					break
 				}
 			}
 		}
 	}
-	checkList(b.Publish, "/bus/publish", true)
-	checkList(b.Subscribe, "/bus/subscribe", false)
+	checkList(b.Publish, "/bus/publish", "publish", forbiddenBusPublish)
+	checkList(b.Subscribe, "/bus/subscribe", "subscribe", forbiddenBusSubscribe)
 }
 
 func validBusFilter(filter string) bool {
@@ -1033,10 +1114,16 @@ func validateProperty(prop *Property, p string, usedEnv, usedArg, usedSecretFile
 			bad(p+"/itemFormat", "unsupported string-list itemFormat")
 		}
 		validateCardinality(prop, p, bad)
-	case "boolean", "integer", "number":
+	case "boolean":
+		if prop.Minimum != nil || prop.Maximum != nil {
+			bad(p, "minimum/maximum are not valid for boolean properties")
+		}
+	case "integer":
 		if prop.Minimum != nil && prop.Maximum != nil && *prop.Minimum > *prop.Maximum {
 			bad(p+"/minimum", "minimum must be <= maximum")
 		}
+	case "number":
+		bad(p+"/type", `property type "number" is reserved while Andaru's canonical JSON profile is integer-only; use "integer" or a patterned "string"`)
 	case "enum":
 		if len(prop.Options) == 0 {
 			bad(p+"/options", "enum requires at least one option")
@@ -1106,25 +1193,15 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 		if target == "" {
 			target = prop.Name
 		}
-		if !envNamePattern.MatchString(target) {
-			bad(p+"/name", "invalid environment variable name")
-		} else if strings.HasPrefix(target, "ANDARU_") {
-			bad(p+"/name", "ANDARU_ prefix is reserved for platform-injected variables")
-		} else if prev, dup := usedEnv[target]; dup {
-			bad(p+"/name", fmt.Sprintf("environment variable %q already bound at %s", target, prev))
-		} else {
-			usedEnv[target] = p
+		reserveEnv(target, p+"/name", usedEnv, bad)
+		if b.Style != "" || b.Format != "" || b.Env != "" || b.Prefix != "" {
+			bad(p, "environment binding does not support style, format, env, or prefix")
 		}
 		if isMulti {
 			if b.Encoding == nil || b.Encoding.Mode != "join" || b.Encoding.Separator == "" {
 				bad(p+"/encoding", `multi-value environment binding requires encoding { "mode": "join", "separator": "..." }`)
-			} else if prop.Type == "enum" {
-				for _, opt := range prop.Options {
-					if strings.Contains(opt.Value, b.Encoding.Separator) {
-						bad(p+"/encoding/separator", fmt.Sprintf("enum option %q contains join separator %q", opt.Value, b.Encoding.Separator))
-						break
-					}
-				}
+			} else {
+				checkEnumJoinSeparator(prop, p, b.Encoding.Separator, bad)
 			}
 		} else if b.Encoding != nil {
 			bad(p+"/encoding", "encoding is only valid for multi-value properties")
@@ -1141,6 +1218,9 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 		} else {
 			usedArg[b.Name] = p
 		}
+		if b.Format != "" || b.Env != "" || b.Prefix != "" {
+			bad(p, "argument binding does not support format, env, or prefix")
+		}
 		if b.Style != "" {
 			if b.Style != "flag" || prop.Type != "boolean" {
 				bad(p+"/style", `style "flag" is only valid on boolean argument bindings`)
@@ -1152,14 +1232,11 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 			} else if b.Encoding.Mode == "join" {
 				if b.Encoding.Separator == "" {
 					bad(p+"/encoding/separator", "join encoding requires a non-empty separator")
-				} else if prop.Type == "enum" {
-					for _, opt := range prop.Options {
-						if strings.Contains(opt.Value, b.Encoding.Separator) {
-							bad(p+"/encoding/separator", fmt.Sprintf("enum option %q contains join separator %q", opt.Value, b.Encoding.Separator))
-							break
-						}
-					}
+				} else {
+					checkEnumJoinSeparator(prop, p, b.Encoding.Separator, bad)
 				}
+			} else if b.Encoding.Separator != "" {
+				bad(p+"/encoding/separator", `separator is only valid for "join" encoding`)
 			}
 		} else if b.Encoding != nil {
 			bad(p+"/encoding", "encoding is only valid for multi-value properties")
@@ -1168,6 +1245,9 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 		if prop.Type != "secret-reference" {
 			bad(p+"/type", `file binding is only supported for secret-reference properties`)
 			return
+		}
+		if b.Style != "" || b.Encoding != nil {
+			bad(p, "file binding does not support style or encoding")
 		}
 		if !propNamePattern.MatchString(b.Name) {
 			bad(p+"/name", "secret file binding name must match [a-zA-Z][a-zA-Z0-9_]{0,63}")
@@ -1183,20 +1263,24 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 			bad(p+"/format", `file binding format must be "raw" or "htpasswd"`)
 		}
 		if b.Env != "" {
-			if !envNamePattern.MatchString(b.Env) {
-				bad(p+"/env", "invalid environment variable name")
-			} else if strings.HasPrefix(b.Env, "ANDARU_") {
-				bad(p+"/env", "ANDARU_ prefix is reserved for platform-injected variables")
-			} else if prev, dup := usedEnv[b.Env]; dup {
-				bad(p+"/env", fmt.Sprintf("environment variable %q already bound at %s", b.Env, prev))
-			} else {
-				usedEnv[b.Env] = p + "/env"
-			}
+			reserveEnv(b.Env, p+"/env", usedEnv, bad)
 		} else if b.Prefix != "" {
 			bad(p+"/prefix", "prefix requires env to be set")
 		}
 	default:
 		bad(p+"/type", `binding type must be "environment", "argument", or "file"`)
+	}
+}
+
+func checkEnumJoinSeparator(prop *Property, p, sep string, bad func(string, string)) {
+	if prop.Type != "enum" {
+		return
+	}
+	for _, opt := range prop.Options {
+		if strings.Contains(opt.Value, sep) {
+			bad(p+"/encoding/separator", fmt.Sprintf("enum option %q contains join separator %q", opt.Value, sep))
+			return
+		}
 	}
 }
 
@@ -1223,7 +1307,7 @@ func validateFormat(format, val string) string {
 		}
 	case "ipv6":
 		a, err := netip.ParseAddr(val)
-		if err != nil || !a.Is6() {
+		if err != nil || !a.Is6() || a.Zone() != "" || a.Is4In6() {
 			return "invalid IPv6 address"
 		}
 	case "cidr":

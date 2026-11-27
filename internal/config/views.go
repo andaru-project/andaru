@@ -110,11 +110,7 @@ func viewSecretInScope(ref *secretReference, scope string, secrets secretDocumen
 	if ref == nil {
 		return nil, nil
 	}
-	var meta secretEntry
-	var ok bool
-	if scoped := secrets.Scopes[scope]; scoped != nil {
-		meta, ok = scoped[ref.Secret]
-	}
+	meta, ok := secrets.Scopes[scope][ref.Secret]
 	if !ok && !ref.Unresolved {
 		return nil, fault("STORE_UNAVAILABLE", "", "Secret reference is unavailable.")
 	}
@@ -200,33 +196,31 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 	}
 	return ObjectView{Value: raw, Version: version}, nil
 }
+func viewSlice[T any](items []T, col string, id func(*T) string, s savedState) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, 0, len(items))
+	for i := range items {
+		item := &items[i]
+		v, e := viewObject(item, s.Versions[objectKey{col, id(item)}].Version, s.Secrets)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, v.Value)
+	}
+	return out, nil
+}
+
 func publicSnapshot(s savedState) (SnapshotView, error) {
-	links := make([]json.RawMessage, 0, len(s.Config.Links))
-	for i := range s.Config.Links {
-		l := &s.Config.Links[i]
-		v, e := viewObject(l, s.Versions[objectKey{"links", l.ID}].Version, s.Secrets)
-		if e != nil {
-			return SnapshotView{}, e
-		}
-		links = append(links, v.Value)
+	links, err := viewSlice(s.Config.Links, "links", func(l *link) string { return l.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
 	}
-	channels := make([]json.RawMessage, 0, len(s.Config.Notifications.Channels))
-	for i := range s.Config.Notifications.Channels {
-		c := &s.Config.Notifications.Channels[i]
-		v, e := viewObject(c, s.Versions[objectKey{"notifications.channels", c.ID}].Version, s.Secrets)
-		if e != nil {
-			return SnapshotView{}, e
-		}
-		channels = append(channels, v.Value)
+	channels, err := viewSlice(s.Config.Notifications.Channels, "notifications.channels", func(c *channel) string { return c.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
 	}
-	addons := make([]json.RawMessage, 0, len(s.Config.Addons))
-	for i := range s.Config.Addons {
-		a := &s.Config.Addons[i]
-		v, e := viewObject(a, s.Versions[objectKey{"addons", a.ID}].Version, s.Secrets)
-		if e != nil {
-			return SnapshotView{}, e
-		}
-		addons = append(addons, v.Value)
+	addons, err := viewSlice(s.Config.Addons, "addons", func(a *addonConfig) string { return a.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
 	}
 	used := map[string]bool{}
 	for _, h := range heldSecrets(&s.Config) {

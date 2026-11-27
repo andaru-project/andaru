@@ -157,6 +157,27 @@ func normalizeDeclaration(d *declaration) {
 			d.DNS.RegisterLeases = &register
 		}
 	}
+	if len(d.Addons) == 0 {
+		d.Addons = nil
+	}
+	slices.SortFunc(d.Addons, func(a, b addonConfig) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.Addons {
+		a := &d.Addons[i]
+		if len(a.Settings) == 0 {
+			a.Settings = nil
+		}
+		if len(a.Interfaces) == 0 {
+			a.Interfaces = nil
+		} else {
+			slices.SortFunc(a.Interfaces, func(x, y addonInterface) int { return strings.Compare(x.Name, y.Name) })
+		}
+		if len(a.BusGrants.Publish) == 0 {
+			a.BusGrants.Publish = nil
+		}
+		if len(a.BusGrants.Subscribe) == 0 {
+			a.BusGrants.Subscribe = nil
+		}
+	}
 }
 
 // compareAddr orders addresses numerically; validation has already parsed them.

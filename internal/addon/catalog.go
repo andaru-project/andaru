@@ -3,11 +3,11 @@ package addon
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 )
 
 // DefaultCatalogDir is where the signed Andaru appliance image ships add-on manifests.
@@ -46,7 +46,7 @@ func LoadCatalog(dir string) (*Catalog, error) {
 		}
 		slug := entry.Name()
 		manifestPath := filepath.Join(dir, slug, "manifest.json")
-		raw, err := os.ReadFile(manifestPath)
+		raw, err := readBoundedFile(manifestPath, MaxManifestBytes)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", manifestPath, err)
 		}
@@ -60,9 +60,6 @@ func LoadCatalog(dir string) (*Catalog, error) {
 		if prev, dup := cat.byID[m.ID]; dup {
 			return nil, fmt.Errorf("%s: duplicate add-on id %q (already declared by %s)", manifestPath, m.ID, prev.Slug)
 		}
-		if _, dup := cat.bySlug[m.Slug]; dup {
-			return nil, fmt.Errorf("%s: duplicate add-on slug %q", manifestPath, m.Slug)
-		}
 		for _, ifc := range m.Interfaces {
 			if prev, dup := usedIfaces[ifc.Name]; dup {
 				return nil, fmt.Errorf("%s: interface %q already declared by add-on %q", manifestPath, ifc.Name, prev)
@@ -73,8 +70,23 @@ func LoadCatalog(dir string) (*Catalog, error) {
 		cat.byID[m.ID] = m
 		cat.bySlug[m.Slug] = m
 	}
-	slices.SortFunc(cat.ordered, func(a, b *Manifest) int { return strings.Compare(a.Slug, b.Slug) })
 	return cat, nil
+}
+
+func readBoundedFile(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("file exceeds %d bytes", maxBytes)
+	}
+	return raw, nil
 }
 
 // All returns all catalog manifests sorted by slug.

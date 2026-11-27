@@ -18,12 +18,14 @@ import (
 
 const configApp = 0x414e4443
 const secretApp = 0x414e4453
+const additiveDDL = policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL + writerDDL + notificationDDL + addonDDL
+
 const configDDL = `CREATE TABLE documents(sha256 BLOB PRIMARY KEY CHECK(length(sha256)=32),body BLOB NOT NULL);
 CREATE TABLE versions(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES versions(id),schema_version INTEGER NOT NULL,config_sha256 BLOB NOT NULL REFERENCES documents(sha256),secrets_sha256 BLOB NOT NULL CHECK(length(secrets_sha256)=32),created_at TEXT NOT NULL,actor TEXT NOT NULL,changed_object_count INTEGER NOT NULL);
 CREATE TABLE pointers(name TEXT PRIMARY KEY CHECK(name='saved'),version_id INTEGER NOT NULL REFERENCES versions(id));
 CREATE TABLE object_changes(collection TEXT NOT NULL CHECK(collection IN ('links','segments','zones')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX creation_identity ON object_changes(object_id) WHERE created=1;
-` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL + writerDDL + notificationDDL + addonDDL
+` + additiveDDL
 
 // policyDDL holds the versions of the filter's objects, lists and singletons. It is added beside
 // object_changes rather than widening that table's CHECK, so an existing store gains it with one

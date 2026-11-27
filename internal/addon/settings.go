@@ -1,10 +1,13 @@
 package addon
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -18,7 +21,13 @@ func ValidateSettings(m *Manifest, raw map[string]any, validZones map[string]boo
 		p := &m.Properties[i]
 		propsByName[p.Name] = p
 	}
-	for k, v := range raw {
+	rawKeys := make([]string, 0, len(raw))
+	for k := range raw {
+		rawKeys = append(rawKeys, k)
+	}
+	slices.Sort(rawKeys)
+	for _, k := range rawKeys {
+		v := raw[k]
 		p := "/" + escapePointer(k)
 		if _, ok := propsByName[k]; !ok {
 			errs = append(errs, FieldError{Path: p, Message: fmt.Sprintf("unknown setting %q", k)})
@@ -33,16 +42,13 @@ func ValidateSettings(m *Manifest, raw map[string]any, validZones map[string]boo
 		prop := &m.Properties[i]
 		p := "/" + escapePointer(prop.Name)
 		val, present := raw[prop.Name]
-		if !present {
-			if prop.Default != nil {
-				val = cloneDefault(prop.Default)
-				present = true
+		if present {
+			if val == nil {
+				continue // Already recorded above.
 			}
-		} else if val == nil {
-			// Already recorded above.
-			continue
-		}
-		if !present {
+		} else if prop.Default != nil {
+			val = cloneDefault(prop.Default)
+		} else {
 			if prop.Required {
 				errs = append(errs, FieldError{Path: p, Message: "required setting is missing"})
 			}
@@ -80,11 +86,18 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 	if val == nil {
 		return []FieldError{{Path: p, Message: "null values are not allowed"}}
 	}
+	envBound := prop.Binding != nil && prop.Binding.Type == "environment"
 	switch prop.Type {
 	case "string":
 		s, ok := val.(string)
 		if !ok {
 			return []FieldError{{Path: p, Message: "expected string"}}
+		}
+		if strings.ContainsRune(s, 0) {
+			return []FieldError{{Path: p, Message: "NUL bytes are not allowed"}}
+		}
+		if envBound && strings.ContainsAny(s, "\r\n") {
+			return []FieldError{{Path: p, Message: "newlines are not allowed in environment-bound settings"}}
 		}
 		n := utf8.RuneCountInString(s)
 		if prop.MinLength != nil && n < *prop.MinLength {
@@ -120,6 +133,12 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 		}
 		for i, item := range items {
 			ip := fmt.Sprintf("%s/%d", p, i)
+			if strings.ContainsRune(item, 0) {
+				errs = append(errs, FieldError{Path: ip, Message: "NUL bytes are not allowed"})
+			}
+			if envBound && strings.ContainsAny(item, "\r\n") {
+				errs = append(errs, FieldError{Path: ip, Message: "newlines are not allowed in environment-bound settings"})
+			}
 			if seen[item] {
 				errs = append(errs, FieldError{Path: ip, Message: "duplicate item"})
 			}
@@ -127,7 +146,7 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 			if msg := validateFormat(prop.ItemFormat, item); msg != "" {
 				errs = append(errs, FieldError{Path: ip, Message: msg})
 			}
-			if sep != "" && containsString(item, sep) {
+			if sep != "" && strings.Contains(item, sep) {
 				errs = append(errs, FieldError{Path: ip, Message: fmt.Sprintf("item must not contain separator %q", sep)})
 			}
 		}
@@ -137,21 +156,11 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 			return []FieldError{{Path: p, Message: "expected boolean"}}
 		}
 	case "integer":
-		f, ok := toFloat64(val)
-		if !ok || math.IsNaN(f) || math.IsInf(f, 0) || math.Trunc(f) != f {
+		iv, ok := toExactInt64(val)
+		if !ok {
 			return []FieldError{{Path: p, Message: "expected integer"}}
 		}
-		if prop.Minimum != nil && f < *prop.Minimum {
-			return []FieldError{{Path: p, Message: fmt.Sprintf("value must be >= %v", *prop.Minimum)}}
-		}
-		if prop.Maximum != nil && f > *prop.Maximum {
-			return []FieldError{{Path: p, Message: fmt.Sprintf("value must be <= %v", *prop.Maximum)}}
-		}
-	case "number":
-		f, ok := toFloat64(val)
-		if !ok || math.IsNaN(f) || math.IsInf(f, 0) {
-			return []FieldError{{Path: p, Message: "expected number"}}
-		}
+		f := float64(iv)
 		if prop.Minimum != nil && f < *prop.Minimum {
 			return []FieldError{{Path: p, Message: fmt.Sprintf("value must be >= %v", *prop.Minimum)}}
 		}
@@ -170,14 +179,10 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 		if prop.MaxItems != nil && len(items) > *prop.MaxItems {
 			errs = append(errs, FieldError{Path: p, Message: fmt.Sprintf("must select at most %d option(s)", *prop.MaxItems)})
 		}
-		allowed := make([]string, len(prop.Options))
-		for i, opt := range prop.Options {
-			allowed[i] = opt.Value
-		}
 		seen := map[string]bool{}
 		for i, item := range items {
 			ip := fmt.Sprintf("%s/%d", p, i)
-			if !slices.Contains(allowed, item) {
+			if !slices.ContainsFunc(prop.Options, func(o EnumOption) bool { return o.Value == item }) {
 				errs = append(errs, FieldError{Path: ip, Message: fmt.Sprintf("unknown enum option %q", item)})
 			} else if seen[item] {
 				errs = append(errs, FieldError{Path: ip, Message: "duplicate enum selection"})
@@ -235,27 +240,23 @@ func toStringSlice(v any) ([]string, bool) {
 	}
 }
 
-func toFloat64(v any) (float64, bool) {
+const maxSafeJSONInt = 1<<53 - 1
+
+func toExactInt64(v any) (int64, bool) {
 	switch x := v.(type) {
-	case float64:
-		return x, true
 	case int:
-		return float64(x), true
+		return int64(x), true
 	case int64:
-		return float64(x), true
+		return x, true
+	case json.Number:
+		n, err := strconv.ParseInt(x.String(), 10, 64)
+		return n, err == nil
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) || math.Trunc(x) != x || x < -maxSafeJSONInt || x > maxSafeJSONInt {
+			return 0, false
+		}
+		return int64(x), true
 	default:
 		return 0, false
 	}
-}
-
-func containsString(s, sub string) bool {
-	if sub == "" {
-		return false
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
