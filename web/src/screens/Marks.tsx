@@ -25,3 +25,13 @@ export function Bell() {
     </svg>
   );
 }
+
+// Person silhouette for the header account menu.
+export function UserMark() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="8" cy="4.8" r="2.4" />
+      <path d="M2.8 14c.6-2.5 2.7-4 5.2-4s4.6 1.5 5.2 4" />
+    </svg>
+  );
+}

@@ -5,7 +5,7 @@ import { ApiClient, ApiError, reportError } from '../api';
 import { isSafeAppLink, severityColor } from '../notifications';
 import { formatTimestamp, useTimeZone } from '../timezone';
 import type { Notification, NotificationList, NotificationSeverity, Session } from '../types';
-import type { Resource } from '../useResource';
+import { useConnected, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
 import { NotificationChannelsPanel } from './NotificationChannelsPanel';
 
@@ -24,6 +24,7 @@ function SeverityBadge({ severity }: { severity: NotificationSeverity }) {
 }
 
 export function NotificationsScreen({ api, session, notifications, onSaved, onSessionLost }: NotificationsScreenProps) {
+  const connected = useConnected();
   const timeZone = useTimeZone();
   const canReadActive = session.capabilities.includes('notifications.read');
   const canReadChannels = session.capabilities.includes('configuration.read');
@@ -54,12 +55,13 @@ export function NotificationsScreen({ api, session, notifications, onSaved, onSe
     setDismissing(null);
   }
 
+  const showNotificationsError = Boolean(notifications.error) && (connected || notifications.data === undefined);
   const activeContent = (
     <Stack>
-      {notifications.error && <Alert color="orange" role="alert" title="The notifications could not be read">{notifications.error}</Alert>}
+      {showNotificationsError && <Alert color="orange" role="alert" title="The notifications could not be read">{notifications.error}</Alert>}
       {dismissError && <Alert color="red" role="alert" title="Could not dismiss the notification">{dismissError}</Alert>}
       {notifications.data === undefined
-        ? (!notifications.error && <Loader aria-label="Loading notifications" />)
+        ? (!showNotificationsError && <Loader aria-label="Loading notifications" />)
         : items.length === 0
           ? <Alert role="status">No active notifications.</Alert>
           : (

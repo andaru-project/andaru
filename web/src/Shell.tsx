@@ -1,4 +1,4 @@
-import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, Modal, NavLink, Select, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
+import { AccordionChevron, ActionIcon, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, Modal, NavLink, Select, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
@@ -18,7 +18,7 @@ import { DashboardScreen } from './screens/DashboardScreen';
 import { DhcpScreen } from './screens/DhcpScreen';
 import { DnsScreen } from './screens/DnsScreen';
 import { InterfacesScreen } from './screens/InterfacesScreen';
-import { Bell } from './screens/Marks';
+import { Bell, UserMark } from './screens/Marks';
 import { NatScreen } from './screens/NatScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
 import { PasswordDialog } from './screens/PasswordDialog';
@@ -35,7 +35,7 @@ import { UsersScreen } from './screens/UsersScreen';
 import { VirtualIpsScreen } from './screens/VirtualIpsScreen';
 import { ZonesScreen } from './screens/ZonesScreen';
 import type { NotificationList, Session, User } from './types';
-import { useEvents, useResource, useVisiblePoll, type Resource } from './useResource';
+import { ConnectionContext, useEvents, useResource, useVisiblePoll, type Resource } from './useResource';
 
 interface ShellProps {
   api: ApiClient;
@@ -124,7 +124,15 @@ function HeaderNotifications({ notifications }: { notifications: Resource<Notifi
   );
 }
 
-export function Shell({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
+export function Shell(props: ShellProps) {
+  return (
+    <ConnectionContext.Provider value={props.connected}>
+      <ShellBody {...props} />
+    </ConnectionContext.Provider>
+  );
+}
+
+function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const timeZone = useTimeZone();
   const [timeZoneAt, setTimeZoneAt] = useState<number | null>(null);
@@ -139,12 +147,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
 
   const canReadChanges = capabilities.has('configuration.read');
   const loadChanges = useCallback(() => (canReadChanges ? loadChangeState(api) : Promise.resolve(undefined)), [api, canReadChanges]);
-  const changes = useResource(loadChanges, onSessionLost);
+  const changes = useResource(loadChanges, onSessionLost, true);
   const reloadChanges = changes.reload;
 
   const canReadNotifications = capabilities.has('notifications.read');
   const loadNotifications = useCallback(() => (canReadNotifications ? api.notifications() : Promise.resolve(undefined)), [api, canReadNotifications]);
-  const notifications = useResource(loadNotifications, onSessionLost);
+  const notifications = useResource(loadNotifications, onSessionLost, true);
   const reloadNotifications = notifications.reload;
 
   // What the box is, for the header and the dashboard, with the browser's clock when it arrived so its time and
@@ -152,11 +160,11 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   // again each minute: often enough for that, and for a first read that failed.
   const canReadStatus = capabilities.has('status.read');
   const loadSystem = useCallback(async () => (canReadStatus ? { info: await api.system(), loadedAt: Date.now() } : undefined), [api, canReadStatus]);
-  const system = useResource(loadSystem, onSessionLost);
+  const system = useResource(loadSystem, onSessionLost, true);
   useVisiblePoll(system.refresh, systemPollMilliseconds, canReadStatus);
 
   const loadUpdate = useCallback(() => (canReadStatus ? api.updateStatus() : Promise.resolve(undefined)), [api, canReadStatus]);
-  const update = useResource(loadUpdate, onSessionLost);
+  const update = useResource(loadUpdate, onSessionLost, true);
   useVisiblePoll(update.refresh, systemPollMilliseconds, canReadStatus);
 
   // Saves, applies and notification changes reach the shell on one event stream, dispatched by event type so each
@@ -186,14 +194,15 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const loadUpgrade = useCallback(() => (canReadChanges && head !== undefined ? api.upgradePreview() : Promise.resolve(undefined)), [api, canReadChanges, head, build]); // eslint-disable-line react-hooks/exhaustive-deps
   const upgrade = useResource(loadUpgrade, onSessionLost);
   const upgradeError = upgrade.error;
+  const refreshUpgrade = upgrade.refresh;
   const reloadUpgrade = upgrade.reload;
   // A check that failed is tried again every 15 seconds, and with each answered read of the change state, until it
   // reads: a healthy stream may bring no other event.
   useVisiblePoll(upgrade.refresh, retryMilliseconds, upgradeError !== '');
   const read = changes.data;
   useEffect(() => {
-    if (upgradeError && read) void reloadUpgrade();
-  }, [read, upgradeError, reloadUpgrade]);
+    if (upgradeError && read) refreshUpgrade();
+  }, [read, upgradeError, refreshUpgrade]);
   const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
   const onUpgradePage = useMatch('/system/upgrade') !== null;
   // The visit opens on the questions once, so the dashboard stays reachable for those who cannot answer.
@@ -203,18 +212,6 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     openedUpgrade.current = true;
     if (pathname === '/') navigate('/system/upgrade', { replace: true });
   }, [upgradePending, pathname, navigate]);
-
-  // When the API answers again, show what the server says rather than what was last seen.
-  const wasConnected = useRef(connected);
-  useEffect(() => {
-    if (connected && !wasConnected.current) {
-      void reloadChanges();
-      void reloadNotifications();
-      // A check that failed while the box did not answer is tried again; the head may not have moved.
-      if (upgradeError) void reloadUpgrade();
-    }
-    wasConnected.current = connected;
-  }, [connected, reloadChanges, reloadNotifications, upgradeError, reloadUpgrade]);
 
   const groups = [
     {
@@ -337,9 +334,25 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
             {/* Connected is the usual state and says so quietly; a lost connection is the one that shouts. */}
             <Badge color={connected ? 'green' : 'red'} variant={connected ? 'dot' : 'filled'} className={connected ? 'quiet-badge' : undefined} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
             {canReadNotifications && <HeaderNotifications notifications={notifications} />}
-            <Menu position="bottom-end">
-              <Menu.Target><Button className="account-button" variant="default" size="xs">{session.account.displayName || session.account.login}</Button></Menu.Target>
-              <Menu.Dropdown>
+            <Menu position="bottom-end" floatingStrategy="fixed" width={220} middlewares={{ flip: false, shift: true }} transitionProps={{ duration: 0 }}>
+              <Menu.Target>
+                <ActionIcon className="account-button" variant="default" size={30} aria-label={`Account (${session.account.login})`} title={session.account.login}>
+                  <UserMark />
+                </ActionIcon>
+              </Menu.Target>
+              <Menu.Dropdown className="account-menu-dropdown">
+                {(() => {
+                  const display = session.account.displayName?.trim() ?? '';
+                  return (
+                    <div className="account-menu-header" role="presentation">
+                      <Text component="div" size="sm" fw={600} truncate="end" title={session.account.login}>{session.account.login}</Text>
+                      {display && display !== session.account.login && (
+                        <Text component="div" size="xs" c="dimmed" truncate="end" title={display}>{display}</Text>
+                      )}
+                    </div>
+                  );
+                })()}
+                <Menu.Divider />
                 <Menu.Item onClick={() => void navigate('/system/session')}>Session details</Menu.Item>
                 {capabilities.has('users.read') && <Menu.Item onClick={() => void changePassword()}>Change password</Menu.Item>}
                 <Menu.Divider />
@@ -374,12 +387,11 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
       </AppShell.Navbar>
       <AppShell.Main>
         <Stack>
-          {!connected && <Alert color="red" role="alert" title="Connection lost">The box does not answer. Pages show the last data it sent.</Alert>}
           {accountError && <Alert color="red" role="alert" title="Account request failed">{accountError}</Alert>}
           {/* Review and apply owns these controls on its own page. */}
-          {/* The Changes page says this itself. Elsewhere, a state that cannot be read must not look like nothing pending. */}
-          {!onChangesPage && changes.error && <Alert color="orange" role="alert" title="Whether changes are pending cannot be read">{changes.error}</Alert>}
-          {upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Whether the settings wait for decisions cannot be read">{upgrade.error}</Alert>}
+          {/* While disconnected, the header indicator already owns the offline state; only show server read failures while connected. */}
+          {connected && !onChangesPage && changes.error && <Alert color="orange" role="alert" title="Could not check pending changes">{changes.error}</Alert>}
+          {connected && upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Could not check upgrade status">{upgrade.error}</Alert>}
           {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
           {capabilities.has('configuration.apply') && changes.data?.head === '0' && pathname !== '/setup' && (
             <Alert color="blue" role="status" title="Initial setup">
@@ -427,7 +439,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         </Stack>
       </AppShell.Main>
       {passwordUser && <PasswordDialog user={passwordUser} selfAccountId={session.account.id} onClose={() => setPasswordUser(null)} onSessionLost={onSessionLost} onSave={async (currentPassword, newPassword) => { await api.changePassword(passwordUser.id, { currentPassword, newPassword, expectedRevision: passwordUser.revision }); }} />}
-      <Modal opened={timeZoneAt !== null} onClose={() => setTimeZoneAt(null)} title="Display time zone" centered closeButtonProps={{ 'aria-label': 'Close' }}>
+      <Modal opened={timeZoneAt !== null} onClose={() => setTimeZoneAt(null)} title="Display time zone" centered lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
         <Stack>
           <Text size="sm" c="dimmed">Used to display timestamps across Andaru in this browser. The appliance clock on the dashboard stays in UTC.</Text>
           <Select label="Time zone" data={zoneChoices} value={timeZone} searchable allowDeselect={false} onChange={(value) => { if (value) setTimeZone(value); }} />

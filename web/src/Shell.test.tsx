@@ -9,7 +9,7 @@ import { openStreams } from './test/events';
 import { setTimeZone } from './timezone';
 import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
-import { act, render, screen, waitFor } from './test/render';
+import { act, render, screen, waitFor, within } from './test/render';
 import userEvent from '@testing-library/user-event';
 
 const reader = session(['configuration.read']);
@@ -185,7 +185,76 @@ it('hides the pending notice and nav badge when a newer saved version has unappl
 it('says so when the change state cannot be read: no news must not look like nothing pending', async () => {
   fetchRoutes({ '/api/v1/applies': () => jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'The applies are unavailable.', details: [] } }), '/api/v1/versions?': { state: 'saved', items: [] } });
   mount('/system/session');
-  expect(await screen.findByText('Whether changes are pending cannot be read')).toBeInTheDocument();
+  expect(await screen.findByText('Could not check pending changes')).toBeInTheDocument();
+});
+
+it('suppresses duplicate connection-lost banners and stale Loaded errors when disconnected, and recovers on reconnect', async () => {
+  let failApplies = false;
+  let failUpgrade = true;
+  let failUpdate = false;
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': () => (failApplies ? Promise.reject(new TypeError('offline')) : jsonResponse(200, unapplied)),
+    '/api/v1/versions?': { state: 'saved', items: [{ id: '5', createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 }] },
+    '/api/v1/status/system': () => jsonResponse(200, { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null }),
+    '/api/v1/system/update': () => (failUpdate ? Promise.reject(new TypeError('offline')) : jsonResponse(200, {
+      supported: true,
+      state: 'staged',
+      booted: { version: '0.5.0-a.4', signature: 'containerPolicy' },
+      staged: { version: '0.5.0-a.5', signature: 'containerPolicy' },
+      rebootNeeded: true,
+    })),
+    'POST /api/v1/system/update/check': () => Promise.reject(new TypeError('offline')),
+    'POST /api/v1/config/upgrade/preview': () => (failUpgrade ? Promise.reject(new TypeError('offline')) : jsonResponse(200, { savedVersion: '5', questions: [] })),
+  });
+  const api = new ApiClient('csrf');
+  const full = session(['configuration.read', 'status.read', 'configuration.apply']);
+  const onLogout = vi.fn();
+  const onSessionLost = vi.fn();
+  const shell = (connected: boolean) => (
+    <MemoryRouter initialEntries={['/system/updates']}>
+      <Shell api={api} session={full} connected={connected} onLogout={onLogout} onSessionLost={onSessionLost} />
+    </MemoryRouter>
+  );
+  const view = render(shell(true));
+  expect(await screen.findByText('0.5.0-a.4')).toBeInTheDocument();
+
+  // Trigger real failures on all three resources (changes, upgrade, and Loaded update) while connected=true first
+  // so we prove each error actually exists before verifying connected=false suppresses all of them.
+  failApplies = true;
+  failUpdate = true;
+  act(() => { openStreams()[0].fail(false); });
+  await userEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
+  expect(await screen.findByText('Could not check pending changes')).toBeInTheDocument();
+  expect(await screen.findByText('Could not check upgrade status')).toBeInTheDocument();
+  // All four disconnect messages render while connected=true: changes, upgrade, actionError, and Loaded(update).
+  await waitFor(() => expect(screen.getAllByText(/Cannot reach the Andaru service/i)).toHaveLength(4));
+
+  // Once connected=false, only the header badge owns the offline state: redundant shell banners and Loaded error hide.
+  view.rerender(shell(false));
+  expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent('Connection lost');
+  expect(screen.queryByText(/The box does not answer/i)).not.toBeInTheDocument();
+  expect(screen.queryByText('Could not check pending changes')).not.toBeInTheDocument();
+  expect(screen.queryByText('Could not check upgrade status')).not.toBeInTheDocument();
+  // The Loaded region on UpdatesScreen hides its disconnect error while cached data is visible.
+  expect(screen.queryAllByText(/Cannot reach the Andaru service/i)).toHaveLength(1); // only actionError from clicking Check
+
+  // Reconnecting clears disconnect errors and refreshes applies, update, system, and upgrade exactly once each.
+  const appliesReadsBefore = appliesReads(fetchMock);
+  const updateReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/update').length;
+  const systemReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/system').length;
+  const upgradeReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length;
+  failApplies = false;
+  failUpgrade = false;
+  failUpdate = false;
+  view.rerender(shell(true));
+  await waitFor(() => {
+    expect(appliesReads(fetchMock)).toBe(appliesReadsBefore + 1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/update').length).toBe(updateReadsBefore + 1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/system').length).toBe(systemReadsBefore + 1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length).toBe(upgradeReadsBefore + 1);
+  });
+  expect(screen.queryByText('Could not check pending changes')).not.toBeInTheDocument();
+  expect(screen.queryByText('Could not check upgrade status')).not.toBeInTheDocument();
 });
 
 it.each(['/changes', '/changes/'])('leaves the apply controls to the Review and apply page at %s', async (path) => {
@@ -320,7 +389,7 @@ it('says when it cannot tell whether decisions wait', async () => {
     'POST /api/v1/config/upgrade/preview': jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }),
   });
   mount('/system/session');
-  expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
+  expect(await screen.findByText('Could not check upgrade status')).toBeInTheDocument();
 });
 
 it('asks again every 15 seconds whether decisions wait, while it cannot tell', async () => {
@@ -332,7 +401,7 @@ it('asks again every 15 seconds whether decisions wait, while it cannot tell', a
     'POST /api/v1/config/upgrade/preview': () => (down ? jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }) : jsonResponse(200, { savedVersion: '5', questions: [question] })),
   });
   mount('/system/session');
-  expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
+  expect(await screen.findByText('Could not check upgrade status')).toBeInTheDocument();
   const previews = () => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length;
   const before = previews();
   down = false;
@@ -540,7 +609,12 @@ it('lets the user pick a display time zone from the account menu and updates tim
   const user = userEvent.setup();
   routes();
   mount('/system/session');
-  await user.click(screen.getByRole('button', { name: 'Administrator' }));
+  // The header button uses an icon instead of printing the display name; user details appear at the top of the menu.
+  expect(screen.queryByRole('button', { name: 'Administrator' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Account (admin)' }));
+  const menu = await screen.findByRole('menu');
+  expect(within(menu).getByText('admin')).toBeInTheDocument();
+  expect(within(menu).getByText('Administrator')).toBeInTheDocument();
   await user.click(await screen.findByRole('menuitem', { name: 'Time zone…' }, { timeout: 5000 }));
   const input = await screen.findByRole('combobox', { name: 'Time zone' }, { timeout: 5000 });
   await user.clear(input);
@@ -549,6 +623,20 @@ it('lets the user pick a display time zone from the account menu and updates tim
   await user.click(screen.getByRole('button', { name: 'Done' }));
   expect(screen.getByText('2026-11-16 13:00:00 +01:00')).toBeInTheDocument();
 }, 15_000);
+
+it('does not repeat the login in the account menu when displayName matches login or is blank', async () => {
+  const user = userEvent.setup();
+  routes();
+  const sameName = { ...reader, account: { ...reader.account, login: 'admin', displayName: ' admin ' } };
+  render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={sameName} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  await user.click(screen.getByRole('button', { name: 'Account (admin)' }));
+  const menu = await screen.findByRole('menu');
+  expect(within(menu).getAllByText('admin')).toHaveLength(1);
+});
 
 const notification = (id: number, severity: 'info' | 'warning' | 'critical', subject = `Notice ${id}`) => ({
   id,
