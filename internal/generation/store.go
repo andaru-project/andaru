@@ -78,22 +78,42 @@ var (
 	// A PPPoE session is pppd's options and the unit that runs pppd on them, named after the session's interface.
 	pppOptions = regexp.MustCompile(`^` + pppDir + `[A-Za-z0-9_.:-]+\.options$`)
 	pppUnit    = regexp.MustCompile(`^` + pppUnitPrefix + `[A-Za-z0-9_.:-]+\.service$`)
-	idName     = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+	// Add-on Quadlets, non-secret env files, and per-secret files (generation-flat unique basenames).
+	addonContainer = regexp.MustCompile(`^` + addonQuadletPrefix + `([a-z0-9][a-z0-9-]{0,31})\.container$`)
+	addonEnv       = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z0-9][a-z0-9-]{0,31})/andaru-addon-([a-z0-9][a-z0-9-]{0,31})\.env$`)
+	addonSecret    = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z0-9][a-z0-9-]{0,31})/secrets/andaru-addon-([a-z0-9][a-z0-9-]{0,31})-[A-Za-z][A-Za-z0-9_]{0,63}\.secret$`)
+	idName         = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 )
 
 // Dir is where generations live under the engine's state directory.
 func Dir(stateDir string) string { return filepath.Join(stateDir, "generations") }
 
-func allowed(path string) bool {
-	return ownPath.MatchString(path) || pppOptions.MatchString(path) || pppUnit.MatchString(path) || path == catchAllPath || path == filterEntry || path == keaFile || path == kea6File || path == kea6Template || path == unboundFile || path == resolvedFile
+func isAddonEnv(path string) bool {
+	m := addonEnv.FindStringSubmatch(path)
+	return len(m) == 3 && m[1] == m[2]
 }
 
-// modeFor is the one mode a generation file may have: pppd's options hold the PPPoE password.
+func isAddonSecret(path string) bool {
+	m := addonSecret.FindStringSubmatch(path)
+	return len(m) == 3 && m[1] == m[2]
+}
+
+func allowed(path string) bool {
+	return ownPath.MatchString(path) || pppOptions.MatchString(path) || pppUnit.MatchString(path) ||
+		addonContainer.MatchString(path) || isAddonEnv(path) || isAddonSecret(path) ||
+		path == catchAllPath || path == filterEntry || path == keaFile || path == kea6File || path == kea6Template || path == unboundFile || path == resolvedFile
+}
+
+// modeFor is the one mode a generation file may have: secrets are 0400; pppd options, Quadlets and add-on env files are 0600.
 func modeFor(path string) string {
-	if pppOptions.MatchString(path) {
+	switch {
+	case isAddonSecret(path):
+		return "0400"
+	case pppOptions.MatchString(path), addonContainer.MatchString(path), isAddonEnv(path):
 		return "0600"
+	default:
+		return "0644"
 	}
-	return "0644"
 }
 
 func is(p *int, id int) bool { return p != nil && *p == id }

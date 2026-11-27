@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
@@ -52,6 +53,7 @@ type hostReader struct {
 	Managed func(context.Context) ([]host.Managed, error)
 	// BootUnit reports andaru-network-boot.service enabled.
 	BootUnit func() bool
+	Catalog  *addon.Catalog
 }
 
 func isAppliesPath(path string) bool {
@@ -73,7 +75,7 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 		return gate, errors.Join(errInventory, err)
 	}
 	gate.BootUnit = read.BootUnit()
-	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, AddonSecrets: addonSecrets, Links: gate.Links, Facts: facts}); err != nil {
+	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, AddonSecrets: addonSecrets, Catalog: read.Catalog, Links: gate.Links, Facts: facts}); err != nil {
 		return gate, errors.Join(errRender, err)
 	}
 	if pointers.Live != nil {

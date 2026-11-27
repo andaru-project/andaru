@@ -104,13 +104,16 @@ func (r Realizer) applySafeModeOnBoot() {
 	}
 }
 
-// ReleaseAddonsHold removes the fail-closed boot hold once the engine confirms no upgrade decisions are pending.
-// The addon-runtime module will also reload and start enabled add-on units here when boot safe mode is inactive.
-func (r Realizer) ReleaseAddonsHold(_ context.Context) error {
+// ReleaseAddonsHold removes the fail-closed boot hold once the engine confirms no upgrade decisions are pending,
+// and starts enabled add-on units of the live generation unless boot safe mode is active.
+func (r Realizer) ReleaseAddonsHold(ctx context.Context) error {
 	if err := os.Remove(r.Root + AddonsHeldFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return nil
+	if ReadSafeMode(r.Root, r.StateDir).Active {
+		return nil
+	}
+	return r.startLiveAddons(ctx)
 }
 
 func pathPresentFailClosed(path string) bool {

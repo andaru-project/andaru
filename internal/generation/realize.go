@@ -60,6 +60,8 @@ type Realizer struct {
 	afterLeaseRead func()
 	// keaUID lets unprivileged tests name a Kea user other than their own; nil: the owner of /run/kea.
 	keaUID func() uint32
+	// HealthGet lets tests intercept loopback HTTP health probes for add-ons; nil uses a loopback HTTP client.
+	HealthGet func(ctx context.Context, url string) (int, error)
 }
 
 // placed is one file as it must exist under /run.
@@ -169,8 +171,11 @@ func (r Realizer) files(g Generation) ([]placed, error) {
 			return nil, err
 		}
 		mode := fs.FileMode(0o644)
-		if f.Mode == "0600" {
+		switch f.Mode {
+		case "0600":
 			mode = 0o600
+		case "0400":
+			mode = 0o400
 		}
 		out = append(out, placed{path: f.Path, mode: mode, uid: -1, gid: -1, data: data})
 	}
@@ -204,7 +209,14 @@ func has(set []placed, path string) bool {
 func (r Realizer) place(from, to []placed) error {
 	for _, f := range to {
 		target := r.Root + f.path
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		dirMode := fs.FileMode(0o755)
+		if strings.HasPrefix(f.path, addonRuntimeDir) {
+			if err := os.MkdirAll(r.Root+strings.TrimSuffix(addonRuntimeDir, "/"), 0o700); err != nil {
+				return err
+			}
+			dirMode = 0o700
+		}
+		if err := os.MkdirAll(filepath.Dir(target), dirMode); err != nil {
 			return err
 		}
 		if err := writeAtomic(target, f.data, f.mode); err != nil {
@@ -251,7 +263,10 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 	if err := r.sessions(ctx, from, to); err != nil {
 		return err
 	}
-	return r.services(ctx, from, to)
+	if err := r.services(ctx, from, to); err != nil {
+		return err
+	}
+	return r.addons(ctx, from, to)
 }
 
 // dropStaleIPv6 removes the dynamic IPv6 addresses, and their prefix routes, left on a link whose new file takes none.
@@ -679,7 +694,7 @@ func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, na
 		if o, err := r.observe(verify, withDNS); err != nil {
 			reason = err.Error()
 		} else if reason = o.unmet(next, names, route); reason == "" {
-			return ""
+			return r.verifyAddons(verify, next)
 		}
 		select {
 		case <-verify.Done():

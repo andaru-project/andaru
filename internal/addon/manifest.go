@@ -46,6 +46,9 @@ var (
 // ValidID reports whether id matches the add-on reverse-DNS identifier contract.
 func ValidID(id string) bool { return idPattern.MatchString(id) }
 
+// ValidSlug reports whether slug matches the add-on slug contract.
+func ValidSlug(slug string) bool { return slugPattern.MatchString(slug) }
+
 // ValidInterfaceName reports whether name is a valid, non-reserved add-on interface name.
 func ValidInterfaceName(name string) bool { return validAddonInterfaceName(name) }
 
@@ -185,10 +188,32 @@ type StorageSpec struct {
 }
 
 type EndpointSpec struct {
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	Port     int    `json:"port"`
-	Exposure string `json:"exposure"`
+	Name        string `json:"name"`
+	Protocol    string `json:"protocol"`
+	Port        int    `json:"port"`
+	PortSetting string `json:"portSetting,omitempty"`
+	Exposure    string `json:"exposure"`
+}
+
+// EndpointPort returns the effective listening port for endpoint name under settings,
+// honoring PortSetting when present and falling back to the endpoint's default Port.
+func (m *Manifest) EndpointPort(name string, settings map[string]any) (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	for _, ep := range m.Endpoints {
+		if ep.Name != name {
+			continue
+		}
+		if ep.PortSetting != "" && settings != nil {
+			propName := strings.TrimPrefix(ep.PortSetting, "/")
+			if n, ok := toExactInt64(settings[propName]); ok && n >= 1 && n <= 65535 {
+				return int(n), true
+			}
+		}
+		return ep.Port, true
+	}
+	return 0, false
 }
 
 type BusSpec struct {
@@ -518,7 +543,7 @@ func checkUnknownFields(raw []byte) []FieldError {
 		checkObj(item, p, "name", "purpose", "mountPath", "readOnly", "backup")
 	})
 	checkArr(m["endpoints"], "/endpoints", func(item any, p string) {
-		checkObj(item, p, "name", "protocol", "port", "exposure")
+		checkObj(item, p, "name", "protocol", "port", "portSetting", "exposure")
 	})
 	if busObj := checkObj(m["bus"], "/bus", "publish", "subscribe"); busObj != nil {
 		checkArr(busObj["publish"], "/bus/publish", func(item any, p string) {
@@ -810,6 +835,27 @@ func validateManifest(m *Manifest) []FieldError {
 			propMap[prop.Name] = *prop
 		}
 		validateProperty(prop, p, usedEnv, usedArg, usedSecretFile, bad)
+	}
+
+	// Endpoint portSetting references (validated once properties are indexed).
+	for i, ep := range m.Endpoints {
+		if ep.PortSetting == "" {
+			continue
+		}
+		p := fmt.Sprintf("/endpoints/%d/portSetting", i)
+		propName, ok := strings.CutPrefix(ep.PortSetting, "/")
+		if !ok || !propNamePattern.MatchString(propName) {
+			bad(p, "portSetting must be a top-level JSON Pointer like /port")
+			continue
+		}
+		prop, exists := propMap[propName]
+		if !exists {
+			bad(p, "portSetting references an undeclared property")
+		} else if prop.Type != "integer" {
+			bad(p, "portSetting must reference an integer property")
+		} else if prop.Minimum == nil || *prop.Minimum < 1 || prop.Maximum == nil || *prop.Maximum > 65535 {
+			bad(p, "portSetting property must bound minimum >= 1 and maximum <= 65535")
+		}
 	}
 
 	// WebUI link.

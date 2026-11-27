@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/delegation"
 )
 
@@ -40,6 +41,10 @@ type RealizerFacts struct {
 	KeaHooks string
 	// Delegated is what the prefix sync last saw the WANs receive; a damaged file reads as nothing seen.
 	Delegated delegation.State
+	// PodmanTool reports /usr/bin/podman for add-on containers.
+	PodmanTool bool
+	// StagedImages holds sorted immutable image digests verified in local Podman storage.
+	StagedImages []string
 }
 
 // competingFilters flush or own the whole ruleset; Debian's nftables.service starts with "flush ruleset".
@@ -91,7 +96,13 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 		facts.KeaHooks = strings.TrimPrefix(filepath.Dir(hooks[0]), root)
 	}
 	facts.UnboundTool = exists(root + "/usr/sbin/unbound")
+	facts.PodmanTool = exists(root + "/usr/bin/podman")
 	facts.Delegated, _ = delegation.ReadState(root + "/var/lib/andaru/delegated-prefixes.json")
+	if staged, err := addon.ReadStagedState(root + "/var/lib/andaru"); err == nil {
+		facts.StagedImages = staged.Digests()
+	} else {
+		facts.StagedImages = []string{}
+	}
 	facts.FilterUnits = []string{}
 	bases := []string{"/etc/systemd/system/", "/run/systemd/system/"}
 units:

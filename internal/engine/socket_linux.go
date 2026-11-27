@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/aliasfeed"
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/bus"
@@ -69,6 +70,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			result = err
 		}
 	}()
+	catalog, err := addon.LoadCatalog(addon.DefaultCatalogDir)
+	if err != nil {
+		return fmt.Errorf("load add-on catalog: %w", err)
+	}
+	store.SetCatalog(catalog)
 	if err = initializeAuthorizationState(ctx, stateDir); err != nil {
 		return fmt.Errorf("initialize live authorization state: %w", err)
 	}
@@ -153,7 +159,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}
 	coordinator := newSecurityCoordinator(identities, audits, stateDir)
-	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
+	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit, Catalog: catalog}
 	applies := newAppliesHandler(store.ApplyInput, store.RealizationInput, store.Roles, read, runner, stateDir, identities, coordinator, publishApply(events, "engine"))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)

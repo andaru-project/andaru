@@ -385,3 +385,35 @@ func TestManifestHardeningRegressions(t *testing.T) {
 		t.Fatal("expected IPv6 zone ID to be rejected")
 	}
 }
+
+func TestEndpointPortSetting(t *testing.T) {
+	good := `{
+	  "manifestVersion": 1, "id": "org.test.web", "slug": "web", "name": "Web", "version": "1.0.0",
+	  "application": {"name":"Web","version":"1"}, "requires": [{"name":"andaru.extension-api","version":"1.0.0"}],
+	  "permissions": [{"name":"view","title":"View"}],
+	  "runtime": {"image":"ghcr.io/org/web@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","network":"host"},
+	  "endpoints": [{"name":"http","protocol":"http","port":8080,"portSetting":"/httpPort","exposure":"internal"}],
+	  "properties": [
+	    {"name":"httpPort","type":"integer","minimum":1,"maximum":65535,"default":8080,"title":"HTTP port","binding":{"type":"environment","name":"PORT"}}
+	  ]
+	}`
+	m, err := ParseManifest([]byte(good))
+	if err != nil {
+		t.Fatalf("ParseManifest good portSetting: %v", err)
+	}
+	if p, ok := m.EndpointPort("http", map[string]any{"httpPort": 8181}); !ok || p != 8181 {
+		t.Fatalf("EndpointPort override = %d, %v; want 8181, true", p, ok)
+	}
+	if p, ok := m.EndpointPort("http", nil); !ok || p != 8080 {
+		t.Fatalf("EndpointPort default = %d, %v; want 8080, true", p, ok)
+	}
+
+	unbounded := strings.Replace(good, `"maximum":65535,`, `"maximum":70000,`, 1)
+	if _, err := ParseManifest([]byte(unbounded)); err == nil || !strings.Contains(err.Error(), "/endpoints/0/portSetting") {
+		t.Fatalf("expected unbounded portSetting rejection, got %v", err)
+	}
+	wrongType := strings.Replace(good, `"type":"integer","minimum":1,"maximum":65535,"default":8080`, `"type":"string","default":"8080"`, 1)
+	if _, err := ParseManifest([]byte(wrongType)); err == nil || !strings.Contains(err.Error(), "/endpoints/0/portSetting") {
+		t.Fatalf("expected non-integer portSetting rejection, got %v", err)
+	}
+}

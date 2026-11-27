@@ -65,6 +65,18 @@ func (r *renderer) filterChains() {
 			uplinks = append(uplinks, name)
 		}
 	}
+	hasAddonZones := false
+	for _, a := range d.Addons {
+		if !a.Enabled {
+			continue
+		}
+		for _, ifc := range a.Interfaces {
+			if ifc.Zone != "" && ifc.Name != "" {
+				zones[ifc.Zone] = append(zones[ifc.Zone], ifc.Name)
+				hasAddonZones = true
+			}
+		}
+	}
 	for _, z := range d.Zones {
 		f.set(setName(z.ID), "ifname", "", quoted(zones[z.ID]), "")
 	}
@@ -196,7 +208,11 @@ func (r *renderer) filterChains() {
 		}
 	}
 	script := cards.String() + head + "\tcomment \"sha256:" + hex.EncodeToString(sum[:]) + "\"\n" + body.String() + "}\n"
-	r.file(nftPath, "0644", script, []string{"/rules", "/aliases", "/nat", "/management"})
+	nftSources := []string{"/rules", "/aliases", "/nat", "/management"}
+	if hasAddonZones {
+		nftSources = append(nftSources, "/addons")
+	}
+	r.file(nftPath, "0644", script, nftSources)
 }
 
 // clampMSS lowers the MSS of TCP handshakes through each PPPoE session to fit its MTU, both ways: many hosts

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/render"
@@ -32,6 +33,7 @@ type realizeVerbs interface {
 	SyncPrefixes(ctx context.Context) error
 	FillAliases(ctx context.Context) error
 	ReleaseAddonsHold(ctx context.Context) error
+	AddonControl(ctx context.Context, action, slug string) error
 	Fence(ctx context.Context, denyAll bool) error
 }
 
@@ -78,6 +80,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	verb := flags.Arg(0)
 	want := map[string]int{
 		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "aliases": 0, "addons-release-hold": 0, "factory-reset": 0,
+		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2,
 		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0, "set-hostname": 1,
 	}
 	n, known := want[verb]
@@ -91,8 +94,22 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return usageError(stderr, realizeUsage, "andaru realize")
 	}
 	rest := flags.Args()[1:]
-	if len(rest) != n || (n > 0 && verb != "set-hostname" && !generationID.MatchString(rest[0])) {
+	if len(rest) != n {
 		return usageError(stderr, realizeUsage, "andaru realize")
+	}
+	switch verb {
+	case "activate", "rollback", "confirm":
+		if !generationID.MatchString(rest[0]) {
+			return usageError(stderr, realizeUsage, "andaru realize")
+		}
+	case "addon-stage", "addon-unstage":
+		if !addon.ValidSlug(rest[0]) {
+			return usageError(stderr, realizeUsage, "andaru realize")
+		}
+	case "addon-ctl":
+		if (rest[0] != "start" && rest[0] != "stop" && rest[0] != "restart") || !addon.ValidSlug(rest[1]) {
+			return usageError(stderr, realizeUsage, "andaru realize")
+		}
 	}
 	if verb == "factory-reset" {
 		return factoryResetVerb(ctx, stderr)
@@ -102,7 +119,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	if blocked && verb != "boot" {
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		// The engine keeps owing these: it tries them again after the reset.
-		if verb == "set-hostname" || verb == "aliases" || verb == "addons-release-hold" {
+		if verb == "set-hostname" || verb == "aliases" || verb == "addons-release-hold" || verb == "addon-stage" || verb == "addon-unstage" || verb == "addon-ctl" {
 			return 1
 		}
 		return 0
@@ -110,11 +127,13 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	switch verb {
 	case "update-check", "update-stage", "update-rollback", "update-reboot":
 		return updateVerb(ctx, verb, *stateDir, stderr)
+	case "addon-stage", "addon-unstage":
+		return addonStageVerb(ctx, verb, *stateDir, rest[0], stderr)
 	case "set-hostname":
 		return setHostnameVerb(ctx, rest[0], stderr)
 	}
 	id := 0
-	if len(rest) > 0 {
+	if verb == "activate" || verb == "rollback" || verb == "confirm" {
 		id, _ = strconv.Atoi(rest[0])
 	}
 	verbs, err := build(*stateDir, *busSocket)
@@ -148,6 +167,8 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		err = verbs.FillAliases(ctx)
 	case "addons-release-hold":
 		err = verbs.ReleaseAddonsHold(ctx)
+	case "addon-ctl":
+		err = verbs.AddonControl(ctx, rest[0], rest[1])
 	}
 	// A verb on a generation may change its state even when it fails, so the bus hears of each one.
 	if id != 0 && *busSocket != "" {
