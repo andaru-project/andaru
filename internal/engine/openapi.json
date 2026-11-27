@@ -9644,9 +9644,14 @@
         "additionalProperties": false,
         "required": [
           "pointers",
-          "items"
+          "items",
+          "unapplied"
         ],
         "properties": {
+          "unapplied": {
+            "type": "boolean",
+            "description": "Whether the saved head holds something the live generation does not realize, so an apply would change the network. Settings that take effect when saved, such as notification channels, leave it false."
+          },
           "pointers": {
             "type": "object",
             "additionalProperties": false,

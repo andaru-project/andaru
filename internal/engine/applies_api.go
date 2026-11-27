@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -114,6 +115,9 @@ type appliesView struct {
 		Live *string `json:"live"`
 	} `json:"pointers"`
 	Items []applyView `json:"items"`
+	// Unapplied says the saved head holds something the live generation does not realize, so an apply would change
+	// the network. A save that takes effect at once, as of notifications, leaves it false.
+	Unapplied bool `json:"unapplied"`
 }
 
 func idString(id *int) *string {
@@ -140,7 +144,10 @@ type applyIdentity interface {
 }
 
 type appliesHandler struct {
-	input       func(context.Context, *config.Version) (config.RealizationInput, error)
+	input func(context.Context, *config.Version) (config.RealizationInput, error)
+	// realization reads a saved version as input does, but also one held for upgrade decisions: it only tells
+	// whether the head needs an apply.
+	realization func(context.Context, *config.Version) (config.RealizationInput, error)
 	roles       func(context.Context, config.Version) ([]authz.Role, error)
 	read        hostReader
 	runner      realizeRunner
@@ -156,9 +163,9 @@ type appliesHandler struct {
 }
 
 // newAppliesHandler serves applies: the engine renders, gates and stores; realize, run by PID 1, changes the host.
-func newAppliesHandler(input func(context.Context, *config.Version) (config.RealizationInput, error), roles func(context.Context, config.Version) ([]authz.Role, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) http.Handler {
+func newAppliesHandler(input, realization func(context.Context, *config.Version) (config.RealizationInput, error), roles func(context.Context, config.Version) ([]authz.Role, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) http.Handler {
 	return &appliesHandler{
-		input: input, roles: roles, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
+		input: input, realization: realization, roles: roles, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
 		identities: identities, coordinator: coordinator, stored: stored,
 	}
 }
@@ -219,7 +226,41 @@ func (h *appliesHandler) list(w http.ResponseWriter, r *http.Request) {
 	for _, g := range items {
 		view.Items = append(view.Items, viewApply(g))
 	}
+	live, found := "", p.Live == nil
+	if i := slices.IndexFunc(items, func(g generation.Generation) bool { return p.Live != nil && g.ID == *p.Live }); i >= 0 {
+		live, found = items[i].SavedVersion, true
+	}
+	same, err := realizes(r.Context(), h.realization, nil, config.Version(live))
+	if err != nil {
+		slog.WarnContext(r.Context(), "compare the saved head with the live generation", "error", err)
+	}
+	view.Unapplied = !same || !found // a live generation not listed runs something unknown
 	writeJSON(w, r, http.StatusOK, view)
+}
+
+// realizes reports whether the live generation, made from saved version live, realizes saved version head, the
+// saved head when nil: an apply of head would change nothing. With no live generation (live "") the factory network
+// runs; it is no apply of any version, so only the factory version 0 needs none.
+func realizes(ctx context.Context, read func(context.Context, *config.Version) (config.RealizationInput, error), head *config.Version, live config.Version) (bool, error) {
+	if head != nil && *head == live {
+		return true, nil
+	}
+	a, err := read(ctx, head)
+	switch {
+	case err != nil && head == nil:
+		return false, fmt.Errorf("read the saved head: %w", err)
+	case err != nil:
+		return false, fmt.Errorf("read saved version %s: %w", *head, err)
+	case live == "":
+		return a.SavedVersion == "0", nil
+	case a.SavedVersion == live:
+		return true, nil
+	}
+	b, err := read(ctx, &live)
+	if err != nil {
+		return false, fmt.Errorf("read saved version %s, the live generation's: %w", live, err)
+	}
+	return config.SameRealization(a, b), nil
 }
 
 // show writes one apply and reports whether it existed.

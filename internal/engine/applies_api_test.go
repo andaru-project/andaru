@@ -35,6 +35,7 @@ type applyBench struct {
 	state, root string
 	declaration string
 	head        config.Version
+	saved       map[config.Version]string // declarations of saved versions other than the head's, for unapplied
 	identities  *applyIdentityState
 	coordinator *securityCoordinator
 	mu          sync.Mutex
@@ -213,7 +214,19 @@ func newApplyBench(t *testing.T) *applyBench {
 	}
 	b.identities = &applyIdentityState{revision: 1, accounts: map[string]identity.Account{}}
 	b.coordinator = &securityCoordinator{stateDir: b.state}
-	applies := newAppliesHandler(input, func(context.Context, config.Version) ([]authz.Role, error) { return nil, nil }, read, b, b.state, b.identities, b.coordinator, func(id int) { b.stored = append(b.stored, id) })
+	realization := func(_ context.Context, version *config.Version) (config.RealizationInput, error) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		v, value := b.head, b.declaration
+		if version != nil {
+			v = *version
+		}
+		if d, ok := b.saved[v]; ok {
+			value = d
+		}
+		return config.RealizationInput{SavedVersion: v, Value: json.RawMessage(value)}, nil
+	}
+	applies := newAppliesHandler(input, realization, func(context.Context, config.Version) ([]authz.Role, error) { return nil, nil }, read, b, b.state, b.identities, b.coordinator, func(id int) { b.stored = append(b.stored, id) })
 	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, applies, nil))
 	return b
 }
@@ -307,6 +320,61 @@ func TestApplyHappyPath(t *testing.T) {
 		t.Fatal("HEAD returned a body")
 	}
 	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", applyBody), http.StatusConflict, "APPLY_IN_PROGRESS")
+}
+
+// The list says the head is unapplied when it differs from the live generation's saved version in something an apply
+// realizes, and not when only a notification channel was saved since.
+func TestAppliesListSaysWhetherTheHeadIsUnapplied(t *testing.T) {
+	b := newApplyBench(t)
+	unapplied := func() bool {
+		t.Helper()
+		var list struct {
+			Pointers  map[string]*string `json:"pointers"`
+			Unapplied *bool              `json:"unapplied"`
+		}
+		w := b.call(http.MethodGet, "/api/v1/applies", "")
+		if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || list.Unapplied == nil {
+			t.Fatalf("list = %s", w.Body)
+		}
+		return *list.Unapplied
+	}
+	b.saved = map[config.Version]string{"0": b.declaration} // realized alike, but the factory network is no apply
+	if !unapplied() {
+		t.Fatal("saved version 7 over the factory network is not unapplied")
+	}
+	b.decode(b.call(http.MethodPost, "/api/v1/applies", applyBody), http.StatusOK)
+	if unapplied() {
+		t.Fatal("the applied head is unapplied")
+	}
+	b.mu.Lock()
+	b.saved["7"] = b.declaration
+	b.head, b.declaration = "8", strings.Replace(b.declaration, "{", `{"notifications":{"channels":[{"id":"c"}]},`, 1)
+	b.mu.Unlock()
+	if unapplied() {
+		t.Fatal("a saved channel needs an apply")
+	}
+	b.mu.Lock()
+	b.head, b.declaration = "9", `{}`
+	b.mu.Unlock()
+	if !unapplied() {
+		t.Fatal("a changed declaration needs no apply")
+	}
+	b.mu.Lock()
+	b.head, b.declaration = "7", b.saved["7"]
+	b.mu.Unlock()
+	if unapplied() {
+		t.Fatal("the live head is unapplied")
+	}
+	b.mu.Lock()
+	b.head = "0" // which needs no apply over the factory network
+	b.mu.Unlock()
+	pointers := filepath.Join(generation.Dir(b.state), "pointers.json")
+	if err := os.WriteFile(pointers, []byte(`{"confirmed":null,"lastKnownGood":null,"pending":null,"live":99}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !unapplied() {
+		t.Fatal("a live generation that is not listed runs nothing unknown")
+	}
 }
 
 func TestApplyStagesInitialIdentityRevision(t *testing.T) {
@@ -745,5 +813,40 @@ func TestUnchangedRolesKeepTheLiveDigestFromAnOlderRelease(t *testing.T) {
 	}
 	if after := b.authorizationState(); after != before {
 		t.Fatalf("authorization state moved from %+v to %+v though no role changed", before, after)
+	}
+}
+
+// The head needs an apply only when it differs from the live generation in something an apply realizes: a saved
+// notification channel does not. Over the factory network, every version but 0 needs one.
+func TestRealizesIgnoresSettingsThatTakeEffectWhenSaved(t *testing.T) {
+	values := map[config.Version]string{
+		"0": `{"rules":[]}`,
+		"1": `{"rules":[],"notifications":{"channels":[{"id":"c"}]}}`,
+		"5": `{"rules":[{"id":"r1"}]}`,
+		"6": `{"rules":[{"id":"r1"}],"notifications":{"channels":[{"id":"c"}]}}`,
+		"7": `{"rules":[{"id":"r2"}],"notifications":{"channels":[{"id":"c"}]}}`,
+	}
+	for _, c := range []struct {
+		head, live string // live "" is no live generation
+		same       bool
+	}{{"5", "5", true}, {"6", "5", true}, {"7", "5", false}, {"7", "6", false}, {"0", "", true}, {"1", "", false}, {"5", "", false}} {
+		reads := 0
+		read := func(_ context.Context, v *config.Version) (config.RealizationInput, error) {
+			reads++
+			id := config.Version(c.head)
+			if v != nil {
+				id = *v
+			}
+			return config.RealizationInput{SavedVersion: id, Value: json.RawMessage(values[id])}, nil
+		}
+		for _, head := range []*config.Version{nil, new(config.Version(c.head))} {
+			reads = 0
+			if got, err := realizes(t.Context(), read, head, config.Version(c.live)); err != nil || got != c.same {
+				t.Errorf("head %s, live %q: %v, %v", c.head, c.live, got, err)
+			}
+			if (c.head == c.live || c.live == "") && reads > 1 {
+				t.Errorf("head %s, live %q: %d reads for one version", c.head, c.live, reads)
+			}
+		}
 	}
 }
