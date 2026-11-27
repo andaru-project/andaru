@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -453,4 +452,3 @@ func TestCredentialBackupRequiresHumanReauthenticationAndEncryption(t *testing.T
 		})
 	}
 }
-
