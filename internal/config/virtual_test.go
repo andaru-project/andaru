@@ -560,6 +560,9 @@ func TestRoutedBlockValidation(t *testing.T) {
 		d := blockFixture(t)
 		manage(d, map[string]any{"kind": "network", "prefix": "0.0.0.0/0"})
 		accepted(t, d)
+		d = blockFixture(t)
+		manage(d, map[string]any{"kind": "network", "prefix": "2001:db8::/32"}) // the organisation's whole allocation
+		accepted(t, d)
 	})
 	// A single held address keeps the rules it had: a saved version with one on a management host still loads.
 	t.Run("a single address keeps its rules", func(t *testing.T) {

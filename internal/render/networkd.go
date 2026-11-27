@@ -395,11 +395,12 @@ func (r *renderer) virtualAddresses() {
 	r.file(networkDir+vipDevice+".network", "0644", ini(append([]section{{"Match", []string{"Name=" + vipDevice}}, {"Link", []string{"RequiredForOnline=no"}}, {"Network", network}}, routes...)...), sources)
 }
 
-// heldOnLearned warns about a held block overlapping a subnet the firewall learned at run time, by DHCP, PPP or
-// prefix delegation, which validation could not see: the block's local route would take that subnet's traffic.
+// heldOnLearned warns about a held address or block on a subnet the firewall has at run time, on an interface or
+// delegated to a WAN, which validation could not see: its local route would take that traffic.
 // shortcut: a learned gateway is seen only inside its learned subnet; a PPP peer off it is not, read routes if it matters.
 func (r *renderer) heldOnLearned() {
 	var learned []netip.Prefix
+	links := 0 // learned[:links] are the interfaces' subnets, the rest delegated prefixes
 	for _, l := range r.in.Links {
 		for _, a := range l.Addresses {
 			if v, e := netip.ParseAddr(a.Address); e == nil && l.Name != vipDevice && a.Scope == "global" {
@@ -407,6 +408,7 @@ func (r *renderer) heldOnLearned() {
 			}
 		}
 	}
+	links = len(learned)
 	for _, name := range slices.Sorted(maps.Keys(r.in.Facts.Delegated.WANs)) { // in a stable order, as the finding names the first
 		w := r.in.Facts.Delegated.WANs[name]
 		if w.Current != nil {
@@ -418,12 +420,21 @@ func (r *renderer) heldOnLearned() {
 	}
 	for i, v := range r.d.VirtualAddresses {
 		x := prefixOf(v.Address)
-		if j := slices.IndexFunc(learned, x.Overlaps); !v.proxied() && x.IsValid() && j >= 0 {
-			what, fix := "This block overlaps ", "Name a block the provider routes to the firewall."
-			if x.IsSingleIP() {
-				what, fix = "This address is on ", "Choose an address on no subnet the firewall is on."
-			}
-			r.find("warning", "HELD_ADDRESS_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), what+learned[j].String()+", which the firewall learned by DHCP, PPP or prefix delegation, so its local route takes traffic for that subnet's host, or the whole subnet's, the gateway's included. "+fix)
+		if v.proxied() || !x.IsValid() {
+			continue
+		}
+		// A single address takes one host's traffic, harmless inside a delegated prefix no segment uses.
+		pool := learned
+		if x.IsSingleIP() {
+			pool = learned[:links]
+		}
+		j := slices.IndexFunc(pool, x.Overlaps)
+		switch {
+		case j < 0:
+		case x.IsSingleIP():
+			r.find("warning", "HELD_ADDRESS_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This address is on "+pool[j].String()+", a subnet of one of the firewall's interfaces, so the firewall answers for it there and cannot reach a host that has it. Choose an address on no subnet the firewall is on.")
+		default:
+			r.find("warning", "HELD_ADDRESS_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This block overlaps "+pool[j].String()+", a subnet of one of the firewall's interfaces or a prefix delegated to it, so its local route takes traffic for that subnet, the gateway's included. Name a block the provider routes to the firewall.")
 		}
 	}
 }

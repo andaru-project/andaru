@@ -52,7 +52,7 @@ Kernel 6.12, systemd 257 (Debian 13), 2026-11-27, in network namespaces: an ISP 
   - a `dhcp` `gateway` option: "This range holds a DHCP entry's gateway."
   - a segment's `addressing.dns.servers`: "This range holds a segment's DNS server."
   - a `dns` upstream: "This range holds a DNS upstream."
-  - an address in the aliases `management.allowedSources` uses, through groups: a host, a network or a range; a /0 network is anyone and counts for none: "This range holds a management source address."
+  - a host in the aliases `management.allowedSources` uses, through groups, or a whole network or range there; an entry merely inside a wide source network is no lockout: "This range holds a management source address."
   - the network or broadcast address of a static IPv4 subnet shorter than /31: "This range holds its subnet's network address." or "This range holds its subnet's broadcast address."
 - `dns.virtualAddresses` may not name it: the firewall holds no such address.
 - `address` entries keep their rules; the one against a segment's subnet already keeps them out of every `proxyArp` entry.

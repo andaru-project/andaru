@@ -89,7 +89,7 @@ func TestReflectionObjectSkipsVirtualAddresses(t *testing.T) {
 
 // A held block on a subnet the firewall learned, or under a prefix delegated to it, is warned about at the block;
 // a single held address and a block clear of what was learned are not.
-func TestHeldBlockOnLearnedSubnet(t *testing.T) {
+func TestHeldAddressOnLearnedSubnet(t *testing.T) {
 	const four, six = "/virtualAddresses/2/address", "/virtualAddresses/3/address"
 	in := fixture(t, "routed-block")
 	if r := render(t, in); findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", four) || findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", six) {
