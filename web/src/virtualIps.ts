@@ -92,6 +92,19 @@ export function isProxyArpEligibleSegment(segment: Segment): boolean {
   return staticIpv4Subnets(segment).some((sub) => sub.prefix.bits < 32);
 }
 
+// Proxy NDP uplinks must be non-PPPoE segments with static, SLAAC, or DHCPv6 IPv6 addressing (not none or delegated).
+export function isProxyNdpUplinkSegment(segment: Segment, links?: SavedLink[]): boolean {
+  if (links?.find((l) => l.id === segment.link)?.kind === 'pppoe') return false;
+  const mode = segment.addressing.ipv6.mode;
+  return mode === 'static' || mode === 'slaac' || mode === 'dhcp6';
+}
+
+// Proxy NDP host segments must be inside segments with static or delegated IPv6 addressing.
+export function isProxyNdpHostSegment(segment: Segment): boolean {
+  const mode = segment.addressing.ipv6.mode;
+  return mode === 'static' || mode === 'delegated';
+}
+
 function isAllowedIpv4Value(val: bigint): boolean {
   const o0 = Number((val >> 24n) & 0xffn);
   const o1 = Number((val >> 16n) & 0xffn);
@@ -199,6 +212,9 @@ export function checkVirtualIp(
     } else if (chosenLink?.kind === 'pppoe') {
       errors.set('segment', 'Proxy NDP cannot use a PPPoE uplink.');
       stale = true;
+    } else if (chosenSegment && !isProxyNdpUplinkSegment(chosenSegment, links)) {
+      errors.set('segment', 'Choose an uplink segment with static, SLAAC, or DHCPv6 IPv6 addressing.');
+      stale = true;
     }
 
     if (!hostSegmentId) {
@@ -208,8 +224,8 @@ export function checkVirtualIp(
       stale = true;
     } else if (segmentId && hostSegmentId === segmentId) {
       errors.set('hostSegment', 'Host segment must differ from the uplink segment.');
-    } else if (chosenHostSegment && chosenHostSegment.addressing.ipv6.mode === 'none') {
-      errors.set('hostSegment', 'Choose a host segment with IPv6 enabled.');
+    } else if (chosenHostSegment && !isProxyNdpHostSegment(chosenHostSegment)) {
+      errors.set('hostSegment', 'Choose a host segment with static or delegated IPv6 addressing.');
       stale = true;
     }
 

@@ -7,6 +7,8 @@ import type { SavedLink, SavedObject, Segment, Session, VirtualAddress, VirtualA
 import {
   checkVirtualIp,
   isProxyArpEligibleSegment,
+  isProxyNdpHostSegment,
+  isProxyNdpUplinkSegment,
   isSingleVirtualAddress,
   maxVirtualAddresses,
   staticIpv4Subnets,
@@ -101,12 +103,11 @@ function VirtualIpEditor({
     }
   }, [errorFocusTick]);
 
-  const linksById = new Map(links.map((l) => [l.id, l]));
   const sortedSegments = [...segments].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
   const eligibleSegments = sortedSegments.filter(isProxyArpEligibleSegment);
-  const eligibleNdpUplinks = sortedSegments.filter((s) => linksById.get(s.link)?.kind !== 'pppoe');
-  const eligibleNdpHosts = sortedSegments.filter((s) => s.addressing.ipv6.mode !== 'none');
+  const eligibleNdpUplinks = sortedSegments.filter((s) => isProxyNdpUplinkSegment(s, links));
+  const eligibleNdpHosts = sortedSegments.filter(isProxyNdpHostSegment);
 
   const segmentOptions = (() => {
     const items = eligibleSegments.map((s) => ({
@@ -290,18 +291,18 @@ function VirtualIpEditor({
                 <>
                   <NativeSelect
                     label="Uplink segment"
-                    description="Non-PPPoE segment on whose link the firewall answers IPv6 neighbour discovery for this address."
+                    description="Non-PPPoE segment with static, SLAAC, or DHCPv6 IPv6 addressing where the firewall answers neighbour discovery."
                     required
-                    data={ndpSegmentOptions(eligibleNdpUplinks, segment, 'Choose an uplink segment…', 'No eligible uplink segment', 'PPPoE unsupported')}
+                    data={ndpSegmentOptions(eligibleNdpUplinks, segment, 'Choose an uplink segment…', 'No eligible uplink segment', 'ineligible uplink')}
                     value={segment}
                     error={errors.get('segment')}
                     onChange={(event) => setSegment(event.currentTarget.value)}
                   />
                   <NativeSelect
                     label="Host segment"
-                    description="Inside segment with IPv6 enabled where the host lives. The firewall adds a /128 on-link route there."
+                    description="Inside segment with static or delegated IPv6 addressing where the host lives. The firewall adds a /128 on-link route there."
                     required
-                    data={ndpSegmentOptions(eligibleNdpHosts, hostSegment, 'Choose a host segment…', 'No segment with IPv6 enabled', 'IPv6 disabled')}
+                    data={ndpSegmentOptions(eligibleNdpHosts, hostSegment, 'Choose a host segment…', 'No segment with static or delegated IPv6', 'ineligible host segment')}
                     value={hostSegment}
                     error={errors.get('hostSegment')}
                     onChange={(event) => setHostSegment(event.currentTarget.value)}
