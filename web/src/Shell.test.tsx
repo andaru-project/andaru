@@ -170,12 +170,14 @@ it('shows the pending notice everywhere but on Review and apply', async () => {
 });
 
 it('hides the pending notice and nav badge when a newer saved version has unapplied: false', async () => {
-  fetchRoutes({
+  const fetchMock = fetchRoutes({
     '/api/v1/applies': { pointers: { ...pointers, confirmed: '1', live: '1' }, unapplied: false, items: [apply({})] },
     '/api/v1/versions?': { state: 'saved', items: [{ id: '5', createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 }] },
+    'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [] },
   });
   mount('/system/session');
-  await waitFor(() => expect(screen.getByRole('heading', { name: 'Current session' })).toBeInTheDocument());
+  // upgradePreview only fires after loadChangeState commits changes.data.head.
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/config/upgrade/preview')).toBe(true));
   expect(screen.queryByText('Saved changes are not applied yet')).not.toBeInTheDocument();
   expect(screen.queryByText('Pending')).not.toBeInTheDocument();
 });

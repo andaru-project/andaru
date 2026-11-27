@@ -143,7 +143,16 @@ describe('TrafficFlowScreen', () => {
     expect(screen.getByRole('link', { name: 'Interfaces' })).toHaveAttribute('href', '/network/interfaces');
     first.unmount();
 
-    // When applies.unapplied is false despite savedVersion > liveVersion, do not fetch live version or show a divergent switcher.
+    const onSessionLost = vi.fn();
+    fetchRoutes({
+      '/api/v1/config': () => jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } }),
+      '/api/v1/applies': () => jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } }),
+    });
+    renderSimulator(['configuration.read'], onSessionLost);
+    await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+  });
+
+  it('treats saved and live as synced when applies.unapplied is false despite newer savedVersion', async () => {
     const fetchMock = fetchRoutes({
       '/api/v1/config': savedSnapshot,
       '/api/v1/applies': {
@@ -153,22 +162,9 @@ describe('TrafficFlowScreen', () => {
       },
       '/api/v1/status/links': { items: [] },
     });
-    const synced = render(
-      <MemoryRouter>
-        <TrafficFlowScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'status.read'])} onSessionLost={vi.fn()} />
-      </MemoryRouter>,
-    );
+    renderSimulator();
     expect(await screen.findByText('Saved & live (v5)')).toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: 'Configuration to evaluate' })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/versions/4')).toBe(false);
-    synced.unmount();
-
-    const onSessionLost = vi.fn();
-    fetchRoutes({
-      '/api/v1/config': () => jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } }),
-      '/api/v1/applies': () => jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } }),
-    });
-    renderSimulator(['configuration.read'], onSessionLost);
-    await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
 });
