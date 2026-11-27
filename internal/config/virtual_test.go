@@ -38,7 +38,6 @@ func TestVirtualAddressValidation(t *testing.T) {
 		"loopback v6":     "::1",
 		"link-local":      "fe80::1",
 		"mapped":          "::ffff:1.2.3.4",
-		"with a length":   "172.16.53.53/32",
 		"segment address": "192.0.2.7",
 		"in a subnet":     "192.0.2.99",
 		"in a v6 subnet":  "fd00:1::99",
@@ -453,4 +452,142 @@ func TestProxyARPSegmentByLabel(t *testing.T) {
 	if got := p.State.Config.VirtualAddresses[0].Segment; got != p.Created["seg"] {
 		t.Fatalf("segment %q, created %v", got, p.Created)
 	}
+}
+
+const vipR = "vip_00000005-0000-4000-8000-000000000005"
+
+// blockFixture adds held blocks to the virtual address fixture: an IPv4 /29 and an IPv6 /64.
+func blockFixture(t *testing.T) map[string]any {
+	t.Helper()
+	d := vipFixture(t)
+	d["virtualAddresses"] = append(d["virtualAddresses"].([]any),
+		map[string]any{"id": vipP, "name": "block4", "address": "203.0.113.0/29"},
+		map[string]any{"id": vipQ, "name": "block6", "kind": "address", "address": "2001:db8:53::/64"})
+	return d
+}
+
+func TestRoutedBlockValidation(t *testing.T) {
+	got := accepted(t, blockFixture(t))
+	if v := got.VirtualAddresses; v[2].Address != "203.0.113.0/29" || v[3].Address != "2001:db8:53::/64" || v[3].Kind != "" {
+		t.Fatalf("decoded %+v", v)
+	}
+	t.Run("a /32 and a /128 are stored bare", func(t *testing.T) {
+		d := vipFixture(t)
+		item(d["virtualAddresses"].([]any), 0)["address"] = "172.16.53.53/32"
+		item(d["virtualAddresses"].([]any), 1)["address"] = "FD00:53:53:53:53:53:53:53/128"
+		if v := accepted(t, d).VirtualAddresses; v[0].Address != "172.16.53.53" || v[1].Address != "fd00:53:53:53:53:53:53:53" {
+			t.Fatalf("stored %q %q", v[0].Address, v[1].Address)
+		}
+	})
+	t.Run("one spelling", func(t *testing.T) {
+		d := blockFixture(t)
+		item(d["virtualAddresses"].([]any), 3)["address"] = "2001:DB8:53:0::/64"
+		if v := accepted(t, d).VirtualAddresses; v[3].Address != "2001:db8:53::/64" {
+			t.Fatalf("stored %q", v[3].Address)
+		}
+	})
+	t.Run("the shortest blocks", func(t *testing.T) {
+		d := blockFixture(t)
+		item(d["virtualAddresses"].([]any), 2)["address"] = "203.0.113.0/24"
+		item(d["virtualAddresses"].([]any), 3)["address"] = "2001:db8:53::/48"
+		accepted(t, d)
+	})
+	const shape = "Expected one unicast IPv4 or IPv6 address, or a block"
+	for name, tc := range map[string]struct{ address, message string }{
+		"IPv4 shorter than /24":     {"203.0.112.0/23", shape},
+		"IPv6 shorter than /48":     {"2001:db8::/47", shape},
+		"host bits":                 {"203.0.113.1/29", shape},
+		"IPv6 host bits":            {"2001:db8:53::1/64", shape},
+		"unspecified":               {"0.0.0.0/24", shape},
+		"multicast":                 {"224.0.0.0/24", shape},
+		"IPv6 multicast":            {"ff05::/64", shape},
+		"loopback":                  {"127.0.0.0/24", shape},
+		"link-local":                {"169.254.1.0/24", shape},
+		"IPv6 link-local":           {"fe80::/64", shape},
+		"mapped":                    {"::ffff:203.0.113.0/120", shape},
+		"holds the broadcast":       {"255.255.255.0/24", shape},
+		"inside a segment's subnet": {"192.0.2.0/29", "This block overlaps a segment's subnet."},
+		"a segment's whole subnet":  {"192.0.2.0/24", "This block overlaps a segment's subnet."},
+		"a v6 segment's subnet":     {"fd00:1::/64", "This block overlaps a segment's subnet."},
+		"holds a virtual address":   {"172.16.53.0/24", `This range overlaps virtual address \"dns4\".`},
+		"holds a v6 one":            {"fd00:53:53:53::/64", `This range overlaps virtual address \"dns6\".`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := blockFixture(t)
+			i := map[bool]int{true: 3, false: 2}[strings.Contains(tc.address, ":")]
+			if strings.Contains(name, "holds a v") {
+				i = 2 // validated after the address it holds
+			}
+			item(d["virtualAddresses"].([]any), i)["address"] = tc.address
+			refusedAt(t, d, fmt.Sprintf("/virtualAddresses/%d/address", i))
+			_, e := decodeMap(t, d)
+			if raw, _ := json.Marshal(e); !strings.Contains(string(raw), tc.message) {
+				t.Fatalf("%s", raw)
+			}
+		})
+	}
+	t.Run("overlaps another block", func(t *testing.T) {
+		d := blockFixture(t)
+		d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipR, "name": "inside", "address": "203.0.113.4"})
+		refusedAt(t, d, "/virtualAddresses/4/address")
+		_, e := decodeMap(t, d)
+		if raw, _ := json.Marshal(e); !strings.Contains(string(raw), `This range overlaps virtual address \"block4\".`) {
+			t.Fatalf("%s", raw)
+		}
+	})
+	t.Run("overlaps a proxy ARP entry", func(t *testing.T) {
+		d := proxyFixture(t)
+		d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipR, "name": "over", "address": "192.0.2.56/29"})
+		refusedAt(t, d, "/virtualAddresses/4/address")
+	})
+	t.Run("the DNS service on a block", func(t *testing.T) {
+		d := blockFixture(t)
+		d["dns"] = map[string]any{"mode": "recursive", "segments": []any{}, "virtualAddresses": []any{vipA, vipP}}
+		refusedAt(t, d, "/dns/virtualAddresses/1")
+		_, e := decodeMap(t, d)
+		if raw, _ := json.Marshal(e); !strings.Contains(string(raw), "The DNS service listens on single addresses; name one address, not a block.") {
+			t.Fatalf("%s", raw)
+		}
+	})
+	t.Run("an IPv6 forward to an address inside a block", func(t *testing.T) {
+		d := blockFixture(t)
+		setNAT(d, "portForwards", forward(d, map[string]any{"family": "ipv6", "target": map[string]any{"address": "2001:db8:53::35"}, "targetPort": nil, "ports": "53"}))
+		accepted(t, d)
+	})
+	t.Run("1:1 NAT takes over no address of a block", func(t *testing.T) {
+		d := blockFixture(t)
+		setNAT(d, "oneToOne", map[string]any{"id": otoA, "name": "over", "enabled": true, "zone": wanZone(d), "external": "203.0.113.4", "internal": "192.0.2.50", "destination": []any{}})
+		refusedAt(t, d, "/nat/oneToOne/0/external")
+		setNAT(d, "oneToOne", map[string]any{"id": otoA, "name": "under", "enabled": true, "zone": wanZone(d), "external": "198.51.100.50", "internal": "203.0.113.4", "destination": []any{}})
+		refusedAt(t, d, "/nat/oneToOne/0/internal")
+	})
+}
+
+// A block a forward targets inside cannot be deleted, nor narrowed so the target falls outside it; widening it, or
+// another held address taking the target over, is fine.
+func TestRoutedBlockInUse(t *testing.T) {
+	s := seededState(t)
+	p := mustRun(t, &s, `{"operations":[{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"block","address":"203.0.113.0/29"}}]}`)
+	id := p.Created["v"]
+	mustRun(t, &s, `{"operations":[{"op":"create","collection":"nat.portForwards","value":{"name":"dns","enabled":true,"ingressZones":["`+s.Config.Zones[0].ID+`"],"protocol":"udp","from":[],"to":{"self":true},"ports":"53","target":{"address":"203.0.113.3"}}}]}`)
+	version := func() string { return string(versionOf(&s, objectKey{"virtualAddresses", id}).Version) }
+	replace := func(address string) string {
+		return `{"operations":[{"op":"replace","collection":"virtualAddresses","id":"` + id + `","expectedVersion":"` + version() + `","value":{"name":"block","address":"` + address + `"}}]}`
+	}
+	for name, body := range map[string]string{
+		"delete":    `{"operations":[{"op":"delete","collection":"virtualAddresses","id":"` + id + `","expectedVersion":"` + version() + `"}]}`,
+		"narrow":    replace("203.0.113.4/30"),
+		"to one":    replace("203.0.113.2"),
+		"elsewhere": replace("203.0.114.0/29"),
+	} {
+		_, e := run(t, &s, body)
+		raw, _ := json.Marshal(e)
+		if e == nil || !strings.Contains(string(raw), "/operations/0/id") || !strings.Contains(string(raw), `Port forward \"dns\" targets this address`) {
+			t.Fatalf("%s: %s", name, raw)
+		}
+	}
+	mustRun(t, &s, replace("203.0.113.0/30"))
+	mustRun(t, &s, replace("203.0.113.0/24"))
+	mustRun(t, &s, replace("203.0.113.3"))
+	mustRun(t, &s, replace("203.0.113.0/28"))
 }

@@ -211,15 +211,16 @@ func validateNAT(d *declaration) []FieldError {
 			}
 		}
 	}
-	// A virtual address is the firewall's own, held for its services: 1:1 NAT takes it over in neither direction.
-	var virtual []netip.Addr
+	// A virtual address or block is the firewall's own, held for its services: 1:1 NAT takes it over in neither
+	// direction.
+	var virtual []netip.Prefix
 	for _, v := range d.VirtualAddresses {
-		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() && !v.proxied() {
-			own, virtual = append(own, a), append(virtual, a)
+		if x, ok := vipPrefix(v); ok && x.Addr().Is4() && !v.proxied() {
+			virtual = append(virtual, x)
 		}
 	}
-	holdsOwn := func(p netip.Prefix) bool { return slices.ContainsFunc(own, p.Contains) }
-	holdsVirtual := func(p netip.Prefix) bool { return slices.ContainsFunc(virtual, p.Contains) }
+	holdsVirtual := func(p netip.Prefix) bool { return slices.ContainsFunc(virtual, p.Overlaps) }
+	holdsOwn := func(p netip.Prefix) bool { return slices.ContainsFunc(own, p.Contains) || holdsVirtual(p) }
 	holdsPrimary := func(p netip.Prefix) bool { return slices.ContainsFunc(primary, p.Contains) }
 	externals := make([]netip.Prefix, len(d.NAT.OneToOne))
 	seen = map[string]bool{}

@@ -117,8 +117,10 @@ func normalizeDeclaration(d *declaration) {
 		}
 		if a, e := netip.ParseAddr(v.Address); e == nil {
 			v.Address = a.String() // one spelling, so the renderer and forwards agree
-		} else if p, e := netip.ParsePrefix(v.Address); e == nil && v.proxied() && p.IsSingleIP() {
-			v.Address = p.Addr().String() // a proxied /32 is stored bare, as an address entry is
+		} else if p, e := netip.ParsePrefix(v.Address); e == nil && p.IsSingleIP() {
+			v.Address = p.Addr().String() // a /32 or /128 is stored bare, so each address has one form
+		} else if e == nil {
+			v.Address = p.String()
 		}
 	}
 	if len(d.Notifications.Channels) == 0 {

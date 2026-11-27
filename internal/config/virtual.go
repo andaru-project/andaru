@@ -20,14 +20,15 @@ func staticPrefixes(s segment) []netip.Prefix {
 	return out
 }
 
-// validateVirtual checks the virtual addresses: single unicast addresses the firewall holds on no segment.
+// validateVirtual checks the virtual addresses: unicast addresses or blocks the firewall holds on no segment.
 func validateVirtual(d *declaration, bad func(string, string)) {
 	var subnets []netip.Prefix
 	for _, s := range d.Segments {
 		subnets = append(subnets, staticPrefixes(s)...)
 	}
 	seen := map[string]bool{}
-	held := map[netip.Addr]bool{}
+	var held []netip.Prefix // the valid held addresses and blocks, a single address as a /32 or /128
+	var heldNames []string
 	var proxies []virtualAddress
 	taken := claims(d)
 	for i, v := range d.VirtualAddresses {
@@ -52,17 +53,24 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 			bad(p+"/segment", "Only a proxy ARP entry names a segment.")
 		}
 		// An address inside a proxy ARP entry is on its segment's subnet, so the subnet rule below refuses it too.
-		a, e := netip.ParseAddr(v.Address)
+		x, ok := vipPrefix(v)
+		a := x.Addr()
+		block := ok && !x.IsSingleIP()
+		other := slices.IndexFunc(held, x.Overlaps)
 		switch {
-		case e != nil || a.Zone() != "" || a.Is4In6() || !validUnicast(a) || a.IsLinkLocalUnicast():
-			bad(p+"/address", "Expected one unicast IPv4 or IPv6 address, without a length; not loopback or link-local.")
-		case held[a]:
+		case !ok || a.Is4In6() || !validUnicast(a) || a.IsLinkLocalUnicast() || x != x.Masked() || x.Bits() < map[bool]int{true: 24, false: 48}[a.Is4()] || a.Is4() && !validUnicast(lastOf(x)):
+			bad(p+"/address", "Expected one unicast IPv4 or IPv6 address, or a block: an IPv4 prefix of length 24 to 32 or an IPv6 prefix of length 48 to 128, with its host bits zero; not loopback or link-local.")
+		case other >= 0 && !block && held[other] == x:
 			bad(p+"/address", "Another virtual address already has this address.")
+		case other >= 0:
+			bad(p+"/address", fmt.Sprintf("This range overlaps virtual address %q.", heldNames[other]))
+		case block && slices.ContainsFunc(subnets, x.Overlaps):
+			bad(p+"/address", "This block overlaps a segment's subnet.")
 		case slices.ContainsFunc(subnets, func(s netip.Prefix) bool { return s.Contains(a) }):
 			// Linux answers for a local address on every interface, so it would work there by accident.
 			bad(p+"/address", "This address is on a segment's subnet: add it to the segment's addresses instead.")
 		default:
-			held[a] = true
+			held, heldNames = append(held, x), append(heldNames, v.Name)
 		}
 	}
 	if d.DNS != nil {
@@ -73,25 +81,34 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 				bad(fmt.Sprintf("/dns/virtualAddresses/%d", j), "Expected an existing virtual address.")
 			} else if d.VirtualAddresses[i].proxied() {
 				bad(fmt.Sprintf("/dns/virtualAddresses/%d", j), "The firewall does not hold an address answered by proxy ARP, so the DNS service cannot listen on it.")
+			} else if x, ok := vipPrefix(d.VirtualAddresses[i]); ok && !x.IsSingleIP() {
+				bad(fmt.Sprintf("/dns/virtualAddresses/%d", j), "The DNS service listens on single addresses; name one address, not a block.")
 			}
 		}
 	}
 }
 
-// firewallHolds says whether a is one of the firewall's declared static addresses or virtual addresses.
+// firewallHolds says whether a is one of the firewall's declared static addresses, or a held virtual address or an
+// address inside a held block.
 func firewallHolds(d *declaration, a netip.Addr) bool {
 	for _, s := range d.Segments {
 		if slices.ContainsFunc(staticPrefixes(s), func(p netip.Prefix) bool { return p.Addr() == a }) {
 			return true
 		}
 	}
-	return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return !v.proxied() && sameAddress(v.Address, a.String()) })
+	return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return !v.proxied() && heldContains(v, a) })
 }
 
-// proxyPrefix is a proxy ARP entry's address as a prefix: a bare address is a /32.
-func proxyPrefix(v virtualAddress) (netip.Prefix, bool) {
+// heldContains says whether the held virtual address v is a, or is a block holding it.
+func heldContains(v virtualAddress, a netip.Addr) bool {
+	x, ok := vipPrefix(v)
+	return ok && x.Contains(a)
+}
+
+// vipPrefix is a virtual address's address as a prefix: a bare address is a /32 or /128.
+func vipPrefix(v virtualAddress) (netip.Prefix, bool) {
 	if a, e := netip.ParseAddr(v.Address); e == nil {
-		return netip.PrefixFrom(a, a.BitLen()), true
+		return netip.PrefixFrom(a, a.BitLen()), a.Zone() == ""
 	}
 	p, e := netip.ParsePrefix(v.Address)
 	return p, e == nil
@@ -207,14 +224,14 @@ func validateProxy(d *declaration, v virtualAddress, p string, own []netip.Prefi
 	if seg < 0 {
 		bad(p+"/segment", "Expected an existing segment.")
 	}
-	x, ok := proxyPrefix(v)
+	x, ok := vipPrefix(v)
 	a := x.Addr()
 	var last netip.Addr
 	if ok && a.Is4() {
 		last = lastOf(x)
 	}
 	claimed := slices.IndexFunc(taken, func(c claim) bool { return !c.last.Less(a) && !last.Less(c.first) })
-	overlap := slices.IndexFunc(before, func(o virtualAddress) bool { y, _ := proxyPrefix(o); return y.Overlaps(x) })
+	overlap := slices.IndexFunc(before, func(o virtualAddress) bool { y, _ := vipPrefix(o); return y.Overlaps(x) })
 	switch {
 	case ok && a.Is6() && !a.Is4In6():
 		bad(p+"/address", "Proxy NDP is not offered yet (#43).")
@@ -241,7 +258,7 @@ func validateProxy(d *declaration, v virtualAddress, p string, own []netip.Prefi
 func proxied(d *declaration) []netip.Prefix {
 	var out []netip.Prefix
 	for _, v := range d.VirtualAddresses {
-		if x, ok := proxyPrefix(v); ok && v.proxied() {
+		if x, ok := vipPrefix(v); ok && v.proxied() {
 			out = append(out, x.Masked())
 		}
 	}
@@ -255,14 +272,21 @@ func sameAddress(a, b string) bool {
 	return e1 == nil && e2 == nil && x == y
 }
 
-// vipStillTargeted refuses an operation that deletes a virtual address, or changes its address, while a port
-// forward targets the address: the forward would silently become one to an inside host nobody holds.
+// vipStillTargeted refuses an operation that deletes a held virtual address, or changes its address, while a port
+// forward targets it or an address inside it, and no held virtual address of d still holds the target: the forward
+// would silently become one to an inside host nobody holds.
 func vipStillTargeted(old, d *declaration, input Changes) *Fault {
 	for _, v := range old.VirtualAddresses {
-		if v.proxied() || slices.ContainsFunc(d.VirtualAddresses, func(n virtualAddress) bool { return !n.proxied() && sameAddress(n.Address, v.Address) }) {
+		if v.proxied() {
 			continue
 		}
-		i := slices.IndexFunc(d.NAT.PortForwards, func(f portForward) bool { return f.Target != nil && sameAddress(f.Target.Address, v.Address) })
+		i := slices.IndexFunc(d.NAT.PortForwards, func(f portForward) bool {
+			if f.Target == nil {
+				return false
+			}
+			a, e := netip.ParseAddr(f.Target.Address)
+			return e == nil && heldContains(v, a) && !slices.ContainsFunc(d.VirtualAddresses, func(n virtualAddress) bool { return !n.proxied() && heldContains(n, a) })
+		})
 		if i < 0 {
 			continue
 		}
