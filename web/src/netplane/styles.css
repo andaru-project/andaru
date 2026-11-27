@@ -58,50 +58,11 @@
   --np-gray-muted: #909296;
 }
 
-/* ================= Standalone Netplane Header Controls ================= */
-
-.app-header .np-header-action {
-  background: transparent;
-  border-color: rgb(255 255 255 / 35%);
-  color: #fff;
-}
-
-.app-header .np-header-action:hover {
-  background: rgb(255 255 255 / 12%);
-  color: #fff;
-}
-
-.np-brand-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  color: #fff;
-  text-decoration: none;
-  min-width: 0;
-}
-
-.np-controls {
-  flex-shrink: 0;
-}
-
 .np-data-table th {
   color: var(--mantine-color-dimmed);
   font-size: var(--mantine-font-size-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-}
-
-.np-nav-group-label {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--np-text-dim);
-  padding: 10px 10px 4px;
-}
-
-.np-nav-group-label:first-child {
-  padding-top: 2px;
 }
 
 .np-mono {
@@ -632,10 +593,6 @@
 }
 
 @media (max-width: 37.4375em) {
-  .np-hide-xs {
-    display: none;
-  }
-
   .np-alert-row {
     flex-direction: column;
     align-items: flex-start;
