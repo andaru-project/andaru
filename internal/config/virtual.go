@@ -151,11 +151,21 @@ type claim struct {
 	first, last netip.Addr
 	message     string
 	served      bool
+	// whole: only a route taking the whole span is refused. A management source network may be as wide as
+	// 0.0.0.0/0; an entry inside it takes no more than its own addresses, not every admin's.
+	whole bool
 }
 
-// overlaps says whether the claim shares an address with first to last, of the same family.
+// overlaps says whether first to last, of the claim's family, takes the claim: shares an address with it, or holds
+// all of it when the claim is whole.
 func (c claim) overlaps(first, last netip.Addr) bool {
-	return c.first.Is4() == first.Is4() && !c.last.Less(first) && !last.Less(c.first)
+	if c.first.Is4() != first.Is4() {
+		return false
+	}
+	if c.whole {
+		return !c.first.Less(first) && !last.Less(c.last)
+	}
+	return !c.last.Less(first) && !last.Less(c.first)
 }
 
 // claims are the addresses the declaration names for hosts other than the firewall: a proxy ARP entry's route to
@@ -169,13 +179,13 @@ func claims(d *declaration) []claim {
 			a, e = ap.Addr(), e2
 		}
 		if e == nil && a.Zone() == "" {
-			out = append(out, claim{a.Unmap(), a.Unmap(), message, served})
+			out = append(out, claim{a.Unmap(), a.Unmap(), message, served, false})
 		}
 	}
 	one := func(raw, message string) { add(raw, message, false) }
 	server := func(raw, message string) { add(raw, message, true) }
 	span := func(p netip.Prefix, message string) {
-		out = append(out, claim{p.Masked().Addr(), lastOf(p), message, false})
+		out = append(out, claim{p.Masked().Addr(), lastOf(p), message, false, false})
 	}
 	for _, s := range d.Segments {
 		// Its route to andaru-vip would take the uplink's next hop with it.
@@ -191,9 +201,9 @@ func claims(d *declaration) []claim {
 		}
 		for _, raw := range s.Addressing.IPv4.Addresses {
 			if p, e := netip.ParsePrefix(raw); e == nil && p.Addr().Is4() && p.Bits() < 31 {
-				out = append(out, claim{p.Masked().Addr(), p.Masked().Addr(), "This range holds its subnet's network address.", false})
+				out = append(out, claim{p.Masked().Addr(), p.Masked().Addr(), "This range holds its subnet's network address.", false, false})
 				b := lastOf(p.Masked())
-				out = append(out, claim{b, b, "This range holds its subnet's broadcast address.", false})
+				out = append(out, claim{b, b, "This range holds its subnet's broadcast address.", false, false})
 			}
 		}
 	}
@@ -202,7 +212,7 @@ func claims(d *declaration) []claim {
 			first, e1 := netip.ParseAddr(r.First)
 			last, e2 := netip.ParseAddr(r.Last)
 			if e1 == nil && e2 == nil && first.Is4() && last.Is4() {
-				out = append(out, claim{first, last, "This range overlaps a DHCP range.", false})
+				out = append(out, claim{first, last, "This range overlaps a DHCP range.", false, false})
 			}
 		}
 		for _, l := range e.StaticLeases {
@@ -247,12 +257,13 @@ func claims(d *declaration) []claim {
 				case "network":
 					if p, e := netip.ParsePrefix(a.Prefix); e == nil {
 						span(p, message)
+						out[len(out)-1].whole = true
 					}
 				case "range":
 					first, e1 := netip.ParseAddr(a.First)
 					last, e2 := netip.ParseAddr(a.Last)
 					if e1 == nil && e2 == nil && first.Is4() == last.Is4() {
-						out = append(out, claim{first.Unmap(), last.Unmap(), message, false})
+						out = append(out, claim{first.Unmap(), last.Unmap(), message, false, true})
 					}
 				}
 			}

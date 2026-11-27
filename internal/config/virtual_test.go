@@ -389,7 +389,7 @@ func TestProxyARPValidation(t *testing.T) {
 		"holds a management source range": {func(d map[string]any) {
 			const r = "adr_00000006-0000-4000-8000-000000000006"
 			objs := d["aliases"].(map[string]any)
-			objs["addresses"] = append(objs["addresses"].([]any), map[string]any{"id": r, "name": "admin-range", "kind": "range", "first": "192.0.2.40", "last": "192.0.2.57"})
+			objs["addresses"] = append(objs["addresses"].([]any), map[string]any{"id": r, "name": "admin-range", "kind": "range", "first": "192.0.2.57", "last": "192.0.2.59"})
 			d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{r}}
 		}, q + "/address", "This range holds a management source address."},
 		"holds a management source in a group": {func(d map[string]any) {
@@ -540,13 +540,13 @@ func TestRoutedBlockValidation(t *testing.T) {
 	}{
 		"a management source host": {2, func(d map[string]any) { manage(d, map[string]any{"kind": "host", "address": "203.0.113.6"}) },
 			"This range holds a management source address."},
-		"a management source network": {0, func(d map[string]any) { manage(d, map[string]any{"kind": "network", "prefix": "172.16.53.0/24"}) },
-			"This address is a management source address."},
+		"a management source network inside a block": {2, func(d map[string]any) { manage(d, map[string]any{"kind": "network", "prefix": "203.0.113.4/30"}) },
+			"This range holds a management source address."},
 		"an IPv6 management source": {3, func(d map[string]any) { manage(d, map[string]any{"kind": "host", "address": "2001:db8:53::9"}) },
 			"This range holds a management source address."},
-		"an IPv6 management range": {1, func(d map[string]any) {
-			manage(d, map[string]any{"kind": "range", "first": "fd00:53:53:53::1", "last": "fd00:53:53:53:ffff::1"})
-		}, "This address is a management source address."},
+		"an IPv6 management range inside a block": {3, func(d map[string]any) {
+			manage(d, map[string]any{"kind": "range", "first": "2001:db8:53::10", "last": "2001:db8:53::20"})
+		}, "This range holds a management source address."},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := blockFixture(t)
@@ -554,6 +554,13 @@ func TestRoutedBlockValidation(t *testing.T) {
 			refusedWith(t, d, fmt.Sprintf("/virtualAddresses/%d/address", tc.index), tc.message)
 		})
 	}
+	// A management network or range takes only what lies inside it: an address or a block inside a wide source
+	// network, as 0.0.0.0/0, is no lockout.
+	t.Run("inside a wide management network", func(t *testing.T) {
+		d := blockFixture(t)
+		manage(d, map[string]any{"kind": "network", "prefix": "0.0.0.0/0"})
+		accepted(t, d)
+	})
 	t.Run("a DHCPv6 delegation pool, both ways", func(t *testing.T) {
 		d := dhcp6Fixture(t, nil)
 		d["virtualAddresses"] = []any{map[string]any{"id": vipP, "name": "block6", "address": "fd00:beef:1:200::/56"}}
