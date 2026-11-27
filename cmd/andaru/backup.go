@@ -322,7 +322,7 @@ func backupCreate(ctx context.Context, socket string, cmd backupCommand, stdout,
 		return 1
 	}
 	archive, err := backup.Decode(ctx, raw, passphrase)
-	if err != nil || archive.Manifest.FormatVersion != 3 || archive.Manifest.SavedVersion != savedVersion || !archive.Manifest.CreatedAt.Equal(captured) || archive.Documents.Users == nil ||
+	if err != nil || archive.Manifest.FormatVersion < 2 || archive.Manifest.SavedVersion != savedVersion || !archive.Manifest.CreatedAt.Equal(captured) || archive.Documents.Users == nil ||
 		slices.Contains(archive.Manifest.Scopes, "configurationSecrets") != cmd.includeSecrets || slices.Contains(archive.Manifest.Scopes, "userCredentials") != cmd.includeCredentials {
 		fmt.Fprintln(stderr, "engine returned an invalid backup archive")
 		return 1

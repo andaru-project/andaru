@@ -142,13 +142,16 @@ func Encode(ctx context.Context, source Source, docs Documents, passphrase strin
 	} else if passphrase != "" {
 		return nil, &Error{Code: "PASSPHRASE_INVALID"}
 	}
-	// Format 1 holds the configuration alone. Format 3 is format 2 (with the users) whose unapplied areas are the
-	// engine's own finding; older releases refuse it as unsupported rather than read those areas as a lie.
+	// Format 1 holds the configuration alone, format 2 the users too. Format 3 holds what format 2 does, and is
+	// written only when its areas say what format 2 cannot: a live generation that realizes a newer saved version.
+	// Older releases refuse it as unsupported rather than read those areas as a lie; format 1 cannot carry it.
 	format := 1
 	if docs.Users != nil {
+		format = 2
+	}
+	source.Realized = source.Realized && format == 2 && source.Network.Live != nil && source.Network.LiveSavedVersion != source.SavedVersion
+	if source.Realized {
 		format = 3
-	} else {
-		source.Realized = false
 	}
 	manifest := Manifest{FormatVersion: format, CreatedAt: source.CapturedAt.UTC(), AndaruVersion: source.AndaruVersion, SavedVersion: source.SavedVersion, Scopes: []string{}, Payloads: map[string]Payload{}, Network: source.Network, SavedButUnappliedAreas: unapplied(source)}
 	var identity [16]byte
@@ -257,11 +260,11 @@ func decodeManifest(raw []byte) (Manifest, error) {
 	}
 	shape := min(manifest.FormatVersion, 2) // format 3 holds what format 2 does
 	id, err := hex.DecodeString(manifest.BackupID)
-	// In format 3, over a live generation, the areas are the engine's finding: only their form is checked.
-	source := Source{AndaruVersion: manifest.AndaruVersion, SavedVersion: manifest.SavedVersion, CapturedAt: manifest.CreatedAt, Network: manifest.Network,
-		Realized: manifest.FormatVersion == 3 && len(manifest.SavedButUnappliedAreas) == 0}
+	source := Source{AndaruVersion: manifest.AndaruVersion, SavedVersion: manifest.SavedVersion, CapturedAt: manifest.CreatedAt, Network: manifest.Network}
 	_, offset := manifest.CreatedAt.Zone()
-	if err != nil || len(id) != 16 || !validSource(source) || offset != 0 || manifest.Scopes == nil || manifest.SavedButUnappliedAreas == nil || !slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) {
+	if err != nil || len(id) != 16 || !validSource(source) || offset != 0 || manifest.Scopes == nil || manifest.SavedButUnappliedAreas == nil ||
+		// Format 3 may also say a live generation realizes the saved version: the engine's finding, which only it could check.
+		!slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) && !(manifest.FormatVersion == 3 && source.Network.Live != nil && len(manifest.SavedButUnappliedAreas) == 0) {
 		return Manifest{}, invalid
 	}
 	maxScopes := 2

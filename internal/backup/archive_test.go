@@ -284,7 +284,7 @@ func TestIdentityDocumentsRequireV2AndCredentialEncryption(t *testing.T) {
 		t.Fatal(err)
 	}
 	decoded, err := Decode(context.Background(), plain, "")
-	if err != nil || decoded.Manifest.FormatVersion != 3 || !bytes.Equal(decoded.Documents.Users, []byte(usersJSON)) {
+	if err != nil || decoded.Manifest.FormatVersion != 2 || !bytes.Equal(decoded.Documents.Users, []byte(usersJSON)) {
 		t.Fatalf("plain identity archive: %+v %v", decoded.Manifest, err)
 	}
 	if slices.Contains(decoded.Manifest.Scopes, "userCredentials") {
@@ -326,13 +326,9 @@ func TestV1ArchiveRemainsReadableWithoutIdentityMembers(t *testing.T) {
 // Format 3 trusts the engine's unapplied areas over a live generation; format 2 and the factory network keep them
 // derived from the versions, and a later format is unsupported (#233).
 func TestFormat3UnappliedAreas(t *testing.T) {
-	archive := func(format int, live any, areas []string) []byte {
+	archive := func(format int, live any, liveSaved string, areas []string) []byte {
 		config, users := []byte(configJSON), []byte(usersJSON)
 		cd, ud := sha256.Sum256(config), sha256.Sum256(users)
-		liveSaved := "6"
-		if live == nil {
-			liveSaved = ""
-		}
 		raw, err := json.Marshal(map[string]any{
 			"formatVersion": format, "backupId": strings.Repeat("1", 32), "createdAt": "2026-11-15T09:00:00Z", "andaruVersion": "0.4.0~dev-1", "savedVersion": "7",
 			"scopes": []string{"configuration", "users"},
@@ -348,41 +344,53 @@ func TestFormat3UnappliedAreas(t *testing.T) {
 		return fixtureZIP(t, []archiveEntry{{name: "manifest.json", body: raw}, {name: "config.json", body: config}, {name: "users.json", body: users}})
 	}
 	for _, c := range []struct {
-		format int
-		live   any
-		areas  []string
-		code   string // "" accepted
+		format    int
+		live      any
+		liveSaved string
+		areas     []string
+		code      string // "" accepted
 	}{
-		{2, 3, []string{"network"}, ""},
-		{2, 3, []string{}, "INVALID_ARCHIVE"},
-		{3, 3, []string{}, ""},
-		{3, 3, []string{"network"}, ""},
-		{3, nil, []string{}, "INVALID_ARCHIVE"},
-		{3, nil, []string{"network"}, ""},
-		{4, 3, []string{"network"}, "UNSUPPORTED_SCHEMA"},
+		{2, 3, "6", []string{"network"}, ""},
+		{2, 3, "6", []string{}, "INVALID_ARCHIVE"},
+		{2, 3, "7", []string{}, ""},
+		{3, 3, "6", []string{}, ""},
+		{3, 3, "6", []string{"network"}, ""},
+		{3, 3, "7", []string{}, ""},
+		{3, 3, "7", []string{"network"}, "INVALID_ARCHIVE"},
+		{3, nil, "", []string{}, "INVALID_ARCHIVE"},
+		{3, nil, "", []string{"network"}, ""},
+		{4, 3, "6", []string{"network"}, "UNSUPPORTED_SCHEMA"},
 	} {
-		_, err := Decode(context.Background(), archive(c.format, c.live, c.areas), "")
+		_, err := Decode(context.Background(), archive(c.format, c.live, c.liveSaved, c.areas), "")
 		var e *Error
 		if c.code == "" && err != nil || c.code != "" && (!errors.As(err, &e) || e.Code != c.code) {
-			t.Errorf("format %d, live %v, areas %q: %v", c.format, c.live, c.areas, err)
+			t.Errorf("format %d, live %v from %q, areas %q: %v", c.format, c.live, c.liveSaved, c.areas, err)
 		}
 	}
 
-	// The engine's finding reaches a format 3 archive; a format 1 archive cannot carry it.
-	source := sourceFixture()
-	source.Realized = true
-	for _, users := range [][]byte{[]byte(usersJSON), nil} {
-		raw, err := Encode(context.Background(), source, Documents{Configuration: json.RawMessage(configJSON), Users: users}, "")
+	// The engine's finding takes format 3 only when it changes the areas; a format 1 archive cannot carry it, and
+	// every other archive stays readable by older releases.
+	for _, c := range []struct {
+		realized  bool
+		users     []byte
+		liveSaved string
+		format    int
+		areas     []string
+	}{
+		{true, []byte(usersJSON), "6", 3, []string{}},
+		{true, nil, "6", 1, []string{"network"}},
+		{true, []byte(usersJSON), "7", 2, []string{}},
+		{false, []byte(usersJSON), "6", 2, []string{"network"}},
+	} {
+		source := sourceFixture()
+		source.Realized, source.Network.LiveSavedVersion = c.realized, c.liveSaved
+		raw, err := Encode(context.Background(), source, Documents{Configuration: json.RawMessage(configJSON), Users: c.users}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 		decoded, err := Decode(context.Background(), raw, "")
-		want, format := []string{}, 3
-		if users == nil {
-			want, format = []string{"network"}, 1
-		}
-		if err != nil || decoded.Manifest.FormatVersion != format || !slices.Equal(decoded.Manifest.SavedButUnappliedAreas, want) {
-			t.Fatalf("users %v: %+v %v", users != nil, decoded.Manifest, err)
+		if err != nil || decoded.Manifest.FormatVersion != c.format || !slices.Equal(decoded.Manifest.SavedButUnappliedAreas, c.areas) {
+			t.Errorf("%+v: %+v %v", c, decoded.Manifest, err)
 		}
 	}
 }
