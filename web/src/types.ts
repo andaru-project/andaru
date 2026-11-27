@@ -673,6 +673,25 @@ export interface UpdateDeployment {
   signature?: string;
 }
 
+export interface UpdateDownloadEstimate {
+  downloadBytes: number;
+  downloadLayers: number;
+  totalBytes?: number;
+  totalLayers?: number;
+}
+
+export interface UpdateProgress {
+  phase: string;
+  description?: string;
+  bytes?: number;
+  bytesTotal?: number;
+  steps?: number;
+  stepsTotal?: number;
+  stepsCached?: number;
+  startedAt?: string;
+  updatedAt?: string;
+}
+
 export type UpdateState =
   | 'unchecked'
   | 'unsupported'
@@ -689,6 +708,8 @@ export interface UpdateStatus {
   state: UpdateState;
   booted?: UpdateDeployment;
   available?: UpdateDeployment;
+  download?: UpdateDownloadEstimate;
+  progress?: UpdateProgress;
   staged?: UpdateDeployment;
   rollback?: UpdateDeployment;
   rollbackQueued?: boolean;

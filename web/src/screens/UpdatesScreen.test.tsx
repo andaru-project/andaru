@@ -215,3 +215,112 @@ it('shows Active on Running image with Queueing rollback on rollback card, and f
   rerender(<UpdatesScreen api={api} session={mgr} update={makeResource({ supported: true, state: 'staged', booted: availableStatus.booted, rebootNeeded: false })} onSessionLost={noopSessionLost} />);
   expect(within(screen.getByRole('region', { name: 'Running image' })).getByText('Staged — reboot required')).toBeInTheDocument();
 });
+
+it('shows download size beforehand and renders live pulling, importing, and staging progress', () => {
+  const api = new ApiClient('csrf-tok');
+  const mgr = session(['status.read', 'configuration.apply']);
+  const makeResource = (data: UpdateStatus) => ({
+    data,
+    loading: false,
+    error: '',
+    refresh: () => Promise.resolve(),
+    reload: () => Promise.resolve(),
+  });
+
+  const withEstimate: UpdateStatus = {
+    ...availableStatus,
+    download: {
+      downloadBytes: 48 * 1024 * 1024,
+      downloadLayers: 14,
+      totalBytes: 1024 * 1024 * 1024,
+      totalLayers: 320,
+    },
+  };
+  const { rerender } = render(<UpdatesScreen api={api} session={mgr} update={makeResource(withEstimate)} onSessionLost={noopSessionLost} />);
+  const availSection = screen.getByRole('region', { name: 'Available update' });
+  expect(within(availSection).getByText('48 MiB (14 of 320 layers; 1.0 GiB full image)')).toBeInTheDocument();
+
+  // Pulling phase shows determinate progress bar, percentage, bytes, layers, and cached count; role="status" wraps only the title.
+  rerender(
+    <UpdatesScreen
+      api={api}
+      session={mgr}
+      update={makeResource({
+        ...withEstimate,
+        state: 'staging',
+        progress: {
+          phase: 'pulling',
+          bytes: 24 * 1024 * 1024,
+          bytesTotal: 48 * 1024 * 1024,
+          steps: 7,
+          stepsTotal: 14,
+          stepsCached: 306,
+        },
+      })}
+      onSessionLost={noopSessionLost}
+    />,
+  );
+  expect(within(availSection).getByText('Downloading…')).toBeInTheDocument();
+  expect(within(availSection).getByRole('status')).toHaveTextContent('Pulling image layers');
+  expect(within(availSection).getByRole('status')).not.toHaveTextContent('24 MiB');
+  expect(within(availSection).getByText('50%')).toBeInTheDocument();
+  expect(within(availSection).getByText('24 MiB of 48 MiB · 7 of 14 layers (306 cached)')).toBeInTheDocument();
+  expect(within(availSection).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+
+  // Importing phase switches badge and renders an indeterminate progressbar without aria-valuenow.
+  rerender(
+    <UpdatesScreen
+      api={api}
+      session={mgr}
+      update={makeResource({
+        ...withEstimate,
+        state: 'staging',
+        progress: { phase: 'importing', steps: 0, stepsTotal: 1 },
+      })}
+      onSessionLost={noopSessionLost}
+    />,
+  );
+  expect(within(availSection).getByText('Importing…')).toBeInTheDocument();
+  expect(within(availSection).getByRole('status')).toHaveTextContent('Importing into local storage');
+  const importBar = within(availSection).getByRole('progressbar');
+  expect(importBar).not.toHaveAttribute('aria-valuenow');
+  expect(importBar).toHaveAttribute('aria-valuetext', 'In progress');
+
+  // Metadata-only estimate displays 0 B clearly, and bytes > bytesTotal clamps cleanly at 100%.
+  rerender(
+    <UpdatesScreen
+      api={api}
+      session={mgr}
+      update={makeResource({
+        ...availableStatus,
+        state: 'staging',
+        download: { downloadBytes: 0, downloadLayers: 0, totalLayers: 320 },
+        progress: { phase: 'pulling', bytes: 120, bytesTotal: 100 },
+      })}
+      onSessionLost={noopSessionLost}
+    />,
+  );
+  expect(within(availSection).getByText('0 B (metadata only; 320 layers cached)')).toBeInTheDocument();
+  expect(within(availSection).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+
+  // Staging without a cached available card still renders an Update in progress section and keeps Running image Active.
+  rerender(
+    <UpdatesScreen
+      api={api}
+      session={mgr}
+      update={makeResource({
+        supported: true,
+        state: 'staging',
+        booted: availableStatus.booted,
+        rebootNeeded: false,
+        progress: { phase: 'staging' },
+      })}
+      onSessionLost={noopSessionLost}
+    />,
+  );
+  expect(within(screen.getByRole('region', { name: 'Running image' })).getByText('Active')).toBeInTheDocument();
+  const progressSection = screen.getByRole('region', { name: 'Update in progress' });
+  expect(within(progressSection).getByText('Staging…')).toBeInTheDocument();
+  expect(within(progressSection).getByRole('status')).toHaveTextContent('Staging deployment for next boot');
+  expect(within(progressSection).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+});

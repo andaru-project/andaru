@@ -66,6 +66,8 @@ type updateAPI struct {
 
 	mu             sync.Mutex
 	busyOp         string
+	stageStartedAt time.Time
+	lastProgress   *update.Progress
 	rebootingUntil time.Time
 	lastErr        string
 	lastErrAt      time.Time
@@ -129,6 +131,7 @@ func reconcileBootedStatus(st update.Status) update.Status {
 		st.Rollback = prev
 		st.Staged = nil
 		st.Available = nil
+		st.Download = nil
 		st.RollbackQueued = false
 		st.RebootNeeded = false
 		st.State = update.StateUpToDate
@@ -140,6 +143,7 @@ func reconcileBootedStatus(st update.Status) update.Status {
 		st.Booted = st.Rollback
 		st.Rollback = prev
 		st.Staged = nil
+		st.Download = nil
 		st.RollbackQueued = false
 		st.RebootNeeded = false
 		st.State = update.StateUpToDate
@@ -167,6 +171,8 @@ func (u *updateAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	u.expireRebootLocked(now)
 	busy := u.busyOp
+	stageStartedAt := u.stageStartedAt
+	lastProgress := u.lastProgress
 	lastErr := u.lastErr
 	lastErrAt := u.lastErrAt
 	if lastErr != "" && st.Error == "" && st.CheckedAt != nil && st.CheckedAt.After(lastErrAt) {
@@ -178,11 +184,38 @@ func (u *updateAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if busy != "" && busy != "rebooting" {
 		st.State = busy
 		st.Error = ""
+		if busy == update.StateStaging {
+			st.Progress = u.currentStageProgress(st, stageStartedAt, lastProgress)
+		}
 	} else if lastErr != "" && st.Error == "" {
 		st.State = update.StateError
 		st.Error = lastErr
 	}
 	writeJSON(w, r, http.StatusOK, st)
+}
+
+func (u *updateAPI) currentStageProgress(st update.Status, stageStartedAt time.Time, lastProgress *update.Progress) *update.Progress {
+	// Ignore any stale progress.json from an older crashed run predating this stage attempt.
+	if prog, err := update.ReadProgress(u.stateDir); err == nil && prog != nil && !prog.StartedAt.Before(stageStartedAt.Add(-2*time.Second)) {
+		copyProg := *prog
+		u.mu.Lock()
+		if u.busyOp == update.StateStaging && u.stageStartedAt.Equal(stageStartedAt) && (u.lastProgress == nil || !copyProg.UpdatedAt.Before(u.lastProgress.UpdatedAt)) {
+			u.lastProgress = &copyProg
+		}
+		u.mu.Unlock()
+		return prog
+	}
+	// If the worker already cleaned up progress.json right before exiting, keep the last observed progress
+	// rather than flashing backwards to "starting".
+	if lastProgress != nil {
+		copyProg := *lastProgress
+		return &copyProg
+	}
+	if st.Staged != nil || st.RebootNeeded {
+		return nil
+	}
+	p := update.StartingProgress(stageStartedAt)
+	return &p
 }
 
 func (u *updateAPI) beginOp(w http.ResponseWriter, r *http.Request, opState string, requireIdle bool) bool {
@@ -207,6 +240,10 @@ func (u *updateAPI) beginOp(w http.ResponseWriter, r *http.Request, opState stri
 		return false
 	}
 	u.busyOp = opState
+	if opState == update.StateStaging {
+		u.stageStartedAt = now.UTC()
+		u.lastProgress = nil
+	}
 	u.lastErr = ""
 	u.lastErrAt = time.Time{}
 	u.mu.Unlock()
@@ -255,6 +292,10 @@ func (u *updateAPI) handleStage(w http.ResponseWriter, r *http.Request) {
 	if !u.beginOp(w, r, update.StateStaging, true) {
 		return
 	}
+	u.mu.Lock()
+	startedAt := u.stageStartedAt
+	u.mu.Unlock()
+
 	st, err := update.ReadStatus(u.stateDir)
 	if err != nil {
 		st = update.Status{Supported: true}
@@ -262,6 +303,8 @@ func (u *updateAPI) handleStage(w http.ResponseWriter, r *http.Request) {
 	st = reconcileBootedStatus(st)
 	st.State = update.StateStaging
 	st.Error = ""
+	starting := update.StartingProgress(startedAt)
+	st.Progress = &starting
 
 	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 16*time.Minute)
 	go func() {
@@ -269,6 +312,8 @@ func (u *updateAPI) handleStage(w http.ResponseWriter, r *http.Request) {
 		err := u.runner.RunVerb(bgCtx, "update-stage")
 		u.mu.Lock()
 		u.busyOp = ""
+		u.stageStartedAt = time.Time{}
+		u.lastProgress = nil
 		if err != nil {
 			slog.Warn("software update stage failed", "error", err)
 			u.lastErr = err.Error()

@@ -1,8 +1,9 @@
-import { Alert, Badge, Button, Group, Modal, Paper, Stack, Table, Text, Title } from '@mantine/core';
+import { Alert, Badge, Button, Group, Modal, Paper, Progress, Stack, Table, Text, Title } from '@mantine/core';
 import { useState, type ReactNode } from 'react';
 import { reportError, type ApiClient } from '../api';
+import { bytes, plural } from '../format';
 import { formatTimestamp, useTimeZone } from '../timezone';
-import type { Session, UpdateDeployment, UpdateStatus } from '../types';
+import type { Session, UpdateDeployment, UpdateDownloadEstimate, UpdateProgress, UpdateStatus } from '../types';
 import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
 
@@ -54,7 +55,8 @@ function runningBadge(status: UpdateStatus): { color: string; label: string } {
   const hasRollbackCard = Boolean(status.rollback);
   if (
     (status.state === 'staged' && hasStagedCard)
-    || ((status.state === 'available' || status.state === 'staging') && hasAvailableCard)
+    || status.state === 'staging'
+    || (status.state === 'available' && hasAvailableCard)
     || (status.state === 'rolling_back' && hasRollbackCard)
   ) {
     return { color: 'blue', label: 'Active' };
@@ -81,6 +83,85 @@ function DeploymentRows({ deployment }: { deployment: UpdateDeployment }) {
   );
 }
 
+function formatDownloadEstimate(estimate: UpdateDownloadEstimate): string {
+  if (estimate.downloadLayers === 0 && estimate.downloadBytes === 0) {
+    return estimate.totalLayers
+      ? `0 B (metadata only; ${plural(estimate.totalLayers, 'layer')} cached)`
+      : '0 B (metadata only)';
+  }
+  const layerPart = estimate.totalLayers
+    ? `${estimate.downloadLayers} of ${estimate.totalLayers} layers`
+    : plural(estimate.downloadLayers, 'layer');
+  const fullImagePart = estimate.totalBytes && estimate.totalBytes > estimate.downloadBytes
+    ? `; ${bytes(estimate.totalBytes)} full image`
+    : '';
+  return `${bytes(estimate.downloadBytes)} (${layerPart}${fullImagePart})`;
+}
+
+const progressPhases: Record<string, { badge: string; title: string; fallbackDetail: string }> = {
+  starting: { badge: 'Preparing…', title: 'Preparing update…', fallbackDetail: 'Checking manifest and starting download…' },
+  pulling: { badge: 'Downloading…', title: 'Pulling image layers', fallbackDetail: 'Downloading updated image layers…' },
+  importing: { badge: 'Importing…', title: 'Importing into local storage', fallbackDetail: 'Unpacking and verifying layers in local storage…' },
+  staging: { badge: 'Staging…', title: 'Staging deployment for next boot', fallbackDetail: 'Writing the boot deployment and bootloader entry to disk…' },
+};
+
+function clampPercent(done: number, total: number): number {
+  return Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+}
+
+function phaseMeta(progress?: UpdateProgress): { badge: string; title: string; fallbackDetail: string } {
+  const known = progress?.phase
+    ? (Object.hasOwn(progressPhases, progress.phase) ? progressPhases[progress.phase] : undefined)
+    : progressPhases.starting;
+  if (known) return known;
+  return {
+    badge: 'Downloading…',
+    title: progress?.description || 'Downloading and staging…',
+    fallbackDetail: 'Working…',
+  };
+}
+
+function UpdateProgressPanel({ progress }: { progress?: UpdateProgress }) {
+  const meta = phaseMeta(progress);
+  const bytesTotal = progress?.bytesTotal ?? 0;
+  const bytesDone = progress?.bytes ?? 0;
+  const stepsTotal = progress?.stepsTotal ?? 0;
+  const stepsDone = progress?.steps ?? 0;
+  const stepsCached = progress?.stepsCached ?? 0;
+
+  let pct: number | null = null;
+  let detail = meta.fallbackDetail;
+
+  if (bytesTotal > 0) {
+    pct = clampPercent(bytesDone, bytesTotal);
+    const parts = [`${bytes(bytesDone)} of ${bytes(bytesTotal)}`];
+    if (stepsTotal > 0) {
+      parts.push(`${stepsDone} of ${stepsTotal} layers${stepsCached > 0 ? ` (${stepsCached} cached)` : ''}`);
+    }
+    detail = parts.join(' · ');
+  } else if (stepsTotal > 1) {
+    pct = clampPercent(stepsDone, stepsTotal);
+    detail = `${stepsDone} of ${stepsTotal} steps`;
+  }
+
+  return (
+    <Stack gap={6}>
+      <Group justify="space-between" gap="xs" wrap="nowrap">
+        <Text size="sm" fw={500} role="status">{meta.title}</Text>
+        {pct !== null && <Text size="sm" fw={600} className="tabular">{pct}%</Text>}
+      </Group>
+      {pct !== null ? (
+        <Progress value={pct} size="md" aria-label={meta.title} />
+      ) : (
+        <Progress.Root size="md">
+          <Progress.Section value={100} animated withAria={false} role="progressbar" aria-label={meta.title} aria-valuetext="In progress" />
+        </Progress.Root>
+      )}
+      <Text size="xs" c="dimmed" className="tabular">{detail}</Text>
+    </Stack>
+  );
+}
+
 function DeploymentSection({
   id,
   title,
@@ -88,6 +169,8 @@ function DeploymentSection({
   badgeVariant,
   badgeLabel,
   deployment,
+  extraRows,
+  extra,
   note,
   action,
 }: {
@@ -97,6 +180,8 @@ function DeploymentSection({
   badgeVariant: 'filled' | 'light';
   badgeLabel: string;
   deployment?: UpdateDeployment;
+  extraRows?: ReactNode;
+  extra?: ReactNode;
   note?: string;
   action?: ReactNode;
 }) {
@@ -107,11 +192,13 @@ function DeploymentSection({
         <Badge color={badgeColor} variant={badgeVariant}>{badgeLabel}</Badge>
       </Group>
       <Stack gap="sm">
-        {deployment && (
+        {(deployment || extraRows) && (
           <Facts>
-            <DeploymentRows deployment={deployment} />
+            {deployment && <DeploymentRows deployment={deployment} />}
+            {extraRows}
           </Facts>
         )}
+        {extra}
         {note && <Text size="sm" c="dimmed">{note}</Text>}
         {action && <Group>{action}</Group>}
       </Stack>
@@ -144,8 +231,9 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
     setConfirmOpen(true);
   }
   const activeOp = update.data?.state === 'staging' || update.data?.state === 'checking' || update.data?.state === 'rolling_back';
-  // Poll every 3 s while an async stage or engine-side check is running.
-  useVisiblePoll(update.refresh, 3_000, activeOp && !rebooting);
+  // Poll every 1.5 s while staging so download progress updates smoothly, and every 3 s for check/rollback.
+  const pollMs = update.data?.state === 'staging' ? 1_500 : 3_000;
+  useVisiblePoll(update.refresh, pollMs, activeOp && !rebooting);
 
   async function runAction(kind: UpdateAction) {
     setBusy(kind);
@@ -223,6 +311,8 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
           }
 
           const pendingDeployment = status.staged ?? (status.rollbackQueued ? status.rollback : undefined);
+          const showAvailableCard = Boolean(status.available && !status.staged && !status.rollbackQueued);
+          const stageBadge = phaseMeta(status.progress).badge;
 
           return (
             <Stack>
@@ -273,14 +363,20 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
                 />
               )}
 
-              {status.available && !status.staged && !status.rollbackQueued && (
+              {showAvailableCard && (
                 <DeploymentSection
                   id="updates-available"
                   title="Available update"
-                  badgeColor="orange"
+                  badgeColor={status.state === 'staging' ? 'blue' : 'orange'}
                   badgeVariant="filled"
-                  badgeLabel={status.state === 'staging' ? 'Downloading…' : 'Ready to download'}
+                  badgeLabel={status.state === 'staging' ? stageBadge : 'Ready to download'}
                   deployment={status.available}
+                  extraRows={status.download ? (
+                    <Row label="Download size">
+                      <Text span size="sm" className="tabular">{formatDownloadEstimate(status.download)}</Text>
+                    </Row>
+                  ) : undefined}
+                  extra={status.state === 'staging' ? <UpdateProgressPanel progress={status.progress} /> : undefined}
                   note="Downloading stages the signed image without interrupting traffic. You choose when to reboot."
                   action={
                     canManage ? (
@@ -293,6 +389,17 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
                       </Button>
                     ) : undefined
                   }
+                />
+              )}
+
+              {status.state === 'staging' && !showAvailableCard && (
+                <DeploymentSection
+                  id="updates-progress"
+                  title="Update in progress"
+                  badgeColor="blue"
+                  badgeVariant="filled"
+                  badgeLabel={stageBadge}
+                  extra={<UpdateProgressPanel progress={status.progress} />}
                 />
               )}
 

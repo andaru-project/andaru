@@ -347,3 +347,125 @@ func TestUpdateAPIClearsStaleStageErrorAfterNewerCheck(t *testing.T) {
 		t.Fatalf("expected stale stage error cleared by newer check, got %+v", st)
 	}
 }
+
+func TestUpdateAPIStageProgressLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+
+	if err := update.WriteStatus(dir, update.Status{
+		Supported: true,
+		State:     update.StateAvailable,
+		Booted:    &update.Deployment{Version: "0.5.0-a.4", Digest: "sha256:1111"},
+		Available: &update.Deployment{Version: "0.5.0-a.5", Digest: "sha256:2222"},
+		Download:  &update.DownloadEstimate{DownloadBytes: 50_000_000, DownloadLayers: 10, TotalLayers: 320},
+	}); err != nil {
+		t.Fatalf("WriteStatus: %v", err)
+	}
+	// Plant a stale progress file from an older crashed run to prove handleStatus ignores it without clobbering disk.
+	staleAt := now.Add(-time.Hour)
+	if err := update.WriteProgress(dir, update.Progress{Phase: "importing", StartedAt: staleAt, UpdatedAt: staleAt}); err != nil {
+		t.Fatalf("WriteProgress stale: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	uapi := &updateAPI{
+		stateDir: dir,
+		now:      func() time.Time { return now },
+		runner: stubUpdateRunner{run: func(_ context.Context, verb string) error {
+			if verb != "update-stage" {
+				return nil
+			}
+			close(started)
+			<-release
+			update.ClearProgress(dir)
+			return update.WriteStatus(dir, update.Status{
+				Supported:    true,
+				State:        update.StateStaged,
+				Booted:       &update.Deployment{Version: "0.5.0-a.4", Digest: "sha256:1111"},
+				Staged:       &update.Deployment{Version: "0.5.0-a.5", Digest: "sha256:2222"},
+				RebootNeeded: true,
+			})
+		}},
+	}
+
+	rec := httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodPost, "/api/v1/system/update/stage"))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST stage: %d %s", rec.Code, rec.Body.String())
+	}
+	var initial update.Status
+	if err := json.Unmarshal(rec.Body.Bytes(), &initial); err != nil {
+		t.Fatalf("decode 202: %v", err)
+	}
+	if initial.State != update.StateStaging || initial.Progress == nil || initial.Progress.Phase != "starting" {
+		t.Fatalf("expected immediate starting progress on 202, got %+v", initial)
+	}
+
+	<-started
+	// Before the worker writes fresh progress.json, GET ignores the stale file and serves synthetic starting progress.
+	rec = httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
+	var st update.Status
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatalf("decode starting GET: %v", err)
+	}
+	if st.Progress == nil || st.Progress.Phase != "starting" {
+		t.Fatalf("expected starting progress before worker writes, got %+v", st.Progress)
+	}
+
+	// Worker writes live pulling progress -> GET exposes it immediately.
+	if err := update.WriteProgress(dir, update.Progress{
+		Phase:       "pulling",
+		Bytes:       25_000_000,
+		BytesTotal:  50_000_000,
+		Steps:       5,
+		StepsTotal:  10,
+		StepsCached: 310,
+		StartedAt:   now,
+		UpdatedAt:   now.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("WriteProgress pulling: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
+	st = update.Status{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatalf("decode pulling GET: %v", err)
+	}
+	if st.State != update.StateStaging || st.Progress == nil || st.Progress.Phase != "pulling" || st.Progress.Bytes != 25_000_000 || st.Progress.StepsCached != 310 {
+		t.Fatalf("expected live pulling progress, got %+v", st)
+	}
+
+	// If the worker cleans up progress.json right before exiting, GET retains the last observed progress
+	// instead of flashing backwards to "starting".
+	update.ClearProgress(dir)
+	rec = httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
+	st = update.Status{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatalf("decode pre-exit GET: %v", err)
+	}
+	if st.Progress == nil || st.Progress.Phase != "pulling" || st.Progress.Bytes != 25_000_000 {
+		t.Fatalf("expected last observed pulling progress rather than flash-back to starting, got %+v", st.Progress)
+	}
+
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		rec = httptest.NewRecorder()
+		uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
+		st = update.Status{}
+		_ = json.Unmarshal(rec.Body.Bytes(), &st)
+		if st.State == update.StateStaged {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if st.State != update.StateStaged || st.Progress != nil {
+		t.Fatalf("expected staged with nil progress after completion, got %+v", st)
+	}
+	if p, err := update.ReadProgress(dir); err != nil || p != nil {
+		t.Fatalf("expected progress.json removed on disk after completion, got p=%+v err=%v", p, err)
+	}
+}

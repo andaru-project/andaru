@@ -37,16 +37,18 @@ type Deployment struct {
 
 // Status is the persisted and API-served software update state for an Andaru appliance.
 type Status struct {
-	Supported      bool        `json:"supported"`
-	State          string      `json:"state"`
-	Booted         *Deployment `json:"booted,omitempty"`
-	Available      *Deployment `json:"available,omitempty"`
-	Staged         *Deployment `json:"staged,omitempty"`
-	Rollback       *Deployment `json:"rollback,omitempty"`
-	RollbackQueued bool        `json:"rollbackQueued,omitempty"`
-	CheckedAt      *time.Time  `json:"checkedAt,omitempty"`
-	Error          string      `json:"error,omitempty"`
-	RebootNeeded   bool        `json:"rebootNeeded"`
+	Supported      bool              `json:"supported"`
+	State          string            `json:"state"`
+	Booted         *Deployment       `json:"booted,omitempty"`
+	Available      *Deployment       `json:"available,omitempty"`
+	Download       *DownloadEstimate `json:"download,omitempty"`
+	Progress       *Progress         `json:"progress,omitempty"`
+	Staged         *Deployment       `json:"staged,omitempty"`
+	Rollback       *Deployment       `json:"rollback,omitempty"`
+	RollbackQueued bool              `json:"rollbackQueued,omitempty"`
+	CheckedAt      *time.Time        `json:"checkedAt,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	RebootNeeded   bool              `json:"rebootNeeded"`
 }
 
 // CommandRunner runs a host command and returns its combined or standard output.
@@ -54,10 +56,11 @@ type CommandRunner func(ctx context.Context, name string, args ...string) ([]byt
 
 // Manager executes bootc update operations and persists status into StateDir/update/status.json.
 type Manager struct {
-	StateDir  string
-	Run       CommandRunner
-	CheckIdle func(context.Context) error
-	Now       func() time.Time
+	StateDir        string
+	Run             CommandRunner
+	RunWithProgress ProgressRunner
+	CheckIdle       func(context.Context) error
+	Now             func() time.Time
 }
 
 // DefaultCommandRunner executes host commands via os/exec.
@@ -93,38 +96,42 @@ func ReadStatus(stateDir string) (Status, error) {
 
 // WriteStatus persists status atomically inside stateDir/update/status.json (mode 0600).
 func WriteStatus(stateDir string, st Status) error {
-	dir := filepath.Join(stateDir, "update")
+	return writeAtomicJSON(StatusPath(stateDir), st)
+}
+
+func writeAtomicJSON(targetPath string, value any) error {
+	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create update state dir: %w", err)
 	}
-	raw, err := json.MarshalIndent(st, "", "  ")
+	raw, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode update status: %w", err)
+		return fmt.Errorf("encode update json: %w", err)
 	}
 	raw = append(raw, '\n')
-	tmp, err := os.CreateTemp(dir, "status-*.tmp")
+	tmp, err := os.CreateTemp(dir, filepath.Base(targetPath)+"-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create temp update status: %w", err)
+		return fmt.Errorf("create temp update file: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("chmod temp update status: %w", err)
+		return fmt.Errorf("chmod temp update file: %w", err)
 	}
 	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("write temp update status: %w", err)
+		return fmt.Errorf("write temp update file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("sync temp update status: %w", err)
+		return fmt.Errorf("sync temp update file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp update status: %w", err)
+		return fmt.Errorf("close temp update file: %w", err)
 	}
-	if err := os.Rename(tmpPath, StatusPath(stateDir)); err != nil {
-		return fmt.Errorf("publish update status: %w", err)
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return fmt.Errorf("publish update file: %w", err)
 	}
 	return nil
 }
@@ -293,7 +300,7 @@ func (m Manager) Check(ctx context.Context) (Status, error) {
 	prev, _ := ReadStatus(m.StateDir)
 	now := m.now()
 
-	_, checkErr := m.run(ctx, bootcBinary, "upgrade", "--check")
+	checkOut, checkErr := m.run(ctx, bootcBinary, "upgrade", "--check")
 	if checkErr != nil && isMissing(checkErr) {
 		st := Status{Supported: false, State: StateUnsupported, CheckedAt: &now}
 		return st, WriteStatus(m.StateDir, st)
@@ -315,11 +322,38 @@ func (m Manager) Check(ctx context.Context) (Status, error) {
 		_ = WriteStatus(m.StateDir, st)
 		return st, checkErr
 	}
+	if st.State == StateAvailable {
+		st.Download = ParseCheckEstimate(checkOut)
+	}
 	return st, WriteStatus(m.StateDir, st)
 }
 
+func (m Manager) runStageWithProgress(ctx context.Context, onLine func([]byte)) ([]byte, error) {
+	if m.RunWithProgress != nil {
+		return m.runProgressWithFallback(ctx, m.RunWithProgress, m.run, onLine)
+	}
+	if m.Run != nil {
+		return m.Run(ctx, bootcBinary, "upgrade", "--quiet")
+	}
+	return m.runProgressWithFallback(ctx, DefaultProgressRunner, DefaultCommandRunner, onLine)
+}
+
+func (m Manager) runProgressWithFallback(ctx context.Context, runProg ProgressRunner, runPlain CommandRunner, onLine func([]byte)) ([]byte, error) {
+	sawLine := false
+	wrapped := func(line []byte) {
+		sawLine = true
+		onLine(line)
+	}
+	out, err := runProg(ctx, wrapped, bootcBinary, "upgrade", "--quiet", "--progress-fd", "3")
+	// Fall back only when bootc itself rejected --progress-fd (never on network/auth/cancel/missing errors).
+	if err != nil && !sawLine && ctx.Err() == nil && !isMissing(err) && isUnsupportedProgressFD(out) {
+		return runPlain(ctx, bootcBinary, "upgrade", "--quiet")
+	}
+	return out, err
+}
+
 // Stage verifies the engine is idle, downloads and stages the next signed image via `bootc upgrade`,
-// and persists the resulting staged status. It never reboots automatically.
+// streams progress snapshots while running, and persists the resulting staged status. It never reboots automatically.
 func (m Manager) Stage(ctx context.Context) (Status, error) {
 	unlock, err := acquireLock(m.StateDir)
 	if err != nil {
@@ -332,7 +366,28 @@ func (m Manager) Stage(ctx context.Context) (Status, error) {
 	}
 	prev, _ := ReadStatus(m.StateDir)
 
-	if _, err := m.run(ctx, bootcBinary, "upgrade", "--quiet"); err != nil {
+	startedAt := m.now()
+	cur := StartingProgress(startedAt)
+	_ = WriteProgress(m.StateDir, cur)
+	defer ClearProgress(m.StateDir)
+
+	lastWrite := startedAt
+	onLine := func(line []byte) {
+		now := m.now()
+		next, ok := ApplyProgressLine(cur, line, now)
+		if !ok {
+			return
+		}
+		reachedFull := next.BytesTotal > 0 && next.Bytes >= next.BytesTotal && !(cur.BytesTotal > 0 && cur.Bytes >= cur.BytesTotal)
+		important := next.Phase != cur.Phase || next.Steps != cur.Steps || reachedFull
+		cur = next
+		if important || now.Sub(lastWrite) >= progressWriteInterval {
+			lastWrite = now
+			_ = WriteProgress(m.StateDir, cur)
+		}
+	}
+
+	if _, err := m.runStageWithProgress(ctx, onLine); err != nil {
 		return m.recordFailure(prev, err, nil), err
 	}
 
