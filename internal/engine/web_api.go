@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/bus"
@@ -110,7 +112,7 @@ func managementOrigins(configured []string) (map[string]struct{}, map[string]str
 	hosts := make(map[string]struct{}, len(configured))
 	for _, raw := range configured {
 		parsed, err := url.Parse(raw)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != raw {
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || !validOriginHostname(parsed.Hostname()) || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != raw {
 			return nil, nil, errors.New("management origins must be exact HTTPS origins without paths, queries, fragments, or credentials")
 		}
 		if _, duplicate := origins[raw]; duplicate {
@@ -122,12 +124,25 @@ func managementOrigins(configured []string) (map[string]struct{}, map[string]str
 	return origins, hosts, nil
 }
 
-const managementOriginsFile = "management-origins.json"
+func validOriginHostname(host string) bool {
+	if host == "" {
+		return false
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return !addr.Is4In6() && addr.String() == host
+	}
+	return addon.ValidHostname(host)
+}
+
+const (
+	managementOriginsFile     = "management-origins.json"
+	maxManagementOriginsBytes = 64 << 10
+)
 
 // reconcileManagementOrigins compares the configured HTTPS management origins against the persisted set
-// from the previous startup. If any previously configured origin was dropped (or the persisted file is unreadable),
-// all active browser sessions are revoked so a retired host's __Host-andaru_session cookie cannot be replayed
-// if that hostname is later reassigned to an add-on WebUI.
+// from the previous startup. If any previously configured origin was dropped (or the persisted file is missing
+// on first upgrade from a pre-file release, or unreadable), all active browser sessions are revoked so a retired
+// host's __Host-andaru_session cookie cannot be replayed if that hostname is later reassigned to an add-on WebUI.
 func reconcileManagementOrigins(ctx context.Context, stateDir string, identities identity.Store, configured []string) (revoked bool, err error) {
 	if stateDir == "" || identities == nil {
 		return false, nil
@@ -136,14 +151,26 @@ func reconcileManagementOrigins(ctx context.Context, stateDir string, identities
 	slices.Sort(current)
 	current = slices.Compact(current)
 
+	data, mErr := json.Marshal(current)
+	if mErr != nil {
+		return false, mErr
+	}
+	if len(data) > maxManagementOriginsBytes {
+		return false, errors.New("configured management origins exceed size limit")
+	}
+
 	path := filepath.Join(stateDir, managementOriginsFile)
 	needRevoke := false
 	needWrite := false
 
-	raw, readErr := readFileNoFollow(path, 64<<10)
+	raw, readErr := readFileNoFollow(path, maxManagementOriginsBytes+1)
 	if errors.Is(readErr, fs.ErrNotExist) {
+		// On a fresh install there are zero sessions (no-op); on an upgrade from a build before
+		// management-origins.json existed, revoking once prevents pre-upgrade sessions from surviving
+		// an origin change performed during the upgrade.
+		needRevoke = true
 		needWrite = true
-	} else if readErr != nil {
+	} else if readErr != nil || len(raw) > maxManagementOriginsBytes {
 		needRevoke = true
 		needWrite = true
 	} else {
@@ -171,14 +198,12 @@ func reconcileManagementOrigins(ctx context.Context, stateDir string, identities
 		if revErr != nil {
 			return false, revErr
 		}
-		revoked = true
-		slog.InfoContext(ctx, "revoked browser sessions after management origin change", "sessions", count)
+		if count > 0 {
+			revoked = true
+			slog.InfoContext(ctx, "revoked browser sessions after management origin change", "sessions", count)
+		}
 	}
 	if needWrite {
-		data, mErr := json.Marshal(current)
-		if mErr != nil {
-			return revoked, mErr
-		}
 		if wErr := writeFileAtomic(path, data, 0o600); wErr != nil {
 			return revoked, wErr
 		}

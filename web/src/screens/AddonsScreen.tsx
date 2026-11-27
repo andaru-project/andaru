@@ -207,7 +207,7 @@ export function AddonsScreen({ api, session, onSaved, onSessionLost }: AddonsScr
                       </Text>
 
                       <Group gap="xs" wrap="wrap">
-                        {!item.installed && canWriteConfig && (
+                        {!item.installed && canReadConfig && canWriteConfig && (
                           <Button
                             size="xs"
                             loading={busy}
@@ -217,7 +217,7 @@ export function AddonsScreen({ api, session, onSaved, onSessionLost }: AddonsScr
                             {item.staged.present || item.staged.staging ? 'Install' : 'Stage image and continue'}
                           </Button>
                         )}
-                        {!item.installed && !canWriteConfig && canManage && !item.staged.present && !item.staged.staging && (
+                        {!item.installed && !(canReadConfig && canWriteConfig) && canManage && !item.staged.present && !item.staged.staging && (
                           <Button size="xs" variant="default" loading={busy} onClick={() => void stageAndContinue(item)}>
                             Stage image
                           </Button>

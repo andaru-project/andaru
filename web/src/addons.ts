@@ -165,7 +165,10 @@ export function buildSettingsPayload(
       }
       case 'string-list': {
         const text = typeof draft.values[prop.name] === 'string' ? (draft.values[prop.name] as string) : '';
-        const list = text.split('\n').map((line) => line.trim()).filter(Boolean);
+        const list = text
+          .split('\n')
+          .map((line) => (prop.itemFormat ? line.trim() : line))
+          .filter((line) => line.trim() !== '');
         const keepEmpty = prop.default !== undefined && (prop.minItems ?? 0) === 0;
         if (list.length > 0 || prop.required || keepEmpty) {
           settings[prop.name] = list;
@@ -178,9 +181,15 @@ export function buildSettingsPayload(
         break;
       }
       case 'secret-reference': {
-        const existing = draft.existingSecrets[prop.name];
-        const typed = draft.secretInputs[prop.name] ?? '';
-        const removed = Boolean(draft.secretRemovals[prop.name]);
+        const existing = Object.hasOwn(draft.existingSecrets, prop.name)
+          ? draft.existingSecrets[prop.name]
+          : undefined;
+        const typed = Object.hasOwn(draft.secretInputs, prop.name)
+          ? draft.secretInputs[prop.name]
+          : '';
+        const removed = Object.hasOwn(draft.secretRemovals, prop.name)
+          ? Boolean(draft.secretRemovals[prop.name])
+          : false;
         if (removed) break;
         if (typed !== '') {
           const write: SecretWrite = {

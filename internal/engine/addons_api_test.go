@@ -386,10 +386,22 @@ func TestParseJournalOutputBoundsTailAndUTF8(t *testing.T) {
 			t.Fatalf("invalid UTF-8 in journal line: %q", line)
 		}
 	}
+	// Cutoff landing immediately after '\n' keeps the complete first retained line.
+	lines, cursor, truncated = parseJournalOutput([]byte("old\nkept1\nkept2"), false, len("kept1\nkept2"))
+	if !truncated || cursor != "" || !slices.Equal(lines, []string{"kept1", "kept2"}) {
+		t.Fatalf("line-boundary cutoff dropped first line: lines=%v truncated=%v", lines, truncated)
+	}
 }
 
-func TestManagementOriginsRejectsEmptyHostname(t *testing.T) {
-	if _, _, err := managementOrigins([]string{"https://:8443"}); err == nil {
-		t.Fatal("expected https://:8443 to be rejected")
+func TestManagementOriginsRejectsEmptyAndNoncanonicalHostnames(t *testing.T) {
+	for _, bad := range []string{"https://:8443", "https://127.1", "https://0xc0a80101", "https://3232235777"} {
+		if _, _, err := managementOrigins([]string{bad}); err == nil {
+			t.Fatalf("expected %q to be rejected", bad)
+		}
+	}
+	for _, good := range []string{"https://fw.lan", "https://192.168.1.1:8443", "https://[::1]:8443"} {
+		if _, _, err := managementOrigins([]string{good}); err != nil {
+			t.Fatalf("expected %q to be accepted: %v", good, err)
+		}
 	}
 }

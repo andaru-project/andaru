@@ -3,6 +3,9 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +67,7 @@ type addonsAPI struct {
 	mu       sync.Mutex
 	staging  map[string]bool
 	stageErr map[string]string
+	stageSeq uint64
 }
 
 func newAddonsAPI(catalog *addon.Catalog, store addonSnapshotReader, stateDir, root string, origins []string, runner realizeRunner, coordinator *securityCoordinator) *addonsAPI {
@@ -333,12 +337,7 @@ func (a *addonsAPI) readLiveAppliedImages() map[string]string {
 	return out
 }
 
-func (a *addonsAPI) buildStaged(ctx context.Context, m *addon.Manifest, st addon.StagedState, stErr error) addonStagedView {
-	a.mu.Lock()
-	staging := a.staging[m.Slug]
-	lastErr := a.stageErr[m.Slug]
-	a.mu.Unlock()
-
+func (a *addonsAPI) buildStaged(ctx context.Context, m *addon.Manifest, st addon.StagedState, stErr error, staging bool, lastErr string) addonStagedView {
 	v := addonStagedView{
 		Digest:  m.Runtime.Image,
 		Staging: staging,
@@ -358,6 +357,62 @@ func (a *addonsAPI) buildStaged(ctx context.Context, m *addon.Manifest, st addon
 		v.Error = lastErr
 	}
 	return v
+}
+
+type stagedSnapshot struct {
+	state    addon.StagedState
+	err      error
+	staging  map[string]bool
+	stageErr map[string]string
+}
+
+// readStagedSnapshot reads staged.json and the in-memory staging map consistently: if a background
+// stage completes while staged.json is being read, staged.json is re-read once so callers never
+// observe staging=false with stale present=false.
+func (a *addonsAPI) readStagedSnapshot() stagedSnapshot {
+	for range 2 {
+		a.mu.Lock()
+		seqBefore := a.stageSeq
+		a.mu.Unlock()
+
+		st, stErr := a.readStagedState()
+
+		a.mu.Lock()
+		seqAfter := a.stageSeq
+		if seqAfter == seqBefore {
+			snap := stagedSnapshot{
+				state:    st,
+				err:      stErr,
+				staging:  make(map[string]bool, len(a.staging)),
+				stageErr: make(map[string]string, len(a.stageErr)),
+			}
+			for k, v := range a.staging {
+				snap.staging[k] = v
+			}
+			for k, v := range a.stageErr {
+				snap.stageErr[k] = v
+			}
+			a.mu.Unlock()
+			return snap
+		}
+		a.mu.Unlock()
+	}
+	st, stErr := a.readStagedState()
+	a.mu.Lock()
+	snap := stagedSnapshot{
+		state:    st,
+		err:      stErr,
+		staging:  make(map[string]bool, len(a.staging)),
+		stageErr: make(map[string]string, len(a.stageErr)),
+	}
+	for k, v := range a.staging {
+		snap.staging[k] = v
+	}
+	for k, v := range a.stageErr {
+		snap.stageErr[k] = v
+	}
+	a.mu.Unlock()
+	return snap
 }
 
 func (a *addonsAPI) buildRuntime(ctx context.Context, m *addon.Manifest, appliedImages map[string]string, safeMode generation.SafeModeStatus) addonRuntimeView {
@@ -391,11 +446,7 @@ func (a *addonsAPI) buildRuntime(ctx context.Context, m *addon.Manifest, applied
 	case safeMode.Active && v.ActiveState != "active":
 		v.Health = "held"
 	case v.ActiveState == "active":
-		if m.Health != nil {
-			v.Health = "healthy"
-		} else {
-			v.Health = "running"
-		}
+		v.Health = "running"
 	case v.ActiveState == "activating" || v.ActiveState == "reloading":
 		v.Health = "starting"
 	case v.ActiveState == "failed":
@@ -429,8 +480,7 @@ func (a *addonsAPI) buildSummary(
 	m *addon.Manifest,
 	canReadConfig bool,
 	savedMap map[string]addonSavedEntry,
-	st addon.StagedState,
-	stErr error,
+	snap stagedSnapshot,
 	appliedImages map[string]string,
 	safeMode generation.SafeModeStatus,
 ) addonSummary {
@@ -446,7 +496,7 @@ func (a *addonsAPI) buildSummary(
 		Installed:          installed,
 		HasWebUI:           m.WebUI != nil,
 		UnreviewedBusCount: countUnreviewedBusGrants(m, saved, installed),
-		Staged:             a.buildStaged(ctx, m, st, stErr),
+		Staged:             a.buildStaged(ctx, m, snap.state, snap.err, snap.staging[m.Slug], snap.stageErr[m.Slug]),
 		Runtime:            a.buildRuntime(ctx, m, appliedImages, safeMode),
 	}
 	if canReadConfig && installed {
@@ -526,12 +576,12 @@ func (a *addonsAPI) handleList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on configuration state is temporarily unavailable.")
 		return
 	}
-	st, stErr := a.readStagedState()
+	snap := a.readStagedSnapshot()
 	appliedImages := a.readLiveAppliedImages()
 	items := []addonSummary{}
 	if a.catalog != nil {
 		for _, m := range a.catalog.All() {
-			items = append(items, a.buildSummary(r.Context(), m, canReadConfig, savedMap, st, stErr, appliedImages, safeMode))
+			items = append(items, a.buildSummary(r.Context(), m, canReadConfig, savedMap, snap, appliedImages, safeMode))
 		}
 	}
 	writeJSON(w, r, http.StatusOK, addonListResponse{Items: items, SafeMode: safeMode})
@@ -547,9 +597,9 @@ func (a *addonsAPI) handleDetail(w http.ResponseWriter, r *http.Request, m *addo
 		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on configuration state is temporarily unavailable.")
 		return
 	}
-	st, stErr := a.readStagedState()
+	snap := a.readStagedSnapshot()
 	appliedImages := a.readLiveAppliedImages()
-	summary := a.buildSummary(r.Context(), m, canReadConfig, savedMap, st, stErr, appliedImages, safeMode)
+	summary := a.buildSummary(r.Context(), m, canReadConfig, savedMap, snap, appliedImages, safeMode)
 	saved, installed := savedMap[m.ID]
 	writeJSON(w, r, http.StatusOK, addonDetailResponse{
 		addonSummary: summary,
@@ -567,6 +617,7 @@ func (a *addonsAPI) claimStage(slug string) (release func(stageErrMsg string), o
 	}
 	a.staging[slug] = true
 	delete(a.stageErr, slug)
+	a.stageSeq++
 	return func(stageErrMsg string) {
 		a.mu.Lock()
 		delete(a.staging, slug)
@@ -575,38 +626,54 @@ func (a *addonsAPI) claimStage(slug string) (release func(stageErrMsg string), o
 		} else {
 			delete(a.stageErr, slug)
 		}
+		a.stageSeq++
 		a.mu.Unlock()
 	}, true
 }
 
-func (a *addonsAPI) requireAuditReady(w http.ResponseWriter, r *http.Request) bool {
+// beginAddonAudit persists a durable audit intent before invoking the privileged realizer, failing closed
+// with 503 AUDIT_UNAVAILABLE if audit storage cannot commit the intent. The returned finish callback records
+// the outcome with a fresh timeout context so canceled or timed-out requests never drop their outcome.
+func (a *addonsAPI) beginAddonAudit(w http.ResponseWriter, r *http.Request, action audit.Action, slug string) (finish func(audit.Result), ok bool) {
 	if a.coordinator == nil || a.coordinator.audits == nil {
-		return true
+		return func(audit.Result) {}, true
 	}
-	health, err := a.coordinator.audits.Health(r.Context())
-	if err != nil || health.StorageFailure || health.IntegrityFailure || health.GeneralSaturated {
+	actor, hasActor := actorFromRequest(r)
+	if !hasActor {
+		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
+		return nil, false
+	}
+	var rnd [16]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
 		writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Security audit storage is unavailable.")
-		return false
+		return nil, false
 	}
-	return true
-}
-
-func (a *addonsAPI) recordAuditActor(actor requestActor, ok bool, action audit.Action, slug string, result audit.Result) {
-	if !ok || a.coordinator == nil || a.coordinator.audits == nil {
-		return
-	}
-	auditCtx, cancel := context.WithTimeout(context.Background(), addonAuditTimeout)
-	defer cancel()
-	if _, err := a.coordinator.audits.Append(auditCtx, audit.Event{
-		Actor:    actor.Actor,
-		Source:   actor.Source,
-		Action:   action,
-		Target:   slug,
-		Result:   result,
-		Category: audit.CategoryGeneral,
+	opID := "addon-" + hex.EncodeToString(rnd[:])
+	sum := sha256.Sum256([]byte(string(action) + "\x00" + slug))
+	if _, err := a.coordinator.audits.Begin(r.Context(), audit.Intent{
+		OperationID: opID,
+		Actor:       actor.Actor,
+		Source:      actor.Source,
+		Action:      action,
+		Target:      slug,
+		RequestHash: hex.EncodeToString(sum[:]),
+		Category:    audit.CategoryGeneral,
 	}); err != nil {
-		slog.Warn("addons: append audit event", "action", action, "slug", slug, "error", err)
+		slog.WarnContext(r.Context(), "addons: begin audit intent", "action", action, "slug", slug, "error", err)
+		writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Security audit storage is unavailable.")
+		return nil, false
 	}
+	return func(result audit.Result) {
+		auditCtx, cancel := context.WithTimeout(context.Background(), addonAuditTimeout)
+		defer cancel()
+		if err := a.coordinator.audits.Finish(auditCtx, audit.Outcome{
+			OperationID: opID,
+			Result:      result,
+			Target:      slug,
+		}); err != nil {
+			slog.Warn("addons: finish audit outcome", "action", action, "slug", slug, "operationId", opID, "error", err)
+		}
+	}, true
 }
 
 // handleStage runs `addon-stage` asynchronously so slow image downloads never hit the 180s web
@@ -616,37 +683,35 @@ func (a *addonsAPI) handleStage(w http.ResponseWriter, r *http.Request, m *addon
 		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on image staging is unavailable.")
 		return
 	}
-	if !a.requireAuditReady(w, r) {
-		return
-	}
 	release, ok := a.claimStage(m.Slug)
 	if !ok {
 		writeError(w, r, http.StatusConflict, "STAGE_IN_PROGRESS", "Image staging is already running for this add-on.")
 		return
 	}
-	actor, hasActor := actorFromRequest(r)
+	finishAudit, ok := a.beginAddonAudit(w, r, audit.ActionAddonStaged, m.Slug)
+	if !ok {
+		release("")
+		return
+	}
 	go func() {
 		stageCtx, cancel := context.WithTimeout(context.Background(), addonStageTimeout)
 		defer cancel()
 		if err := a.runner.Realize(stageCtx, "addon-stage", 0, m.Slug); err != nil {
-			a.recordAuditActor(actor, hasActor, audit.ActionAddonStaged, m.Slug, audit.ResultFailure)
+			finishAudit(audit.ResultFailure)
 			slog.Warn("addons: stage image failed", "slug", m.Slug, "error", err)
 			release("Failed to pull and verify the add-on container image.")
 			return
 		}
-		a.recordAuditActor(actor, hasActor, audit.ActionAddonStaged, m.Slug, audit.ResultSuccess)
+		finishAudit(audit.ResultSuccess)
 		release("")
 	}()
-	st, stErr := a.readStagedState()
-	writeJSON(w, r, http.StatusAccepted, a.buildStaged(r.Context(), m, st, stErr))
+	snap := a.readStagedSnapshot()
+	writeJSON(w, r, http.StatusAccepted, a.buildStaged(r.Context(), m, snap.state, snap.err, snap.staging[m.Slug], snap.stageErr[m.Slug]))
 }
 
 func (a *addonsAPI) handleUnstage(w http.ResponseWriter, r *http.Request, m *addon.Manifest) {
 	if a.runner == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on image staging is unavailable.")
-		return
-	}
-	if !a.requireAuditReady(w, r) {
 		return
 	}
 	release, ok := a.claimStage(m.Slug)
@@ -695,11 +760,14 @@ func (a *addonsAPI) handleUnstage(w http.ResponseWriter, r *http.Request, m *add
 		}
 	}
 
-	actor, hasActor := actorFromRequest(r)
+	finishAudit, ok := a.beginAddonAudit(w, r, audit.ActionAddonUnstaged, m.Slug)
+	if !ok {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), addonControlTimeout)
 	defer cancel()
 	if err := a.runner.Realize(ctx, "addon-unstage", 0, m.Slug); err != nil {
-		a.recordAuditActor(actor, hasActor, audit.ActionAddonUnstaged, m.Slug, audit.ResultFailure)
+		finishAudit(audit.ResultFailure)
 		if strings.Contains(err.Error(), "still referenced") {
 			writeError(w, r, http.StatusConflict, "ADDON_IMAGE_IN_USE", "This add-on image is still referenced by a retained generation.")
 			return
@@ -708,16 +776,13 @@ func (a *addonsAPI) handleUnstage(w http.ResponseWriter, r *http.Request, m *add
 		writeError(w, r, http.StatusBadGateway, "ADDON_UNSTAGE_FAILED", "Failed to remove the staged add-on container image.")
 		return
 	}
-	a.recordAuditActor(actor, hasActor, audit.ActionAddonUnstaged, m.Slug, audit.ResultSuccess)
+	finishAudit(audit.ResultSuccess)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *addonsAPI) handleControl(w http.ResponseWriter, r *http.Request, m *addon.Manifest, action string) {
 	if a.runner == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on lifecycle control is unavailable.")
-		return
-	}
-	if !a.requireAuditReady(w, r) {
 		return
 	}
 	safeMode := generation.ReadSafeMode(a.systemRoot, a.stateDir)
@@ -736,11 +801,14 @@ func (a *addonsAPI) handleControl(w http.ResponseWriter, r *http.Request, m *add
 		"restart": audit.ActionAddonRestarted,
 	}[action]
 
-	actor, hasActor := actorFromRequest(r)
+	finishAudit, ok := a.beginAddonAudit(w, r, auditAction, m.Slug)
+	if !ok {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), addonControlTimeout)
 	defer cancel()
 	if err := a.runner.Realize(ctx, "addon-ctl", 0, action, m.Slug); err != nil {
-		a.recordAuditActor(actor, hasActor, auditAction, m.Slug, audit.ResultFailure)
+		finishAudit(audit.ResultFailure)
 		if strings.Contains(err.Error(), "SAFE_MODE_ACTIVE") {
 			writeError(w, r, http.StatusConflict, "SAFE_MODE_ACTIVE", "Add-ons cannot be controlled while safe mode or settings hold is active.")
 			return
@@ -753,7 +821,7 @@ func (a *addonsAPI) handleControl(w http.ResponseWriter, r *http.Request, m *add
 		writeError(w, r, http.StatusBadGateway, "ADDON_CONTROL_FAILED", "Failed to "+action+" add-on unit.")
 		return
 	}
-	a.recordAuditActor(actor, hasActor, auditAction, m.Slug, audit.ResultSuccess)
+	finishAudit(audit.ResultSuccess)
 	writeJSON(w, r, http.StatusOK, a.buildRuntime(r.Context(), m, appliedImages, generation.ReadSafeMode(a.systemRoot, a.stateDir)))
 }
 
@@ -876,20 +944,27 @@ func readBoundedAddonLogFile(stateDir, slug, storage, relPath string, maxLines i
 	}
 	truncated := false
 	size := info.Size()
+	readLimit := int64(maxAddonLogBytes)
+	startsOnLineBoundary := false
 	if size > maxAddonLogBytes {
-		if _, err := f.Seek(size-maxAddonLogBytes, io.SeekStart); err != nil {
+		// Seek one byte earlier so we can see whether the retained window begins right after '\n'.
+		if _, err := f.Seek(size-maxAddonLogBytes-1, io.SeekStart); err != nil {
 			return nil, false, err
 		}
+		readLimit = maxAddonLogBytes + 1
 		truncated = true
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxAddonLogBytes))
+	raw, err := io.ReadAll(io.LimitReader(f, readLimit))
 	if err != nil {
 		return nil, false, err
 	}
-	if truncated {
-		// Drop the leading partial line after seeking into the middle of the file.
-		if nl := bytes.IndexByte(raw, '\n'); nl >= 0 {
-			raw = raw[nl+1:]
+	if truncated && len(raw) > 0 {
+		startsOnLineBoundary = raw[0] == '\n'
+		raw = raw[1:]
+		if !startsOnLineBoundary {
+			if nl := bytes.IndexByte(raw, '\n'); nl >= 0 {
+				raw = raw[nl+1:]
+			}
 		}
 	}
 	text := strings.TrimRight(string(raw), "\n")
@@ -957,11 +1032,13 @@ func parseJournalOutput(rawBytes []byte, droppedHead bool, limit int) ([]string,
 	} else if c, ok := strings.CutPrefix(string(data), "-- cursor: "); ok {
 		return []string{}, strings.TrimSpace(c), truncated
 	}
+	startsOnLineBoundary := false
 	if len(data) > limit {
+		startsOnLineBoundary = data[len(data)-limit-1] == '\n'
 		data = data[len(data)-limit:]
 		truncated = true
 	}
-	if truncated {
+	if truncated && !startsOnLineBoundary {
 		// Advance past any partial leading UTF-8 rune or partial leading line.
 		for len(data) > 0 && !utf8.RuneStart(data[0]) {
 			data = data[1:]

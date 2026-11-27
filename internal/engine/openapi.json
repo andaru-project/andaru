@@ -7718,7 +7718,9 @@
           "200": { "description": "Updated add-on runtime state" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "description": "Add-on not found" },
-          "409": { "description": "Safe mode active or add-on not applied" }
+          "409": { "description": "Safe mode active or add-on not applied" },
+          "502": { "description": "Add-on lifecycle command failed" },
+          "503": { "description": "Lifecycle control or audit storage unavailable" }
         }
       }
     },
@@ -7734,7 +7736,9 @@
           "200": { "description": "Updated add-on runtime state" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "description": "Add-on not found" },
-          "409": { "description": "Safe mode active or add-on not applied" }
+          "409": { "description": "Safe mode active or add-on not applied" },
+          "502": { "description": "Add-on lifecycle command failed" },
+          "503": { "description": "Lifecycle control or audit storage unavailable" }
         }
       }
     },
@@ -7750,7 +7754,9 @@
           "200": { "description": "Updated add-on runtime state" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "description": "Add-on not found" },
-          "409": { "description": "Safe mode active or add-on not applied" }
+          "409": { "description": "Safe mode active or add-on not applied" },
+          "502": { "description": "Add-on lifecycle command failed" },
+          "503": { "description": "Lifecycle control or audit storage unavailable" }
         }
       }
     },

@@ -7,7 +7,7 @@ it('renders paragraphs, lists, emphasis, code, and safe http(s) links', () => {
     'Use `TS_AUTHKEY` for **unattended** *setup*.',
     '',
     '- Read [Tailscale docs](https://tailscale.com/kb)',
-    '- Check status',
+    '- See [reference](https://example.com/Example_(reference))',
   ].join('\n');
 
   const { container } = render(<AddonMarkdown id="desc-1" source={source} />);
@@ -20,6 +20,8 @@ it('renders paragraphs, lists, emphasis, code, and safe http(s) links', () => {
   expect(link).toHaveAttribute('href', 'https://tailscale.com/kb');
   expect(link).toHaveAttribute('target', '_blank');
   expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  const parenLink = screen.getByRole('link', { name: 'reference' });
+  expect(parenLink).toHaveAttribute('href', 'https://example.com/Example_(reference)');
   expect(container.querySelectorAll('li')).toHaveLength(2);
 });
 

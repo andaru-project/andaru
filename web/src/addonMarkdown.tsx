@@ -25,7 +25,18 @@ function renderInline(line: string, keyPrefix: string): ReactNode[] {
     if (ch === '[') {
       const closeBracket = line.indexOf(']', cursor + 1);
       if (closeBracket > cursor + 1 && line[closeBracket + 1] === '(') {
-        const closeParen = line.indexOf(')', closeBracket + 2);
+        let depth = 0;
+        let closeParen = -1;
+        for (let idx = closeBracket + 2; idx < line.length; idx++) {
+          if (line[idx] === '(') depth++;
+          else if (line[idx] === ')') {
+            if (depth === 0) {
+              closeParen = idx;
+              break;
+            }
+            depth--;
+          }
+        }
         if (closeParen > closeBracket + 2) {
           const label = line.slice(cursor + 1, closeBracket);
           const href = safeExternalHttpUrl(line.slice(closeBracket + 2, closeParen));

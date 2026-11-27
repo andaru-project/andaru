@@ -220,9 +220,15 @@ export function AddonPropertyForm({
         );
 
       case 'secret-reference': {
-        const existing = draft.existingSecrets[prop.name];
-        const removed = Boolean(draft.secretRemovals[prop.name]);
-        const typed = draft.secretInputs[prop.name] ?? '';
+        const existing = Object.hasOwn(draft.existingSecrets, prop.name)
+          ? draft.existingSecrets[prop.name]
+          : undefined;
+        const removed = Object.hasOwn(draft.secretRemovals, prop.name)
+          ? Boolean(draft.secretRemovals[prop.name])
+          : false;
+        const typed = Object.hasOwn(draft.secretInputs, prop.name)
+          ? draft.secretInputs[prop.name]
+          : '';
         const statusHint = existing
           ? existing.unresolved
             ? `Unresolved secret (${existing.secret}). Enter a new value to restore it.`

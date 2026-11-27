@@ -36,6 +36,24 @@ func TestReconcileManagementOriginsRevokesSessionsOnOriginRemoval(t *testing.T) 
 	if _, _, err := identities.BootstrapAdmin(ctx, "admin", "Admin", []byte("CorrectHorseBatteryStaple1!")); err != nil {
 		t.Fatal(err)
 	}
+	// Pre-upgrade session existing before management-origins.json is created must be revoked once.
+	preUpgrade, err := identities.AuthenticatePassword(ctx, "admin", "CorrectHorseBatteryStaple1!", "127.0.0.1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preSel, preSec, ok := splitCredential(preUpgrade.SessionCookie)
+	if !ok {
+		t.Fatal("invalid session cookie format")
+	}
+	revoked, err := reconcileManagementOrigins(ctx, stateDir, identities, []string{"https://fw.lan", "https://admin.corp:8443"})
+	if err != nil || !revoked {
+		t.Fatalf("first reconcile with pre-upgrade session: revoked=%v err=%v", revoked, err)
+	}
+	if _, err := identities.AuthenticateSession(ctx, preSel, preSec, 0, false); err == nil {
+		t.Fatal("pre-upgrade session survived initial management-origins.json creation")
+	}
+
+	// Sign in after management-origins.json exists.
 	loginRes, err := identities.AuthenticatePassword(ctx, "admin", "CorrectHorseBatteryStaple1!", "127.0.0.1", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -45,13 +63,13 @@ func TestReconcileManagementOriginsRevokesSessionsOnOriginRemoval(t *testing.T) 
 		t.Fatal("invalid session cookie format")
 	}
 
-	// First startup with two management origins: records origins without revoking.
-	revoked, err := reconcileManagementOrigins(ctx, stateDir, identities, []string{"https://fw.lan", "https://admin.corp:8443"})
+	// Unchanged restart keeps active sessions intact.
+	revoked, err = reconcileManagementOrigins(ctx, stateDir, identities, []string{"https://fw.lan", "https://admin.corp:8443"})
 	if err != nil || revoked {
-		t.Fatalf("first reconcile: revoked=%v err=%v", revoked, err)
+		t.Fatalf("unchanged reconcile: revoked=%v err=%v", revoked, err)
 	}
 	if _, err := identities.AuthenticateSession(ctx, sel, sec, 0, false); err != nil {
-		t.Fatalf("session unexpectedly revoked on first start: %v", err)
+		t.Fatalf("session unexpectedly revoked on unchanged restart: %v", err)
 	}
 
 	// Adding a third origin keeps active sessions intact.

@@ -174,10 +174,15 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
   }, [selectedLog, manifest]);
 
   const loadLogs = useCallback(
-    () => (activeLog && slug ? api.addonLogs(slug, activeLog, { lines: Number(logLinesCount) || 200 }) : Promise.resolve(undefined)),
+    async () => (activeLog && slug
+      ? { slug, stream: activeLog, data: await api.addonLogs(slug, activeLog, { lines: Number(logLinesCount) || 200 }) }
+      : undefined),
     [api, slug, activeLog, logLinesCount],
   );
   const logsResource = useResource(loadLogs, onSessionLost);
+  const currentLogs = logsResource.data && logsResource.data.slug === slug && logsResource.data.stream === activeLog
+    ? logsResource.data.data
+    : undefined;
 
   async function runLifecycle(key: string, fn: () => Promise<unknown>, notice: string) {
     setLifecycleError('');
@@ -505,7 +510,7 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                       label="Enable add-on"
                       description="Enabled add-ons are realized as systemd containers when you apply changes."
                       checked={enabled}
-                      disabled={!canWriteConfig}
+                      disabled={!canWriteConfig || saving}
                       onChange={(event) => setEnabled(event.currentTarget.checked)}
                     />
 
@@ -516,7 +521,7 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                           properties={manifest.properties ?? []}
                           draft={propDraft}
                           zones={loaded?.zones ?? []}
-                          readOnly={!canWriteConfig}
+                          readOnly={!canWriteConfig || saving}
                           errors={propErrors}
                           onChange={setPropDraft}
                         />
@@ -533,7 +538,7 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                               label={`${addonText(spec.title) || spec.name} (${spec.name})`}
                               description={spec.zoneRequired ? 'A firewall zone is required before enabling this add-on.' : 'Optional firewall zone assignment.'}
                               required={Boolean(spec.zoneRequired && enabled)}
-                              disabled={!canWriteConfig}
+                              disabled={!canWriteConfig || saving}
                               data={zoneOptions}
                               value={ifaceZones[spec.name] || null}
                               clearable={!spec.zoneRequired}
@@ -572,7 +577,7 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                                     {spec.description && <AddonMarkdown source={spec.description} />}
                                     <Select
                                       aria-label={`${section.label} permission for ${spec.topic}`}
-                                      disabled={!canWriteConfig}
+                                      disabled={!canWriteConfig || saving}
                                       data={busGrantOptions}
                                       value={decision}
                                       allowDeselect={false}
@@ -628,12 +633,12 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                   </Group>
 
                   {logsResource.error && <Alert color="red" role="alert" title="Could not load logs">{logsResource.error}</Alert>}
-                  {logsResource.data?.truncated && (
+                  {currentLogs?.truncated && (
                     <Text size="xs" c="dimmed">Showing the most recent bounded log output.</Text>
                   )}
                   <pre className="addon-log-view">
-                    {logsResource.data && logsResource.data.lines.length > 0
-                      ? logsResource.data.lines.join('\n')
+                    {currentLogs && currentLogs.lines.length > 0
+                      ? currentLogs.lines.join('\n')
                       : logsResource.loading
                         ? 'Loading logs…'
                         : 'No log entries.'}
