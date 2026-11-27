@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 )
 
 // vipDevice is the dummy interface that holds the virtual addresses; no link may take its name.
@@ -27,8 +28,7 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 		subnets = append(subnets, staticPrefixes(s)...)
 	}
 	seen := map[string]bool{}
-	var held []netip.Prefix // the valid held addresses and blocks, a single address as a /32 or /128
-	var heldNames []string
+	var held []int // the valid held addresses and blocks, by index
 	var proxies []virtualAddress
 	taken := claims(d)
 	for i, v := range d.VirtualAddresses {
@@ -54,23 +54,41 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 		}
 		// An address inside a proxy ARP entry is on its segment's subnet, so the subnet rule below refuses it too.
 		x, ok := vipPrefix(v)
-		a := x.Addr()
-		block := ok && !x.IsSingleIP()
-		other := slices.IndexFunc(held, x.Overlaps)
+		a, block := x.Addr(), !x.IsSingleIP()
+		minBits := 48
+		if a.Is4() {
+			minBits = 24
+		}
+		other := slices.IndexFunc(held, func(h int) bool { y, _ := vipPrefix(d.VirtualAddresses[h]); return y.Overlaps(x) })
+		// A named server may be a service on the firewall itself, so only the hosts the declaration names count.
+		claimed := slices.IndexFunc(taken, func(c claim) bool { return !c.served && c.overlaps(a, lastOf(x)) })
 		switch {
-		case !ok || a.Is4In6() || !validUnicast(a) || a.IsLinkLocalUnicast() || x != x.Masked() || x.Bits() < map[bool]int{true: 24, false: 48}[a.Is4()] || a.Is4() && !validUnicast(lastOf(x)):
+		case !ok || !blockShape(x, minBits):
 			bad(p+"/address", "Expected one unicast IPv4 or IPv6 address, or a block: an IPv4 prefix of length 24 to 32 or an IPv6 prefix of length 48 to 128, with its host bits zero; not loopback or link-local.")
-		case other >= 0 && !block && held[other] == x:
-			bad(p+"/address", "Another virtual address already has this address.")
 		case other >= 0:
-			bad(p+"/address", fmt.Sprintf("This range overlaps virtual address %q.", heldNames[other]))
+			o := d.VirtualAddresses[held[other]]
+			switch y, _ := vipPrefix(o); {
+			case y == x:
+				bad(p+"/address", "Another virtual address already has this address.")
+			case !block:
+				bad(p+"/address", fmt.Sprintf("This address is inside virtual address %q.", o.Name))
+			default:
+				bad(p+"/address", fmt.Sprintf("This range overlaps virtual address %q.", o.Name))
+			}
 		case block && slices.ContainsFunc(subnets, x.Overlaps):
 			bad(p+"/address", "This block overlaps a segment's subnet.")
 		case slices.ContainsFunc(subnets, func(s netip.Prefix) bool { return s.Contains(a) }):
 			// Linux answers for a local address on every interface, so it would work there by accident.
 			bad(p+"/address", "This address is on a segment's subnet: add it to the segment's addresses instead.")
+		case claimed >= 0:
+			// The local route would take the host's traffic, replies to it included.
+			m := taken[claimed].message
+			if !block {
+				m = strings.Replace(strings.Replace(m, "This range holds ", "This address is ", 1), "This range overlaps ", "This address is in ", 1)
+			}
+			bad(p+"/address", m)
 		default:
-			held, heldNames = append(held, x), append(heldNames, v.Name)
+			held = append(held, i)
 		}
 	}
 	if d.DNS != nil {
@@ -96,7 +114,19 @@ func firewallHolds(d *declaration, a netip.Addr) bool {
 			return true
 		}
 	}
+	return holdsVirtual(d, a)
+}
+
+// holdsVirtual says whether a is a held virtual address of d, or inside a held block.
+func holdsVirtual(d *declaration, a netip.Addr) bool {
 	return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return !v.proxied() && heldContains(v, a) })
+}
+
+// blockShape says whether x is a unicast address, or a prefix of at least minBits with its host bits zero, none of
+// whose addresses is unspecified, loopback, multicast, link-local, IPv4-mapped or the IPv4 limited broadcast.
+func blockShape(x netip.Prefix, minBits int) bool {
+	a := x.Addr()
+	return x.IsValid() && x.Bits() >= minBits && x == x.Masked() && !a.Is4In6() && validUnicast(a) && !a.IsLinkLocalUnicast() && validUnicast(lastOf(x))
 }
 
 // heldContains says whether the held virtual address v is a, or is a block holding it.
@@ -114,32 +144,46 @@ func vipPrefix(v virtualAddress) (netip.Prefix, bool) {
 	return p, e == nil
 }
 
-// claim is a span of addresses the declaration gives to a host, or to the subnet itself: no proxy ARP entry may cover it.
+// claim is a span of addresses the declaration gives to a host, or to the subnet itself: no proxy ARP entry or held
+// virtual address may cover it. A served one is a server the declaration names (a DNS or NTP server, an upstream, a
+// DHCP option), which may be a service on the firewall itself.
 type claim struct {
 	first, last netip.Addr
 	message     string
+	served      bool
+}
+
+// overlaps says whether the claim shares an address with first to last, of the same family.
+func (c claim) overlaps(first, last netip.Addr) bool {
+	return c.first.Is4() == first.Is4() && !c.last.Less(first) && !last.Less(c.first)
 }
 
 // claims are the addresses the declaration names for hosts other than the firewall: a proxy ARP entry's route to
-// andaru-vip would take them over.
+// andaru-vip, or a held block's local route, would take them over.
 func claims(d *declaration) []claim {
 	var out []claim
-	one := func(raw, message string) {
+	add := func(raw, message string, served bool) {
 		a, e := netip.ParseAddr(raw)
 		if e != nil {
 			ap, e2 := netip.ParseAddrPort(raw)
 			a, e = ap.Addr(), e2
 		}
-		if e == nil && a.Unmap().Is4() {
-			out = append(out, claim{a.Unmap(), a.Unmap(), message})
+		if e == nil && a.Zone() == "" {
+			out = append(out, claim{a.Unmap(), a.Unmap(), message, served})
 		}
+	}
+	one := func(raw, message string) { add(raw, message, false) }
+	server := func(raw, message string) { add(raw, message, true) }
+	span := func(p netip.Prefix, message string) {
+		out = append(out, claim{p.Masked().Addr(), lastOf(p), message, false})
 	}
 	for _, s := range d.Segments {
 		// Its route to andaru-vip would take the uplink's next hop with it.
 		one(s.Addressing.IPv4.Gateway, "This range holds a segment's gateway.")
+		one(s.Addressing.IPv6.Gateway, "This range holds a segment's gateway.")
 		if s.Addressing.DNS != nil {
 			for _, raw := range s.Addressing.DNS.Servers {
-				one(raw, "This range holds a segment's DNS server.")
+				server(raw, "This range holds a segment's DNS server.")
 			}
 		}
 		if s.Addressing.IPv4.Mode != "static" {
@@ -147,9 +191,9 @@ func claims(d *declaration) []claim {
 		}
 		for _, raw := range s.Addressing.IPv4.Addresses {
 			if p, e := netip.ParsePrefix(raw); e == nil && p.Addr().Is4() && p.Bits() < 31 {
-				out = append(out, claim{p.Masked().Addr(), p.Masked().Addr(), "This range holds its subnet's network address."})
+				out = append(out, claim{p.Masked().Addr(), p.Masked().Addr(), "This range holds its subnet's network address.", false})
 				b := lastOf(p.Masked())
-				out = append(out, claim{b, b, "This range holds its subnet's broadcast address."})
+				out = append(out, claim{b, b, "This range holds its subnet's broadcast address.", false})
 			}
 		}
 	}
@@ -158,24 +202,32 @@ func claims(d *declaration) []claim {
 			first, e1 := netip.ParseAddr(r.First)
 			last, e2 := netip.ParseAddr(r.Last)
 			if e1 == nil && e2 == nil && first.Is4() && last.Is4() {
-				out = append(out, claim{first, last, "This range overlaps a DHCP range."})
+				out = append(out, claim{first, last, "This range overlaps a DHCP range.", false})
 			}
 		}
 		for _, l := range e.StaticLeases {
 			one(l.Address, "This range holds a DHCP static lease.")
 		}
-		one(e.Gateway, "This range holds a DHCP entry's gateway.")
+		server(e.Gateway, "This range holds a DHCP entry's gateway.")
 		for _, raw := range e.DNSServers {
-			one(raw, "This range holds a DHCP entry's DNS server.")
+			server(raw, "This range holds a DHCP entry's DNS server.")
 		}
 		for _, raw := range e.NTPServers {
-			one(raw, "This range holds a DHCP entry's NTP server.")
+			server(raw, "This range holds a DHCP entry's NTP server.")
 		}
-		one(e.NextServer, "This range holds a DHCP entry's next server.")
+		server(e.NextServer, "This range holds a DHCP entry's next server.")
+	}
+	// A delegated segment's pool is under a prefix learned at run time; the renderer warns about that one.
+	for _, e := range d.DHCP6 {
+		if e.PrefixDelegation != nil {
+			if p, err := netip.ParsePrefix(e.PrefixDelegation.Prefix); err == nil && p.Addr().Is6() {
+				span(p, "This range overlaps a DHCPv6 prefix delegation pool.")
+			}
+		}
 	}
 	if d.DNS != nil {
 		for _, u := range d.DNS.Upstreams {
-			one(u.Address, "This range holds a DNS upstream.")
+			server(u.Address, "This range holds a DNS upstream.")
 		}
 	}
 	if d.Management != nil {
@@ -193,14 +245,14 @@ func claims(d *declaration) []claim {
 				case "host":
 					one(a.Address, message)
 				case "network":
-					if p, e := netip.ParsePrefix(a.Prefix); e == nil && p.Addr().Is4() {
-						out = append(out, claim{p.Masked().Addr(), lastOf(p), message})
+					if p, e := netip.ParsePrefix(a.Prefix); e == nil {
+						span(p, message)
 					}
 				case "range":
 					first, e1 := netip.ParseAddr(a.First)
 					last, e2 := netip.ParseAddr(a.Last)
-					if e1 == nil && e2 == nil && first.Is4() && last.Is4() {
-						out = append(out, claim{first, last, message})
+					if e1 == nil && e2 == nil && first.Is4() == last.Is4() {
+						out = append(out, claim{first.Unmap(), last.Unmap(), message, false})
 					}
 				}
 			}
@@ -209,12 +261,14 @@ func claims(d *declaration) []claim {
 	return out
 }
 
-// lastOf is the last address of an IPv4 prefix.
+// lastOf is the last address of a prefix.
 func lastOf(p netip.Prefix) netip.Addr {
-	b := p.Masked().Addr().As4()
-	n := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
-	n |= 1<<(32-p.Bits()) - 1
-	return netip.AddrFrom4([4]byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)})
+	b := p.Masked().Addr().AsSlice()
+	for i := max(p.Bits(), 0); i < len(b)*8; i++ {
+		b[i/8] |= 1 << (7 - i%8)
+	}
+	a, _ := netip.AddrFromSlice(b)
+	return a
 }
 
 // validateProxy checks one proxy ARP entry against its segment, the firewall's static addresses (own), the hosts the
@@ -226,16 +280,12 @@ func validateProxy(d *declaration, v virtualAddress, p string, own []netip.Prefi
 	}
 	x, ok := vipPrefix(v)
 	a := x.Addr()
-	var last netip.Addr
-	if ok && a.Is4() {
-		last = lastOf(x)
-	}
-	claimed := slices.IndexFunc(taken, func(c claim) bool { return !c.last.Less(a) && !last.Less(c.first) })
+	claimed := slices.IndexFunc(taken, func(c claim) bool { return c.overlaps(a, lastOf(x)) })
 	overlap := slices.IndexFunc(before, func(o virtualAddress) bool { y, _ := vipPrefix(o); return y.Overlaps(x) })
 	switch {
 	case ok && a.Is6() && !a.Is4In6():
 		bad(p+"/address", "Proxy NDP is not offered yet (#43).")
-	case !ok || !a.Is4() || x.Bits() < 24 || x != x.Masked() || !validUnicast(a) || a.IsLinkLocalUnicast():
+	case !ok || !a.Is4() || !blockShape(x, 24):
 		bad(p+"/address", "Expected an IPv4 address, or a prefix of length 24 to 32 with its host bits zero; not loopback or link-local.")
 	case seg < 0:
 	case d.Segments[seg].Addressing.IPv4.Mode != "static":
@@ -285,7 +335,7 @@ func vipStillTargeted(old, d *declaration, input Changes) *Fault {
 				return false
 			}
 			a, e := netip.ParseAddr(f.Target.Address)
-			return e == nil && heldContains(v, a) && !slices.ContainsFunc(d.VirtualAddresses, func(n virtualAddress) bool { return !n.proxied() && heldContains(n, a) })
+			return e == nil && heldContains(v, a) && !holdsVirtual(d, a)
 		})
 		if i < 0 {
 			continue

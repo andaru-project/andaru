@@ -115,12 +115,11 @@ func normalizeDeclaration(d *declaration) {
 		if v.Kind == "address" {
 			v.Kind = "" // absent is address: one form, so older declarations keep theirs
 		}
-		if a, e := netip.ParseAddr(v.Address); e == nil {
-			v.Address = a.String() // one spelling, so the renderer and forwards agree
-		} else if p, e := netip.ParsePrefix(v.Address); e == nil && p.IsSingleIP() {
-			v.Address = p.Addr().String() // a /32 or /128 is stored bare, so each address has one form
-		} else if e == nil {
-			v.Address = p.String()
+		// One spelling, so the renderer and forwards agree; a /32 or /128 is stored bare, so each address has one form.
+		if x, ok := vipPrefix(*v); ok && x.IsSingleIP() {
+			v.Address = x.Addr().String()
+		} else if ok {
+			v.Address = x.String()
 		}
 	}
 	if len(d.Notifications.Channels) == 0 {

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -52,7 +53,7 @@ func TestVirtualAddressValidation(t *testing.T) {
 	t.Run("duplicate", func(t *testing.T) {
 		d := vipFixture(t)
 		item(d["virtualAddresses"].([]any), 1)["address"] = "172.16.53.53"
-		refusedAt(t, d, "/virtualAddresses/1/address")
+		refusedWith(t, d, "/virtualAddresses/1/address", "Another virtual address already has this address.")
 	})
 	t.Run("65 entries", func(t *testing.T) {
 		d := vipFixture(t)
@@ -493,47 +494,82 @@ func TestRoutedBlockValidation(t *testing.T) {
 		accepted(t, d)
 	})
 	const shape = "Expected one unicast IPv4 or IPv6 address, or a block"
-	for name, tc := range map[string]struct{ address, message string }{
-		"IPv4 shorter than /24":     {"203.0.112.0/23", shape},
-		"IPv6 shorter than /48":     {"2001:db8::/47", shape},
-		"host bits":                 {"203.0.113.1/29", shape},
-		"IPv6 host bits":            {"2001:db8:53::1/64", shape},
-		"unspecified":               {"0.0.0.0/24", shape},
-		"multicast":                 {"224.0.0.0/24", shape},
-		"IPv6 multicast":            {"ff05::/64", shape},
-		"loopback":                  {"127.0.0.0/24", shape},
-		"link-local":                {"169.254.1.0/24", shape},
-		"IPv6 link-local":           {"fe80::/64", shape},
-		"mapped":                    {"::ffff:203.0.113.0/120", shape},
-		"holds the broadcast":       {"255.255.255.0/24", shape},
-		"inside a segment's subnet": {"192.0.2.0/29", "This block overlaps a segment's subnet."},
-		"a segment's whole subnet":  {"192.0.2.0/24", "This block overlaps a segment's subnet."},
-		"a v6 segment's subnet":     {"fd00:1::/64", "This block overlaps a segment's subnet."},
-		"holds a virtual address":   {"172.16.53.0/24", `This range overlaps virtual address \"dns4\".`},
-		"holds a v6 one":            {"fd00:53:53:53::/64", `This range overlaps virtual address \"dns6\".`},
+	// index is the entry edited: 0 dns4, 1 dns6, 2 block4, 3 block6.
+	for name, tc := range map[string]struct {
+		index            int
+		address, message string
+	}{
+		"IPv4 shorter than /24":     {2, "203.0.112.0/23", shape},
+		"IPv6 shorter than /48":     {3, "2001:db8::/47", shape},
+		"host bits":                 {2, "203.0.113.1/29", shape},
+		"IPv6 host bits":            {3, "2001:db8:53::1/64", shape},
+		"unspecified":               {2, "0.0.0.0/24", shape},
+		"multicast":                 {2, "224.0.0.0/24", shape},
+		"IPv6 multicast":            {3, "ff05::/64", shape},
+		"loopback":                  {2, "127.0.0.0/24", shape},
+		"link-local":                {2, "169.254.1.0/24", shape},
+		"IPv6 link-local":           {3, "fe80::/64", shape},
+		"mapped":                    {3, "::ffff:203.0.113.0/120", shape},
+		"holds the broadcast":       {2, "255.255.255.0/24", shape},
+		"inside a segment's subnet": {2, "192.0.2.0/29", "This block overlaps a segment's subnet."},
+		"a segment's whole subnet":  {2, "192.0.2.0/24", "This block overlaps a segment's subnet."},
+		"a v6 segment's subnet":     {3, "fd00:1::/64", "This block overlaps a segment's subnet."},
+		"holds a virtual address":   {2, "172.16.53.0/24", `This range overlaps virtual address "dns4".`},
+		"holds a v6 one":            {2, "fd00:53:53:53::/64", `This range overlaps virtual address "dns6".`},
+		"the same block":            {3, "203.0.113.0/29", "Another virtual address already has this address."},
+		"an address inside a block": {3, "203.0.113.4", `This address is inside virtual address "block4".`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := blockFixture(t)
-			i := map[bool]int{true: 3, false: 2}[strings.Contains(tc.address, ":")]
-			if strings.Contains(name, "holds a v") {
-				i = 2 // validated after the address it holds
-			}
-			item(d["virtualAddresses"].([]any), i)["address"] = tc.address
-			refusedAt(t, d, fmt.Sprintf("/virtualAddresses/%d/address", i))
-			_, e := decodeMap(t, d)
-			if raw, _ := json.Marshal(e); !strings.Contains(string(raw), tc.message) {
-				t.Fatalf("%s", raw)
-			}
+			item(d["virtualAddresses"].([]any), tc.index)["address"] = tc.address
+			refusedWith(t, d, fmt.Sprintf("/virtualAddresses/%d/address", tc.index), tc.message)
 		})
 	}
-	t.Run("overlaps another block", func(t *testing.T) {
+	// The hosts the declaration names: a held address or block would take their traffic.
+	const admin = "adr_00000005-0000-4000-8000-000000000005"
+	manage := func(d map[string]any, a map[string]any) {
+		a["id"], a["name"] = admin, "admin"
+		objs := d["aliases"].(map[string]any)
+		objs["addresses"] = append(objs["addresses"].([]any), a)
+		d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{admin}}
+	}
+	for name, tc := range map[string]struct {
+		index   int
+		edit    func(d map[string]any)
+		message string
+	}{
+		"a management source host": {2, func(d map[string]any) { manage(d, map[string]any{"kind": "host", "address": "203.0.113.6"}) },
+			"This range holds a management source address."},
+		"a management source network": {0, func(d map[string]any) { manage(d, map[string]any{"kind": "network", "prefix": "172.16.53.0/24"}) },
+			"This address is a management source address."},
+		"an IPv6 management source": {3, func(d map[string]any) { manage(d, map[string]any{"kind": "host", "address": "2001:db8:53::9"}) },
+			"This range holds a management source address."},
+		"an IPv6 management range": {1, func(d map[string]any) {
+			manage(d, map[string]any{"kind": "range", "first": "fd00:53:53:53::1", "last": "fd00:53:53:53:ffff::1"})
+		}, "This address is a management source address."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := blockFixture(t)
+			tc.edit(d)
+			refusedWith(t, d, fmt.Sprintf("/virtualAddresses/%d/address", tc.index), tc.message)
+		})
+	}
+	t.Run("a DHCPv6 delegation pool, both ways", func(t *testing.T) {
+		d := dhcp6Fixture(t, nil)
+		d["virtualAddresses"] = []any{map[string]any{"id": vipP, "name": "block6", "address": "fd00:beef:1:200::/56"}}
+		refusedWith(t, d, "/virtualAddresses/0/address", "This range overlaps a DHCPv6 prefix delegation pool.")
+		refusedWith(t, d, "/dhcp6/0/prefixDelegation/prefix", "The pool holds a virtual address.")
+		d["virtualAddresses"] = []any{map[string]any{"id": vipP, "name": "one", "address": "fd00:beef:1:200::1"}}
+		refusedWith(t, d, "/virtualAddresses/0/address", "This address is in a DHCPv6 prefix delegation pool.")
+		d["virtualAddresses"] = []any{map[string]any{"id": vipP, "name": "block6", "address": "fd00:beef:2::/64"}}
+		accepted(t, d)
+	})
+	// A server the declaration names may be a service on the firewall itself.
+	t.Run("named servers", func(t *testing.T) {
 		d := blockFixture(t)
-		d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipR, "name": "inside", "address": "203.0.113.4"})
-		refusedAt(t, d, "/virtualAddresses/4/address")
-		_, e := decodeMap(t, d)
-		if raw, _ := json.Marshal(e); !strings.Contains(string(raw), `This range overlaps virtual address \"block4\".`) {
-			t.Fatalf("%s", raw)
-		}
+		d["dhcp"] = []any{lanDHCP(d, map[string]any{"dnsServers": []any{"172.16.53.53", "203.0.113.5"}, "ntpServers": []any{"203.0.113.6"}})}
+		d["dns"] = map[string]any{"mode": "forward", "segments": []any{}, "upstreams": []any{map[string]any{"address": "203.0.113.7:5353", "protocol": "do53"}}}
+		accepted(t, d)
 	})
 	t.Run("overlaps a proxy ARP entry", func(t *testing.T) {
 		d := proxyFixture(t)
@@ -590,4 +626,14 @@ func TestRoutedBlockInUse(t *testing.T) {
 	mustRun(t, &s, replace("203.0.113.0/24"))
 	mustRun(t, &s, replace("203.0.113.3"))
 	mustRun(t, &s, replace("203.0.113.0/28"))
+}
+
+// refusedWith checks that the declaration is refused at path with a message containing message.
+func refusedWith(t *testing.T, d map[string]any, path, message string) {
+	t.Helper()
+	_, e := decodeMap(t, d)
+	ve, _ := e.(validationError)
+	if !slices.ContainsFunc(ve, func(f FieldError) bool { return f.Path == path && strings.Contains(f.Message, message) }) {
+		t.Fatalf("error %v; fields %+v; want %s: %s", e, ve, path, message)
+	}
 }

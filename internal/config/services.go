@@ -374,6 +374,9 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 				bad(pp+"/prefix", "Expected a unique local prefix of /16 or longer, or a global unicast prefix of /32 or longer.")
 			case slices.ContainsFunc(own, func(o netip.Prefix) bool { return o.Overlaps(v) }):
 				bad(pp+"/prefix", "The pool overlaps a segment's addresses.")
+			case slices.ContainsFunc(d.VirtualAddresses, func(o virtualAddress) bool { x, ok := vipPrefix(o); return ok && !o.proxied() && x.Overlaps(v) }):
+				// The held address's local route would take the delegated prefixes' traffic.
+				bad(pp+"/prefix", "The pool holds a virtual address.")
 			case slices.ContainsFunc(pools, v.Overlaps):
 				bad(pp+"/prefix", "The pool overlaps another DHCPv6 entry's pool.")
 			default:
