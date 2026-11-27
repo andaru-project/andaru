@@ -96,6 +96,10 @@ func applyFindings(in gateInput) []render.Finding {
 			// The kernel proxies ARP only for routes it forwards to, and forwarding stays off without the filter.
 			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/virtualAddresses/%d/kind", i), "Proxy ARP entries need the packet filter, which needs a management segment. Set management.segment.")
 		}
+		if declared.Management.Segment == "" && v.Kind == "proxyNdp" {
+			// The routes to the hosts' segments need forwarding, which stays off without the filter.
+			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/virtualAddresses/%d/kind", i), "Proxy NDP entries need the packet filter, which needs a management segment. Set management.segment.")
+		}
 	}
 	for i, e := range declared.DHCP6 {
 		if declared.Management.Segment == "" && len(e.PrefixDelegation) > 0 && string(e.PrefixDelegation) != "null" {
