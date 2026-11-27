@@ -49,7 +49,7 @@ done
 
 # With no token configured, serve must refuse to start, not serve an open API on its non-loopback listen.
 # A server that starts runs on until timeout stops the client (124); the name lets cleanup remove it.
-out=$(timeout 60 "$engine" run --rm --name "$name" -v "$work/no-token.yaml:/config/netplane.yaml:ro" "$@" "$image" 2>&1) &&
+out=$(timeout 60 "$engine" run --rm --name "$name" -v "$work/no-token.yaml:/config/netplane.yaml:ro,Z" "$@" "$image" 2>&1) &&
 	rc=0 || rc=$?
 [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ] || fail "it started without a token"
 case $out in *"refusing to serve unauthenticated"*) ;; *) fail "without a token, it failed for another reason: $out" ;; esac
@@ -57,7 +57,7 @@ case $out in *"refusing to serve unauthenticated"*) ;; *) fail "without a token,
 start() {
 	"$engine" rm -fv "$name" >/dev/null 2>&1 || true
 	"$engine" run -d --name "$name" -p 127.0.0.1::8099 -e NETPLANE_API_TOKEN="$token" "$@" \
-		-v "$work/netplane.yaml:/config/netplane.yaml:ro" -v "$volume:/data" "$image" >/dev/null
+		-v "$work/netplane.yaml:/config/netplane.yaml:ro,Z" -v "$volume:/data" "$image" >/dev/null
 	port=$("$engine" port "$name" 8099 2>/dev/null | head -n1 | sed 's/.*://')
 	[ -n "$port" ] || fail "no published port: it exited at once"
 	base=http://127.0.0.1:$port

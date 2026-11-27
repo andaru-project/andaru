@@ -35,7 +35,8 @@ host with SELinux enforcing (Fedora, RHEL, CoreOS), mount the config with `:ro,Z
   one each run leaves; `netplane-data` stays.
 - **`/data`** holds the SQLite database: keep it on a volume, or every restart starts from an empty history. A named
   volume is writable as created. A bind-mounted directory must be writable by the image's user, UID and GID 65532
-  (`chown 65532:65532 <dir>`).
+  (`chown 65532:65532 <dir>`; under rootless podman, whose container UIDs map elsewhere on the host,
+  `podman unshare chown 65532:65532 <dir>`).
 - **The token** is required: the server listens on all addresses, and without a token it refuses to start. Pass it
   as `NETPLANE_API_TOKEN`, in the env file rather than with `-e`, which shows it in the process list. The example config names it with `api_token_secret: "${NETPLANE_API_TOKEN}"`; point that
   at another variable to read the token from there. Clients send it as `Authorization: Bearer <token>`.
