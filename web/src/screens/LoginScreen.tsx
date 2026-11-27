@@ -1,8 +1,8 @@
-import { Alert, Button, Code, Group, Image, Paper, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Alert, Code, Paper, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
 import { useRef, useState, type FormEvent } from 'react';
-import mark from '../andaru-icon.svg';
 import { apiErrorMessage } from '../api';
 import type { Session } from '../types';
+import { SignInCard } from './SignInCard';
 
 interface LoginScreenProps {
   setupRequired: boolean;
@@ -51,42 +51,26 @@ export function LoginScreen({ setupRequired, notice, onLogin }: LoginScreenProps
   }
 
   return (
-    <div className="login-page">
-      <Paper className="login-card" component="main" withBorder p="xl">
-        <form onSubmit={submit}>
-          <Stack>
-            <Group gap="sm" wrap="nowrap">
-              <Image src={mark} alt="" w={40} h={40} />
-              <div>
-                <Title order={1} size="h2">Andaru</Title>
-                <Text c="dimmed">Sign in with an Andaru account.</Text>
-              </div>
-            </Group>
-            {notice && <Alert color="yellow" role="alert">{notice}</Alert>}
-            {error && <Alert color="red" role="alert" title="Sign-in failed">{error}</Alert>}
-            <TextInput
-              autoComplete="username"
-              autoFocus
-              label="Login"
-              maxLength={64}
-              required
-              value={login}
-              onChange={(event) => setLogin(event.currentTarget.value)}
-            />
-            <PasswordInput
-              ref={passwordRef}
-              autoComplete="current-password"
-              error={error || undefined}
-              label="Password"
-              maxLength={512}
-              required
-              value={password}
-              onChange={(event) => setPassword(event.currentTarget.value)}
-            />
-            <Button loading={busy} type="submit">Sign in</Button>
-          </Stack>
-        </form>
-      </Paper>
-    </div>
+    <SignInCard title="Andaru" description="Sign in with an Andaru account." notice={notice} error={error} busy={busy} onSubmit={submit}>
+      <TextInput
+        autoComplete="username"
+        autoFocus
+        label="Login"
+        maxLength={64}
+        required
+        value={login}
+        onChange={(event) => setLogin(event.currentTarget.value)}
+      />
+      <PasswordInput
+        ref={passwordRef}
+        autoComplete="current-password"
+        error={error || undefined}
+        label="Password"
+        maxLength={512}
+        required
+        value={password}
+        onChange={(event) => setPassword(event.currentTarget.value)}
+      />
+    </SignInCard>
   );
 }
