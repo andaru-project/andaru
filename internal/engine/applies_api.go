@@ -489,23 +489,36 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 			slog.ErrorContext(ctx, "write the LAN closure", "error", werr)
 		}
 	}
+	// Prepare add-on event bus tokens before arming/activating so add-ons never start without credentials;
+	// if preparation fails, abort before changing the host (beginPrepare reconciles live clients on error).
+	var finishAddonBus func(context.Context)
+	if h.addonBus != nil {
+		var prepErr error
+		finishAddonBus, prepErr = h.addonBus.beginPrepare(ctx, id)
+		if prepErr != nil {
+			h.unavailable(w, r, "prepare add-on event bus tokens", prepErr)
+			return
+		}
+	}
 	// Armed before anything changes: from here the host returns to what it ran, with or without this engine.
 	if err := h.runner.Arm(ctx, id, timerMargin+timeout); err != nil {
+		if finishAddonBus != nil {
+			finishAddonBus(ctx)
+		}
 		h.unavailable(w, r, "arm rollback timer", err)
 		return
 	}
 	if err = h.stageAuthorizationTransition(ctx, id, authz.TransitionActivate, nil); err != nil {
 		h.runner.Disarm(ctx, id)
+		if finishAddonBus != nil {
+			finishAddonBus(ctx)
+		}
 		if errors.Is(err, identity.ErrConflict) {
 			writeError(w, r, http.StatusPreconditionFailed, "IDENTITY_REVISION_CHANGED", "Identity changed after this apply candidate was created; retry the apply.")
 			return
 		}
 		h.unavailable(w, r, "authorize generation activation", err)
 		return
-	}
-	var finishAddonBus func(context.Context)
-	if h.addonBus != nil {
-		finishAddonBus = h.addonBus.beginPrepare(ctx, id)
 	}
 	runErr := h.runner.Realize(ctx, "activate", id)
 	if finishAddonBus != nil {
@@ -604,11 +617,19 @@ func (h *appliesHandler) finish(w http.ResponseWriter, r *http.Request, id int, 
 		if before.Previous != nil {
 			prevID = *before.Previous
 		}
-		finishAddonBus = h.addonBus.beginPrepare(ctx, prevID)
+		var prepErr error
+		if finishAddonBus, prepErr = h.addonBus.beginPrepare(ctx, prevID); prepErr != nil {
+			// Do not block an emergency network rollback on transient token delivery; sync retries after rollback.
+			slog.WarnContext(ctx, "prepare add-on event bus tokens for rollback", "generation", id, "error", prepErr)
+		}
 	}
 	runErr := h.runner.Realize(ctx, verb, id, extra...)
 	if finishAddonBus != nil {
 		finishAddonBus(ctx)
+	} else if h.addonBus != nil && verb == "rollback" {
+		if h.addonBus.sync(ctx) {
+			h.addonBus.nudge()
+		}
 	}
 	h.stored(id)
 	g, err := generation.Read(h.dir, id)

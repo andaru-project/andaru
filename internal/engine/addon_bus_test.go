@@ -385,8 +385,22 @@ func TestAddonBusSyncRollbackAfterFailedSyncAndPrepareRevert(t *testing.T) {
 	}
 	_ = c.Close()
 
+	// beginPrepare(2) failure returns error and immediately reconciles live gen 1 back onto the bus.
+	failRealize = errors.New("realize timeout")
+	if finishFail, err := syncer.beginPrepare(ctx, 2); err == nil || finishFail != nil {
+		t.Fatalf("expected beginPrepare error on realize failure, got finish!=nil=%v err=%v", finishFail != nil, err)
+	}
+	// Once failure clears, live gen 1 can be synced/re-registered without being wedged in preparing state.
+	failRealize = nil
+	if syncer.sync(ctx) {
+		t.Fatal("sync after failed beginPrepare failed")
+	}
+
 	// beginPrepare(2) pre-provisions gen 2 before p.Live moves and suppresses background apply/+ syncs during Activate.
-	finishPrepare := syncer.beginPrepare(ctx, 2)
+	finishPrepare, err := syncer.beginPrepare(ctx, 2)
+	if err != nil {
+		t.Fatalf("beginPrepare(2): %v", err)
+	}
 	tok2, err := os.ReadFile(root + "/run/andaru-addons/sample/bus/token")
 	if err != nil {
 		t.Fatal(err)

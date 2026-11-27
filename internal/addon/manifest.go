@@ -46,8 +46,8 @@ var (
 // ValidID reports whether id matches the add-on reverse-DNS identifier contract.
 func ValidID(id string) bool { return idPattern.MatchString(id) }
 
-// ValidSlug reports whether slug matches the add-on slug contract.
-func ValidSlug(slug string) bool { return slugPattern.MatchString(slug) }
+// ValidSlug reports whether slug matches the add-on slug contract and is not reserved for shared runtime infrastructure.
+func ValidSlug(slug string) bool { return slug != "bus-socket" && slugPattern.MatchString(slug) }
 
 // ValidDigestImage reports whether ref is a registry-qualified immutable @sha256: image reference.
 func ValidDigestImage(ref string) bool { return validDigestImage(ref) }
@@ -609,8 +609,8 @@ func validateManifest(m *Manifest) []FieldError {
 	if !idPattern.MatchString(m.ID) {
 		bad("/id", "invalid reverse-DNS add-on id")
 	}
-	if !slugPattern.MatchString(m.Slug) {
-		bad("/slug", "invalid add-on slug")
+	if !ValidSlug(m.Slug) {
+		bad("/slug", "invalid or reserved add-on slug")
 	}
 	if strings.TrimSpace(m.Name) == "" {
 		bad("/name", "name is required")

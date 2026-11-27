@@ -126,29 +126,42 @@ func (s *addonBusSync) runWithInitial(ctx context.Context, initialRetry bool) {
 
 // beginPrepare pre-syncs add-on bus tokens and grants (and immediately revokes dropped/changed grants)
 // for a generation about to be activated or rolled back to, while suppressing background apply/+ syncs
-// until the returned finish function runs after realize completes. finish clears the prepare window and
-// reconciles against the actual live generation so failed activations revert immediately.
-func (s *addonBusSync) beginPrepare(ctx context.Context, id int) func(context.Context) {
+// until the returned finish function runs after realize completes. On failure, it clears the prepare
+// window, reconciles back to the current live generation so revoked clients are restored, and returns
+// the error so activation can abort before starting add-ons without credentials.
+func (s *addonBusSync) beginPrepare(ctx context.Context, id int) (func(context.Context), error) {
 	var target *int
 	if id > 0 {
 		target = &id
 	}
 	s.mu.Lock()
 	s.preparing = true
-	s.syncTargetLocked(ctx, target, false)
-	s.mu.Unlock()
-	return func(doneCtx context.Context) {
-		s.mu.Lock()
+	err, _ := s.syncTargetLocked(ctx, target, false)
+	if err != nil {
 		s.preparing = false
-		retry, notifyReady := s.syncLiveLocked(doneCtx)
+		reconcileErr, notifyReady := s.syncLiveLocked(ctx)
 		s.mu.Unlock()
 		if notifyReady != nil {
 			notifyReady()
 		}
-		if retry {
+		if reconcileErr != nil {
 			s.nudge()
 		}
+		return nil, err
 	}
+	s.mu.Unlock()
+	return func(doneCtx context.Context) {
+		s.mu.Lock()
+		s.preparing = false
+		syncErr, notifyReady := s.syncLiveLocked(doneCtx)
+		s.mu.Unlock()
+		if notifyReady != nil {
+			notifyReady()
+		}
+		if syncErr != nil {
+			s.nudge()
+		}
+	}, nil
 }
 
 func (s *addonBusSync) sync(ctx context.Context) (retry bool) {
@@ -157,26 +170,26 @@ func (s *addonBusSync) sync(ctx context.Context) (retry bool) {
 		s.mu.Unlock()
 		return false
 	}
-	retry, notifyReady := s.syncLiveLocked(ctx)
+	err, notifyReady := s.syncLiveLocked(ctx)
 	s.mu.Unlock()
 	if notifyReady != nil {
 		notifyReady()
 	}
-	return retry
+	return err != nil
 }
 
 // syncLiveLocked reads pointers.json and syncs the live generation. Caller holds s.mu.
-func (s *addonBusSync) syncLiveLocked(ctx context.Context) (retry bool, notifyReady func()) {
+func (s *addonBusSync) syncLiveLocked(ctx context.Context) (err error, notifyReady func()) {
 	dir := generation.Dir(s.stateDir)
 	p, err := generation.ReadPointers(dir)
 	if err != nil {
 		slog.Warn("addon bus: read generation pointers", "error", err)
-		return true, nil
+		return err, nil
 	}
 	return s.syncTargetLocked(ctx, p.Live, true)
 }
 
-func (s *addonBusSync) syncTargetLocked(ctx context.Context, target *int, isLive bool) (retry bool, notifyReady func()) {
+func (s *addonBusSync) syncTargetLocked(ctx context.Context, target *int, isLive bool) (err error, notifyReady func()) {
 	if !s.cleanedTemp {
 		s.cleanedTemp = true
 		if s.runtimeDir != "" {
@@ -206,13 +219,13 @@ func (s *addonBusSync) syncTargetLocked(ctx context.Context, target *int, isLive
 	}
 	if s.synced && liveID == s.lastLive {
 		markReady()
-		return false, notifyReady
+		return nil, notifyReady
 	}
 
 	desired, retryErr := s.desiredGrants(syncCtx, dir, target)
 	if retryErr != nil {
 		slog.Warn("addon bus: compute live grants", "error", retryErr)
-		return true, nil
+		return retryErr, nil
 	}
 
 	// Mark unsynced BEFORE mutating bus clients so a transient failure followed by rollback to lastLive
@@ -234,7 +247,7 @@ func (s *addonBusSync) syncTargetLocked(ctx context.Context, target *int, isLive
 		s.synced = true
 		s.lastLive = liveID
 		markReady()
-		return false, notifyReady
+		return nil, notifyReady
 	}
 
 	// Step 2: generate fresh 256-bit random tokens and write them via realize before updating bus clients
@@ -244,13 +257,13 @@ func (s *addonBusSync) syncTargetLocked(ctx context.Context, target *int, isLive
 		tok, err := randomBusToken()
 		if err != nil {
 			slog.Error("addon bus: generate token", "slug", slug, "error", err)
-			return true, nil
+			return err, nil
 		}
 		tokens[slug] = tok
 	}
 	if err := s.deliverTokens(syncCtx, tokens); err != nil {
 		slog.Warn("addon bus: sync token files", "error", err)
-		return true, nil
+		return err, nil
 	}
 
 	// Step 3: register each desired client on the bus (closing old connections for rotated tokens).
@@ -269,7 +282,7 @@ func (s *addonBusSync) syncTargetLocked(ctx context.Context, target *int, isLive
 	s.synced = true
 	s.lastLive = liveID
 	markReady()
-	return false, notifyReady
+	return nil, notifyReady
 }
 
 func (s *addonBusSync) desiredGrants(ctx context.Context, dir string, target *int) (map[string]bus.Grants, error) {

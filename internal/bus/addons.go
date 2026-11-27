@@ -37,7 +37,7 @@ var (
 
 func validAddonUser(user string) bool {
 	slug, ok := strings.CutPrefix(user, "addon.")
-	return ok && addonSlugPattern.MatchString(slug)
+	return ok && slug != "bus-socket" && addonSlugPattern.MatchString(slug)
 }
 
 func validAddonFilter(user, filter string, publish bool) bool {

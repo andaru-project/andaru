@@ -199,6 +199,7 @@ func TestSetClientValidation(t *testing.T) {
 	}{
 		{"non-addon user", "realize", "tok", Grants{}},
 		{"bare addon", "addon.", "tok", Grants{}},
+		{"reserved bus-socket slug", "addon.bus-socket", "tok", Grants{}},
 		{"uppercase slug", "addon.Bad", "tok", Grants{}},
 		{"slash in user", "addon.a/b", "tok", Grants{}},
 		{"empty token", "addon.ok", "", Grants{}},
