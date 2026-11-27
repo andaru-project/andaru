@@ -31,7 +31,7 @@ Consolidated from existing specs and issues; these are fixed constraints unless 
 - **Slice 6 decisions (2026-11-27):**
   - **Catalog scope:** Slice 6 ships image-shipped, digest-pinned catalog add-ons only; external signed catalogs remain deferred until this path is proven.
   - **Web UI scope (start simple):** no custom add-on pages or nav-tree attachment (`menu.parent` / `menu.children`) in Slice 6. **System → Add-ons** (`/system/addons`) is the single entry point, offering **Install** (or **Update** when a newer digest is shipped), **Uninstall** (with confirmation), and a **Settings** page (`/system/addons/<slug>`) for each installed add-on that renders everything declared in its manifest (properties, zone bindings, bus permissions, lifecycle/health, logs, and optional external WebUI link).
-  - **RBAC granularity in Slice 1:** map manifest permissions onto core `addons.read`, `addons.manage`, and existing `configuration.*` capabilities; per-add-on custom-role capabilities (`addon.<slug>.<perm>`) come in a later slice.
+  - **RBAC granularity in Slice 6:** map manifest permissions onto core `addons.read`, `addons.manage`, and existing `configuration.*` capabilities; per-add-on custom-role capabilities (`addon.<slug>.<perm>`) come in a later slice.
   - **Image staging UX:** **Install** / **Update** runs an integrated "Stage image and continue" flow that pulls the pinned digest before and outside the 45-second apply rollback window (Quadlets still enforce `Pull=never` and apply preview still blocks if unstaged).
   - **Tailscale state in portable backups:** `/var/lib/tailscale` node-key state is excluded from portable backups (`backup: false`) so restored boxes re-authenticate cleanly and never create duplicate Tailscale node identities.
 
@@ -94,33 +94,33 @@ Retains the owner-approved structure from [traefik-manifest-example.md](../../re
      - `network`: `"host"` (the only allowed value in Slice 6; other values rejected until bridged/pasta coexistence is qualified).
      - `command` / `args`: optional static entrypoint/base argument vector (never shell strings).
      - `profile`: `"unprivileged"` (default: `DropCapability=ALL`, `NoNewPrivileges=true`, non-root UID) or `"network-interface"` (drops all capabilities except those explicitly declared from an allowlist—initially `NET_ADMIN`, `NET_RAW`—plus declared device paths from an allowlist—initially `/dev/net/tun`—with `NoNewPrivileges=true`; `privileged: true` is never representable).
-     - `settingsActivation`: `"recreate"` (default for Quadlet containers) or `"reload"` (only when all modified properties use file bindings, never environment/argument bindings).
-     - `stopTimeoutSeconds`: bounded graceful stop timeout (default 15, max 60).
-   - `interfaces` (optional array): kernel network interfaces created by the add-on (e.g. `{ "name": "tailscale0", "title": "Tailscale tunnel", "zoneRequired": false }`). Names must match Linux `IFNAMSIZ` (`^[a-z][a-z0-9_-]{0,14}$`), must not match `en*`, `eth*`, `lo`, `andaru*`, or `podman*`, and must be unique across all catalog add-ons.
-   - `storage` (optional array): named subdirectories under `/var/lib/andaru/addons/<slug>/<name>` with `purpose` (`state`, `data`, `cache`, `logs`), `mountPath` (absolute container path), `readOnly` (default `false`), and `backup` (`bool`). Host paths are never author-supplied.
+     - `settingsActivation`: `"recreate"` (only allowed value in Slice 6; live `"reload"` is deferred until a reload-signal contract is defined).
+     - `stopTimeoutSeconds`: bounded graceful stop timeout (default `5`, max `10`, keeping stop + health verification inside `Realizer`'s 45s `activateLimit` and 20s `restoreLimit`).
+   - `interfaces` (optional array): kernel network interfaces created by the add-on (e.g. `{ "name": "tailscale0", "title": "Tailscale tunnel", "zoneRequired": true }`). Names must match Linux `IFNAMSIZ` (`^[a-z][a-z0-9_-]{0,14}$`), must not match `en*`, `eth*`, `lo`, `andaru*`, or `podman*`, and must be unique across all catalog add-ons.
+   - `storage` (optional array): named subdirectories under `/var/lib/andaru/addons/<slug>/<name>` with `name` matching `^[a-zA-Z][a-zA-Z0-9_]{0,63}$`, `purpose` (`state`, `data`, `cache`, `logs`), `mountPath` (absolute container path), `readOnly` (default `false`), and `backup` (`bool`). Host paths are never author-supplied.
    - `endpoints` (optional array): `{ name, protocol, port, exposure }` (`exposure`: `"internal"` loopback-only or `"managed"`). Declaring an endpoint requests metadata for health/metrics/WebUI; it opens no firewall port automatically.
    - `bus` (optional object): `{ "publish": [...], "subscribe": [...] }`, each entry `{ "topic": "<filter>", "title": ..., "description": ... }`.
-     - Validation forbids any `subscribe` filter matching `notification/#`, `notification/+`, `notification/...`, `delivery/#`, or `alias-fetch/#`.
-     - Validation forbids any `publish` topic under `notification/` other than exact `notification/addon.<slug>`, and forbids core-owned prefixes (`config/`, `apply/`, `delivery/`, `alias-fetch/`, `alias-result/`, `notifications/`).
+     - Validation rejects any `publish` or `subscribe` filter whose first level is `#` or `+`, and runs topic-overlap checks against all forbidden namespaces (`notification/#`, `delivery/#`, `alias-fetch/#`, `alias-result/#`, `config/#`, `apply/#`, `notifications/#` for `publish`; `notification/#`, `delivery/#`, `alias-fetch/#` for `subscribe`).
+     - As the single exception to `notification/#` on `publish`, an add-on may request the exact topic `notification/addon.<slug>`.
    - `logs` (optional array): `runtime` (container journal stream via `journalctl` for `andaru-addon-<slug>.service`) or `file` (relative path under a declared `storage` entry, no `..`, opened with `O_NOFOLLOW` / `openat2`).
    - `metrics` (optional array): Prometheus scrape target on an `"internal"` endpoint.
    - `health` (optional object): HTTP probe on an `"internal"` endpoint (`endpoint`, `path`, `expectedStatus`, `intervalSeconds`, `timeoutSeconds`, `startPeriodSeconds`) or container `healthCmd` argument vector (must avoid shell form; per [podman-compose-spike.md](../../research/podman-compose-spike.md), exec-form args without embedded shell parsing).
    - `webui` (optional object): `{ title, permission, endpoint, hostnameSetting?, path }` for a separate external link.
 3. **Property types, grammar, and wire serialization.**
    - Property `name`: `^[a-zA-Z][a-zA-Z0-9_]{0,63}$`.
-   - Supported `type` values: `string` (with optional `format`: `hostname`, `uri`, `ipv4`, `ipv6`, `cidr`, `date`, `date-time`; `minLength`, `maxLength`, `pattern`; URI userinfo always rejected), `boolean`, `integer`, `number`, `enum` (array of unique option strings, `minItems`, `maxItems`), `secret-reference`, `zone-reference`. (`certificate-reference` and `alias-reference` are reserved types rejected until core certificate management and add-on alias binding exist.)
+   - Supported `type` values: `string` (with optional `format`: `hostname`, `uri`, `ipv4`, `ipv6`, `cidr`, `date`, `date-time`; `minLength`, `maxLength`, `pattern`; URI userinfo always rejected), `string-list` (array of unique strings with optional `itemFormat`: `hostname`, `ipv4`, `ipv6`, `cidr`; `minItems`, `maxItems`, requiring explicit `encoding`), `boolean`, `integer`, `number`, `enum` (array of unique option strings, `minItems`, `maxItems`), `secret-reference`, `zone-reference`. (`certificate-reference` and `alias-reference` are reserved types rejected until core certificate management and add-on alias binding exist.)
    - **Binding grammar:**
      - `environment`: `name` matches `^[A-Z_][A-Z0-9_]{0,63}$` (omitted defaults to property `name` if valid); `ANDARU_*` prefix is reserved for platform-injected variables and rejected in author bindings.
      - `argument`: `name` matches `^--?[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`. Booleans support `style: "flag"` (`true` emits `name`, `false` omits it); without `style: "flag"`, emits `[name, "true"|"false"]`.
-     - `file` (for `secret-reference`): `name` matches `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`, optional `format` (`raw`, `htpasswd`). Delivered as read-only file at `/run/andaru/secrets/<name>` and exposed via `ANDARU_SECRET_<UPPER_NAME>_FILE`.
-     - **Multi-selection enum encoding:** required whenever `maxItems == nil || maxItems > 1`. Binding must specify either `"encoding": { "mode": "join", "separator": "," }` (valid for `environment` or `argument`, rejecting option values that contain the separator) or `"encoding": { "mode": "repeat" }` (valid for `argument` only, emitting `[name, v1, name, v2]`). Single-select enums (`minItems <= 1 && maxItems == 1`) unwrap their sole value automatically; empty selection (`[]` when `minItems == 0`) emits no binding.
-     - **Collision checks:** duplicate environment names, duplicate non-repeated argument names, or duplicate secret file names across properties fail manifest load.
+     - `file` (for `secret-reference`): `name` matches `^[a-zA-Z][a-zA-Z0-9_]{0,63}$`, optional `format` (`raw`, `htpasswd`), optional `env` (`^[A-Z_][A-Z0-9_]{0,63}$`, non-`ANDARU_*`) and `prefix` (e.g. `"file:"`, for containers like Tailscale's `containerboot` that read `TS_AUTHKEY=file:/run/andaru/secrets/<name>`). Delivered inside the container's read-only secrets directory at `/run/andaru/secrets/<name>` and exposed via `ANDARU_SECRET_<UPPER_NAME>_FILE` (plus `env` when declared).
+     - **Multi-value encoding (`enum` with `maxItems != 1` and `string-list`):** binding must specify either `"encoding": { "mode": "join", "separator": "," }` (valid for `environment` or `argument`, rejecting values that contain the separator) or `"encoding": { "mode": "repeat" }` (valid for `argument` only, emitting `[name, v1, name, v2]`). Single-select enums (`minItems <= 1 && maxItems == 1`) unwrap their sole value automatically; empty arrays (`[]` when `minItems == 0`) emit no binding.
+     - **Collision checks:** duplicate environment names (including `file.env`), duplicate non-repeated argument names, or duplicate secret file names across properties fail manifest load.
    - **Null and default semantics:** explicit `null` values in settings are rejected; defaults resolve and persist on save; explicit `false`, `0`, and `""` are preserved; missing optional settings without defaults emit no binding.
 4. **Platform-injected runtime environment variables.** Reserved `ANDARU_*` variables passed to containers automatically when applicable:
    - `ANDARU_ADDON_ID`, `ANDARU_ADDON_SLUG`
    - `ANDARU_STORAGE_<UPPER_NAME>` for each declared `storage` mount path
    - `ANDARU_SECRET_<UPPER_NAME>_FILE` for each bound `secret-reference` file
-   - `ANDARU_BUS_SOCKET=/run/andaru/bus.sock` and `ANDARU_BUS_TOKEN_FILE=/run/andaru/bus-token` (only when the add-on has at least one granted bus topic)
+   - `ANDARU_BUS_SOCKET=/run/andaru/bus.sock` and `ANDARU_BUS_TOKEN_FILE=/run/andaru/bus/token` (only when the add-on has at least one granted bus topic)
 
 ### 3. Saved configuration and secret namespaces (`addon-catalog`)
 
@@ -146,11 +146,13 @@ Retains the owner-approved structure from [traefik-manifest-example.md](../../re
      }
      ```
    - Saving validates `settings` against the catalog manifest's derived schema, verifies `interfaces[].zone` references existing zones (and enforces `zoneRequired`), verifies every `busGrants` key exists in the manifest's requested topics, and checks optimistic locking (`expectedSavedVersion` + secret `expectedVersion`).
-   - Deleting a zone referenced by an enabled add-on's interface is rejected by cross-reference validation (same rule as segments and firewall rules).
+   - Deleting a zone referenced by any saved add-on (enabled or disabled) via either `interfaces[].zone` or a `zone-reference` setting is rejected by cross-reference validation (same rule as segments and firewall rules).
 2. **Secret namespaces (`internal/config/secrets.go`).**
-   - Extend `secretDocument.Scopes` (which currently holds `"core"`) to allow `"addon:<id>"` scopes alongside `"core"`, using the existing `secretEntry` format (`kind: "addon"`, `value`, `updatedAt`, `version`), `secretPrecondition`, and write-only `secretWrite` / `secretRef` API contract.
+   - Extend `secretDocument.Scopes` (and `secret-schema.json`, `backup-secret-schema.json`, `secrets.go`, `changes.go`) from `"core"`-only to allow `"addon:<id>"` scopes alongside `"core"` with `kind: "addon"`, using the existing `secretEntry` format (`value`, `updatedAt`, `version`), `secretPrecondition`, and write-only `secretWrite` / `secretRef` API contract.
+   - Extend `config.RealizationInput` and `render.Input` with scoped `AddonSecrets map[string]map[string]string` (keeping `render.Input.Secrets` for `"core"` so namespaces never collide).
    - An add-on's settings may reference only secrets in its own `"addon:<id>"` namespace (administrator-assigned shared core secrets can be added later with an explicit ACL table; no cross-add-on secret reading is permitted).
    - Unresolved secret references (for example, after restoring a secrets-excluded backup) block applying an enabled add-on, matching link password references (`checkResolvedReferences`).
+   - Uninstalling an add-on drops its entry from `declaration.addons` and removes its `"addon:<id>"` secret scope from the new saved head; the prior generation's rendered files remain intact on disk so rollback restores it cleanly.
 3. **Apply boundary.**
    - `declaration.addons` is included in `RealizationInput`. Any add-on enable/disable, setting change, interface zone change, or bus-grant change sets `applies.unapplied = true` and takes effect only through Preview → Apply → Rollback timer → Confirm.
 
@@ -161,27 +163,27 @@ Retains the owner-approved structure from [traefik-manifest-example.md](../../re
    - `andaru realize` writes Quadlet files, runtime secret/token files, reloads systemd, manages add-on units, and executes image staging commands.
 2. **Explicit image staging (never pull during apply).**
    - Container images are **never** pulled during `realize activate`, boot, or rollback. Pulling over WAN inside the 45-second apply timeout would break network reconfigurations and offline boots.
-   - Staging runs via `POST /api/v1/addons/{slug}/stage`, invoking `andaru realize addon-stage <slug>` (which runs `podman pull <digest>` using the catalog's pinned digest and verifies the pulled image ID/digest in local storage). In the Web UI, enabling an unstaged add-on presents an integrated "Stage image and continue" flow that runs this stage step to completion before saving/enabling, while still remaining strictly outside the apply rollback timer.
+   - Staging runs via `POST /api/v1/addons/{slug}/stage`, invoking `andaru realize addon-stage <slug>` directly in `cmd/andaru/realize.go` (outside `generation.Realizer`, like `updateVerb`, so it never holds the generations lock or hits `Realizer.Run`'s 10-second command cap). It runs `podman pull <digest>` using the catalog's pinned digest and verifies the pulled image ID/digest in local storage. In the Web UI, **Install** / **Update** runs this stage step to completion before saving/enabling, strictly outside the apply rollback timer.
    - `GET /api/v1/preview/network` and `POST /api/v1/applies` fail closed with a blocking finding (`ADDON_IMAGE_NOT_STAGED`) if an enabled add-on's pinned digest is not present in local Podman storage.
-   - **Offline rollback retention:** when an Andaru image update bumps an add-on's pinned digest, local Podman storage retains the previous digest until an explicit post-confirmation prune, so `bootc rollback` starts the previous generation's container without network access.
+   - **Offline rollback retention:** local Podman storage retains any digest referenced by either the `Confirmed` or `LastKnownGood` generation; `DELETE /api/v1/addons/{slug}/stage` and post-uninstall/post-upgrade cleanup never remove a digest still referenced by `LastKnownGood`, so boot fallback and `bootc rollback` start the prior generation's container without network access.
 3. **Quadlet rendering in generations (`internal/render` + `internal/generation`).**
-   - For each enabled add-on in the generation, `internal/render` emits:
+   - Because `internal/generation/store.go` stores generation files flat by `filepath.Base(f.Path)`, every rendered add-on file uses a globally unique basename, and `internal/generation` extends `FileEntry`/`modeFor`/`placed` to support mode `0400` and container UID/GID ownership:
      - `/run/containers/systemd/andaru-addon-<slug>.container` (mode `0600`, root-owned)
-     - `/run/andaru-addons/<slug>/env` (mode `0600`, non-secret validated environment variables, only if non-empty)
-     - `/run/andaru-addons/<slug>/secrets/<name>` (mode `0400`, owned by the container's runtime UID, only for bound `secret-reference` properties)
+     - `/run/andaru-addons/<slug>/andaru-addon-<slug>.env` (mode `0600`, root-owned, non-secret validated environment variables, only if non-empty)
+     - `/run/andaru-addons/<slug>/secrets/andaru-addon-<slug>-<name>.secret` (mode `0400`, owned by the container's runtime UID, only for bound `secret-reference` properties; the container mounts the `/run/andaru-addons/<slug>/secrets` directory read-only at `/run/andaru/secrets` so atomic updates never pin stale inodes)
    - Every generated `.container` file contains:
-     - `[Unit]` with `After=andaru-network-boot.service systemd-networkd.service` and the fail-closed safe-mode conditions:
+     - `[Unit]` with `After=andaru-network-boot.service systemd-networkd.service andaru-engine.service` and the fail-closed safe-mode conditions:
        ```ini
        ConditionPathExists=!/run/andaru/safe-mode
        ConditionPathExists=!/var/lib/andaru/safe-mode-next
        ConditionPathExists=!/run/andaru/addons-held
        ConditionKernelCommandLine=!andaru.safe=1
        ```
-     - `[Container]` with `Image=<pinned-digest>`, `Pull=never`, `Network=host`, `NoNewPrivileges=true`, `DropCapability=ALL` (plus only allowlisted `AddCapability=` / `AddDevice=` for `network-interface` profile), `EnvironmentFile=` (if present), `Exec=` (argument vector rendered safely with systemd quoting), `Volume=` binds for declared `storage` under `/var/lib/andaru/addons/<slug>/<name>` (`:Z` or explicit SELinux label validated by the lab spike) and read-only secret/bus mounts.
+     - `[Container]` with `Image=<pinned-digest>`, `Pull=never`, `Network=host`, `NoNewPrivileges=true`, `DropCapability=ALL` (plus only allowlisted `AddCapability=` / `AddDevice=` for `network-interface` profile), `EnvironmentFile=` (if present), `Exec=` (argument vector rendered safely with systemd quoting), `Volume=` binds for declared `storage` under `/var/lib/andaru/addons/<slug>/<name>` (`:Z` or explicit SELinux label validated by the lab spike), read-only directory mounts for secrets (`/run/andaru-addons/<slug>/secrets:/run/andaru/secrets:ro`), and—only when bus grants exist—the bus directory mount (`/run/andaru-addons/<slug>/bus:/run/andaru/bus:ro` plus `/run/andaru-addons/bus.sock:/run/andaru/bus.sock`).
      - `[Service]` with `Restart=on-failure`, `RestartSec=5`, `TimeoutStopSec=<stopTimeoutSeconds>`.
-     - `[Install]` with `WantedBy=multi-user.target` (so `andaru-network-boot` placing the confirmed generation's Quadlets before `systemd-networkd` brings add-ons up on normal boots and skips them automatically on safe-mode boots).
+     - No `[Install]` `WantedBy=multi-user.target` reliance for boot: `andaru-network-boot.service` runs in `sysinit.target` after PID 1 has already run `podman-system-generator` and computed the `multi-user.target` transaction. Instead, `andaru realize boot` writes `/run/andaru/addons-held` (fail-closed) and places the Quadlet files; once `andaru-engine` starts, verifies no settings-upgrade hold is active, and registers bus tokens/grants, it invokes `andaru realize addons-release-hold`, which removes `/run/andaru/addons-held`, runs `systemctl daemon-reload`, and starts enabled add-on units with `systemctl start --no-block` (matching `internal/generation/pppoe.go`; systemd still skips every unit if boot safe mode is active).
    - **Activation and rollback in `internal/generation`:**
-     - `realize activate` writes the new generation's Quadlet/env/secret files into `/run`, removes stale `andaru-addon-*.container` files from the prior generation, runs `systemctl daemon-reload` (which invokes `podman-system-generator`), stops removed/disabled add-on units, restarts changed add-on units, and verifies readiness against each enabled add-on's declared health check (or active unit state if none declared) within a bounded timeout.
+     - `realize activate` writes the new generation's Quadlet/env/secret files into `/run`, removes stale `andaru-addon-*.container` files from the prior generation, runs `systemctl daemon-reload`, stops removed/disabled add-on units, restarts changed add-on units (concurrently where safe so total stop + health wait stays strictly inside `activateLimit` 45s and `restoreLimit` 20s, and every `systemctl` call stays under `Realizer.Run`'s 10s per-command cap), and verifies readiness against each enabled add-on's declared health check (or active unit state if none declared) within a bounded budget.
      - **Failure and rollback:** if activation fails or the confirmation timer expires, `realize rollback` restores the previous generation's Quadlet/env/secret files, runs `systemctl daemon-reload`, stops newly added units, and restarts the prior generation's add-on units. A failed apply remains `failed` even after fallback succeeds.
 4. **Zone membership in nftables (`internal/render/nft.go`).**
    - `internal/render/nft.go` already models zones as dynamic nftables interface-name sets (`iifname @<zone>` / `oifname @<zone>`), matching interfaces even when they appear after boot.
@@ -198,28 +200,30 @@ Completes the unbuilt safe-mode foundation from [2026-11-19-first-boot-safe-mode
    - Console "Reboot into safe mode" writes `/var/lib/andaru/safe-mode-next` atomically and reboots.
    - Early in `andaru realize boot` (`andaru-network-boot.service`), if `/var/lib/andaru/safe-mode-next` exists or `/proc/cmdline` contains the exact token `andaru.safe=1`, it creates `/run/andaru/safe-mode` (0644) and removes `/var/lib/andaru/safe-mode-next` after syncing.
    - Because `andaru-network-boot.service` runs `Before=systemd-networkd.service` and add-on Quadlet units run `After=andaru-network-boot.service` with all four `Condition*` lines, add-ons never start during safe mode—even if boot fails mid-way before moving the file.
-2. **Settings-upgrade hold:**
-   - `andaru realize boot` evaluates whether the saved head has pending upgrade decisions; if so, it writes `/run/andaru/addons-held`.
-   - When the administrator resolves all upgrade decisions via `POST /api/v1/config/upgrade`, the engine calls `andaru realize addons-release-hold`, which removes `/run/andaru/addons-held` and starts enabled add-on units of the live generation (unless boot safe mode is also active).
+2. **Settings-upgrade hold (fail-closed without opening `config.db` in `Boot`):**
+   - `internal/generation` stays DB-free: `andaru realize boot` always writes `/run/andaru/addons-held` (0644) before returning, so add-ons stay off if `config.db` is unreadable or `andaru-engine` has not yet verified the saved head.
+   - At engine startup, after opening `config.db` and `bus.sock`, the engine evaluates `UpgradePreview(ctx, nil)`. If no upgrade decisions are pending, it calls `andaru realize addons-release-hold`, which removes `/run/andaru/addons-held`, runs `systemctl daemon-reload`, and starts enabled add-on units of the live generation (unless boot safe mode is active).
+   - If upgrade decisions are pending, `/run/andaru/addons-held` remains in place until cleared by either `POST /api/v1/config/upgrade` or a backup restore that saves a head requiring no decisions—both trigger `andaru realize addons-release-hold`.
 3. **Visibility:**
-   - `GET /api/v1/status/system` exposes `safeMode: { active: bool, reason: "boot" | "kernelArg" | "settingsHold" | "" }`.
+   - `GET /api/v1/status/system` exposes `safeMode: { active: bool, reasons: ("boot" | "kernelArg" | "settingsHold")[] }` so simultaneous reasons (for example, boot safe mode plus settings hold) are never masked.
    - Console status and the Web UI header/System widget show a clear safe-mode banner when active.
 
 ### 6. Event bus add-on socket and Android-style grants (`addon-bus`, #154)
 
 1. **Socket and transport.**
-   - `packaging/tmpfiles.d/andaru.conf` creates `/run/andaru-addons` (`0711 root root`).
-   - `andaru-engine` binds `/run/andaru-addons/bus.sock` (`0666` inside the restricted directory, or group-scoped with bind-mount isolation—the socket is bind-mounted **only** into containers that have at least one granted bus topic, at `/run/andaru/bus.sock`).
+   - `packaging/tmpfiles.d/andaru.conf` creates `/run/andaru-addons` (`0700 root root`). `packaging/systemd/andaru-engine.service` adds `ReadWritePaths=-/run/andaru-addons` so the engine can bind `/run/andaru-addons/bus.sock` without weakening `ProtectSystem=strict` or `CapabilityBoundingSet=`. Because host traversal is unnecessary for container bind mounts, local non-root host processes cannot traverse `/run/andaru-addons` or reach `bus.sock`.
+   - `/run/andaru-addons/bus.sock` is bind-mounted **only** into containers that have at least one granted bus topic, at `/run/andaru/bus.sock`.
    - Reuses the exact JSON-lines protocol in `internal/bus` (`hello`, `publish`, `subscribe`, `consume`, `ack`, `event`, `gap`, `detached`).
-2. **Authentication (per-add-on runtime token).**
+2. **Authentication and listener isolation (per-add-on runtime token).**
    - Unlike host systemd services (`andaru-outbound`), containers may share host UIDs or remap UIDs inside user namespaces, so `SO_PEERCRED` alone does not uniquely identify an add-on.
-   - On each apply (and on engine start for the live generation), the engine generates a fresh 256-bit random token per enabled add-on with bus grants, writes it to `/run/andaru-addons/<slug>/bus-token` (mode `0400`, owned by the container's UID, mounted read-only at `/run/andaru/bus-token`), and registers `(user: "addon." + slug, token, grants)` on the bus.
+   - `internal/bus` isolates the add-on listener from the root-only `bus.sock` listener (separate token-authenticated listener restricted to `addon.*` principals; root `bus.sock` never shares authentication or principals with add-ons, preventing any add-on from impersonating `realize`). Dynamic client tokens and grants are guarded by `b.mu` so `conn.read()` never races with updates.
+   - On each apply (and on engine start for the live generation), the engine generates a fresh 256-bit random token per enabled add-on with bus grants, registers `(user: "addon." + slug, token, grants)` on the bus, and hands the token to `andaru realize` (via stdin or root-only state file) so `realize` writes and `chown`s `/run/andaru-addons/<slug>/bus/token` (mode `0400`, owned by the container's UID; the engine has no `CAP_CHOWN`). The container mounts `/run/andaru-addons/<slug>/bus` read-only at `/run/andaru/bus` (directory bind mount, so atomic renames propagate), and receives `ANDARU_BUS_TOKEN_FILE=/run/andaru/bus/token`.
    - Tokens live only in `/run` and engine memory—never in saved configuration or backups.
    - `bus.Bus` gains thread-safe `SetClient(user, token string, grants Grants)` and `RemoveClient(user string)`, which immediately closes any existing connection for `user` so revoked grants or rotated tokens take effect at once.
 3. **Android-style grant enforcement.**
    - Only topics explicitly set to `"granted"` in the **applied** generation's `declaration.addons[].busGrants` are registered on the bus. Denied or unreviewed topics are absent from the client's `Grants`.
    - Add-ons requesting `notification/addon.<slug>` publish durable `notification.raised.v1` / `notification.cleared.v1` events with `source: "addon." + slug`. `internal/notify` already verifies `topic == "notification/" + e.Source`, preventing any add-on from spoofing core notification sources (`engine`, `delivery`, `notifications`) or another add-on's source.
-   - Add-on notifications support `link` paths restricted to `/system/addons/<slug>` (or `/system/addons`) so an add-on cannot spoof links to unrelated core pages.
+   - For `addon.*` sources, `internal/notify` enforces that `link` (when non-empty) equals `/system/addons` or `/system/addons/<slug>` (exact match after path check, rejecting `..` or sibling prefixes like `/system/addons/<slug>2`), and enforces `requires: "addons.read"` (rejecting omitted or unrelated core capabilities so users without `addons.read` never see add-on notifications).
    - Every topic the manifest declares is optional at runtime: if an administrator denies a topic, the bus refuses that subscribe/publish request with an error frame, and the add-on continues operating without it.
 
 ### 7. Authorization, API, and Web UI (`addon-ui`)
@@ -229,23 +233,24 @@ Completes the unbuilt safe-mode foundation from [2026-11-19-first-boot-safe-mode
      - `addons.read`: view catalog, installed add-ons, runtime status, health, logs, and add-on configuration pages (included in built-in `read-only` and `administrator` roles).
      - `addons.manage`: stage/remove container images, start/stop/restart applied add-on units (included in built-in `administrator` role).
    - Saving add-on settings, zone attachments, and bus grants continues to require `configuration.write`; applying and confirming continue to require `configuration.apply` and `configuration.confirm`.
-   - Manifest-level `permissions` (`view`, `configure`, `apply`, `manage`, `logs`, `metrics`) map onto these capabilities in Slice 1 (`view`/`logs`/`metrics` → `addons.read` + `configuration.read` for settings; `configure` → `configuration.write`; `apply` → `configuration.apply`; `manage` → `addons.manage`). Per-add-on fine-grained capabilities for custom roles (`addon.<slug>.<perm>`) can be layered later without changing the manifest format.
+   - Manifest-level `permissions` (`view`, `configure`, `apply`, `manage`, `logs`, `metrics`) map onto these capabilities in Slice 6 (`view`/`logs`/`metrics` → `addons.read`, plus `configuration.read` for saved/applied settings; `configure` → `configuration.write`; `apply` → `configuration.apply`; `manage` → `addons.manage`). Per-add-on fine-grained capabilities for custom roles (`addon.<slug>.<perm>`) can be layered later without changing the manifest format.
 2. **Engine API endpoints (`/api/v1/addons/...`).**
-   - `GET /api/v1/addons` (`addons.read`): catalog manifests joined with staged image state, saved/applied config summary, live systemd unit status, health status, and unreviewed bus-permission count.
-   - `GET /api/v1/addons/{slug}` (`addons.read`): full manifest, staged image status, runtime/health status, effective applied vs saved state.
+   - `GET /api/v1/addons` (`addons.read`): catalog manifests joined with staged image state, live systemd unit status, health status, and unreviewed bus-permission count. Saved/applied setting values are omitted unless the caller also holds `configuration.read`.
+   - `GET /api/v1/addons/{slug}` (`addons.read`): full manifest, staged image status, runtime/health status; saved/applied config state is included only when the caller also holds `configuration.read`.
    - `POST /api/v1/addons/{slug}/stage` (`addons.manage`): pulls pinned image digest into local Podman storage (audited).
-   - `DELETE /api/v1/addons/{slug}/stage` (`addons.manage`): removes unused staged image when add-on is disabled in both saved and live generations (audited).
+   - `DELETE /api/v1/addons/{slug}/stage` (`addons.manage`): removes unused staged image when its digest is not referenced by the saved head, `Confirmed`, or `LastKnownGood` generations (audited).
    - `POST /api/v1/addons/{slug}/{start|stop|restart}` (`addons.manage`): manual lifecycle action on the applied generation's unit (audited).
    - `GET /api/v1/addons/{slug}/logs/{name}` (`addons.read`): bounded tail of journal or declared file log stream (cursor/line-limited, safe path open).
-   - Add-on settings, zone bindings, and bus grants are read and written through the existing configuration API (`GET/PUT /api/v1/config` or dedicated sub-resource backed by the same optimistic-locked `config.Store` commit), keeping one version history, one Review-and-apply diff, and one rollback model.
+   - Add-on settings, zone bindings, and bus grants are read via `GET /api/v1/config` (`configuration.read`) and written via `POST /api/v1/config/changes` or dedicated `/api/v1/config/addons` collection routes (`configuration.write`), backed by the same optimistic-locked `config.Store` commit—keeping one version history, one Review-and-apply diff, and one rollback model.
 3. **Web UI (`web/src`).**
    - **Navigation:** single entry **System → Add-ons** (`/system/addons`, visible when holding `addons.read`), beside Updates, Backups, and Notifications. Installed add-ons do not add custom pages to the left navigation tree in Slice 6.
    - **Add-on management page (`/system/addons`):** lists catalog add-ons with status, health, installed vs available version/digest, unreviewed bus-permission count, and the safe-mode banner:
      - **Install** (for not-installed add-ons): integrated "Stage image and continue" flow that pulls the pinned digest outside the apply window, then adds the add-on to saved configuration (opening its Settings page to configure required fields / review bus grants before applying).
      - **Update** (for installed add-ons whose catalog digest advanced after an Andaru update): stages the new digest outside the apply window and surfaces any newly requested bus permissions before applying.
      - **Settings** (for installed add-ons): opens `/system/addons/<slug>`.
-     - **Uninstall** (for installed add-ons, with explicit confirmation dialog): removes the add-on from saved configuration so stopping and removing its Quadlet goes through the normal Apply → Rollback timer → Confirm cycle (preventing lockout if an administrator is connected through that add-on, e.g. Tailscale); once confirmed, removes `/var/lib/andaru/addons/<slug>` and unreferenced staged image.
+     - **Uninstall** (for installed add-ons, with explicit confirmation dialog): removes the add-on from saved configuration (and its `"addon:<id>"` secret scope from the new saved head) so stopping and removing its Quadlet goes through the normal Apply → Rollback timer → Confirm cycle (preventing lockout if an administrator is connected through that add-on, e.g. Tailscale); after confirmation, if the saved head still omits the add-on, the engine triggers cleanup of `/var/lib/andaru/addons/<slug>` (and prunes any staged digest no longer referenced by `Confirmed` or `LastKnownGood`).
    - **Add-on Settings page (`/system/addons/<slug>`):** accessed from `/system/addons` for installed add-ons, rendering everything declared in the manifest with Mantine controls and static CSS (no inline style props, preserving `style-src 'self'` and `script-src 'self'`):
+     - Settings, zone selectors, and bus-permission forms render only when the session also holds `configuration.read` (read-only without `configuration.write`); users holding only `addons.read` see runtime status, health, logs, and the external WebUI link without hitting 403 on `/api/v1/config`.
      - Declarative `properties` form with visible Markdown descriptions below controls (`aria-describedby`), raw HTML disabled and sanitized, and selected-option descriptions for single-select enums.
      - Write-only secret inputs using the existing `secretWrite` pattern (never displaying secret values).
      - Interface-to-zone selectors (when `interfaces` are declared) and `zone-reference` selectors from `/api/v1/config` zones.
@@ -293,15 +298,14 @@ Per Slice 6 of [2026-11-18-appliance-image-design.md](2026-11-18-appliance-image
 ### Provisional Tailscale manifest sketch
 
 - `id`: `org.andaru.tailscale`, `slug`: `tailscale`
-- `runtime`: `network: "host"`, `profile: "network-interface"`, `capabilities: ["NET_ADMIN"]`, `devices: ["/dev/net/tun"]`, `args: ["--netfilter-mode=off"]`
+- `runtime`: `network: "host"`, `profile: "network-interface"`, `capabilities: ["NET_ADMIN"]`, `devices: ["/dev/net/tun"]`, static env (`TS_USERSPACE=false`, `TS_EXTRA_ARGS=--netfilter-mode=off`, aligned with official `ghcr.io/tailscale/tailscale` `containerboot` and verified by the lab gate)
 - `interfaces`: `[{ "name": "tailscale0", "title": "Tailscale tunnel", "zoneRequired": true }]`
 - `storage`: `[{ "name": "state", "purpose": "state", "mountPath": "/var/lib/tailscale", "backup": false }]`
 - `properties`:
-  - `authKey` (`secret-reference`, optional, bound to `file` -> `ANDARU_SECRET_AUTH_KEY_FILE` / `TS_AUTHKEY` file or `TS_AUTH_ONCE`)
+  - `authKey` (`secret-reference`, optional, `file` binding `name: "auth_key"`, `env: "TS_AUTHKEY"`, `prefix: "file:"` -> `TS_AUTHKEY=file:/run/andaru/secrets/andaru-addon-tailscale-auth_key.secret`)
   - `hostname` (`string`, `format: "hostname"`, optional, bound to `environment` `TS_HOSTNAME`)
-  - `acceptRoutes` (`boolean`, default `false`)
-  - `advertiseRoutes` (`string` / CIDR list, optional)
-  - `advertiseExitNode` (`boolean`, default `false`)
+  - `advertiseRoutes` (`string-list`, `itemFormat: "cidr"`, optional, bound to `environment` `TS_ROUTES` with `encoding: { mode: "join", separator: "," }`)
+  - `acceptRoutes` / `advertiseExitNode` (mapped via validated `containerboot` flags verified in the lab gate)
 - `logs`: `application` (`source: { type: "runtime" }`)
 
 ---
