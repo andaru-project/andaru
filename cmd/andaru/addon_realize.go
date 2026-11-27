@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -17,7 +18,12 @@ import (
 	"github.com/andaru-project/andaru/internal/securefs"
 )
 
-const maxAddonBusTokensBytes = 1 << 20
+const (
+	maxAddonBusTokensBytes = 1 << 20
+	maxAddonLogBytes       = 256 << 10
+)
+
+var addonLogCatalogDir = addon.DefaultCatalogDir
 
 // readAddonBusTokensFile strictly reads a root-owned 0600 JSON map of slug -> bus token without following symlinks.
 func readAddonBusTokensFile(path string) (map[string]string, error) {
@@ -95,4 +101,71 @@ func addonStageVerb(ctx context.Context, verb, stateDir, target string, stderr i
 		return 1
 	}
 	return 0
+}
+
+// addonLogVerb reads a manifest-declared file log with privileged DAC capabilities (needed when
+// container storage directories are owned by a non-root container UID while andaru-engine runs without
+// CAP_DAC_READ_SEARCH) and writes the bounded JSON result into a pre-created root-owned 0600 file inside stateDir.
+func addonLogVerb(stateDir, slug, logName string, lines int, outPath string, stderr io.Writer) int {
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(stderr, "realize requires root")
+		return 1
+	}
+	if err := writeAddonLogOutput(addonLogCatalogDir, stateDir, slug, logName, lines, outPath); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func writeAddonLogOutput(catalogDir, stateDir, slug, logName string, lines int, outPath string) error {
+	if !filepath.IsAbs(outPath) || filepath.Clean(outPath) != outPath || filepath.Dir(outPath) != stateDir {
+		return errors.New("log output path must be directly inside state-dir")
+	}
+	if err := securefs.CheckAncestors(stateDir); err != nil {
+		return err
+	}
+	cat, err := addon.LoadCatalog(catalogDir)
+	if err != nil {
+		return fmt.Errorf("load add-on catalog: %w", err)
+	}
+	m, ok := cat.BySlug(slug)
+	if !ok {
+		return fmt.Errorf("unknown add-on slug %q", slug)
+	}
+	idx := slices.IndexFunc(m.Logs, func(l addon.LogSpec) bool { return l.Name == logName && l.Source.Type == "file" })
+	if idx < 0 {
+		return fmt.Errorf("unknown file log %q for add-on %q", logName, slug)
+	}
+	spec := m.Logs[idx]
+
+	// Open and validate the output file before writing so we never follow a symlink or clobber another file.
+	out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open log output file: %w", err)
+	}
+	defer out.Close()
+	info, err := out.Stat()
+	if err != nil {
+		return fmt.Errorf("stat log output file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !securefs.RootOwned(info) {
+		return errors.New("log output file must be a root-owned 0600 regular file")
+	}
+
+	entries, truncated, err := addon.ReadBoundedLogFile(stateDir, slug, spec.Source.Storage, spec.Source.Path, lines, maxAddonLogBytes)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(struct {
+		Lines     []string `json:"lines"`
+		Truncated bool     `json:"truncated"`
+	}{Lines: entries, Truncated: truncated})
+	if err != nil {
+		return err
+	}
+	if _, err := out.Write(payload); err != nil {
+		return err
+	}
+	return out.Sync()
 }

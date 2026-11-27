@@ -3,14 +3,22 @@ package engine
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/bus"
@@ -104,7 +112,7 @@ func managementOrigins(configured []string) (map[string]struct{}, map[string]str
 	hosts := make(map[string]struct{}, len(configured))
 	for _, raw := range configured {
 		parsed, err := url.Parse(raw)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != raw {
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || !validOriginHostname(parsed.Hostname()) || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != raw {
 			return nil, nil, errors.New("management origins must be exact HTTPS origins without paths, queries, fragments, or credentials")
 		}
 		if _, duplicate := origins[raw]; duplicate {
@@ -114,6 +122,102 @@ func managementOrigins(configured []string) (map[string]struct{}, map[string]str
 		hosts[parsed.Host] = struct{}{}
 	}
 	return origins, hosts, nil
+}
+
+func validOriginHostname(host string) bool {
+	if host == "" {
+		return false
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return !addr.Is4In6() && addr.String() == host
+	}
+	return addon.ValidHostname(host)
+}
+
+const (
+	managementOriginsFile     = "management-origins.json"
+	maxManagementOriginsBytes = 64 << 10
+)
+
+// reconcileManagementOrigins compares the configured HTTPS management origins against the persisted set
+// from the previous startup. If any previously configured origin was dropped (or the persisted file is missing
+// on first upgrade from a pre-file release, or unreadable), all active browser sessions are revoked so a retired
+// host's __Host-andaru_session cookie cannot be replayed if that hostname is later reassigned to an add-on WebUI.
+func reconcileManagementOrigins(ctx context.Context, stateDir string, identities identity.Store, configured []string) (revoked bool, err error) {
+	if stateDir == "" || identities == nil {
+		return false, nil
+	}
+	current := slices.Clone(configured)
+	slices.Sort(current)
+	current = slices.Compact(current)
+
+	data, mErr := json.Marshal(current)
+	if mErr != nil {
+		return false, mErr
+	}
+	if len(data) > maxManagementOriginsBytes {
+		return false, errors.New("configured management origins exceed size limit")
+	}
+
+	path := filepath.Join(stateDir, managementOriginsFile)
+	needRevoke := false
+	needWrite := false
+
+	raw, readErr := readFileNoFollow(path, maxManagementOriginsBytes+1)
+	if errors.Is(readErr, fs.ErrNotExist) {
+		// On a fresh install there are zero sessions (no-op); on an upgrade from a build before
+		// management-origins.json existed, revoking once prevents pre-upgrade sessions from surviving
+		// an origin change performed during the upgrade.
+		needRevoke = true
+		needWrite = true
+	} else if readErr != nil || len(raw) > maxManagementOriginsBytes {
+		needRevoke = true
+		needWrite = true
+	} else {
+		var prev []string
+		if unmarshalErr := json.Unmarshal(raw, &prev); unmarshalErr != nil {
+			needRevoke = true
+			needWrite = true
+		} else {
+			for _, oldOrigin := range prev {
+				if !slices.Contains(current, oldOrigin) {
+					needRevoke = true
+					break
+				}
+			}
+			slices.Sort(prev)
+			prev = slices.Compact(prev)
+			if !slices.Equal(prev, current) {
+				needWrite = true
+			}
+		}
+	}
+
+	if needRevoke {
+		count, revErr := identities.RevokeAllSessions(ctx)
+		if revErr != nil {
+			return false, revErr
+		}
+		if count > 0 {
+			revoked = true
+			slog.InfoContext(ctx, "revoked browser sessions after management origin change", "sessions", count)
+		}
+	}
+	if needWrite {
+		if wErr := writeFileAtomic(path, data, 0o600); wErr != nil {
+			return revoked, wErr
+		}
+	}
+	return revoked, nil
+}
+
+func readFileNoFollow(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, maxBytes))
 }
 
 func (h *webAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {

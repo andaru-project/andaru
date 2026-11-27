@@ -9,6 +9,8 @@ import { highestSeverity, severityColor, useBrowserNotificationsActive } from '.
 import { NotificationToaster } from './NotificationToaster';
 import { PendingNotice } from './PendingNotice';
 import { FleetWorkspace } from './netplane/FleetWorkspace';
+import { AddonDetailScreen } from './screens/AddonDetailScreen';
+import { AddonsScreen } from './screens/AddonsScreen';
 import { AliasesScreen } from './screens/AliasesScreen';
 import { AuditScreen } from './screens/AuditScreen';
 import { BackupScreen } from './screens/BackupScreen';
@@ -67,6 +69,7 @@ const pageTitles: Record<string, string> = {
   '/firewall/zones': 'Zones',
   '/changes': 'Review and apply',
   '/system/details': 'System details',
+  '/system/addons': 'Add-ons',
   '/system/updates': 'Software updates',
   '/system/backups': 'Backup & restore',
   '/system/notifications': 'Notifications',
@@ -235,6 +238,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
       label: 'System',
       items: [
         { to: '/system/details', label: 'Details', visible: canReadStatus },
+        { to: '/system/addons', label: 'Add-ons', visible: capabilities.has('addons.read') },
         { to: '/system/updates', label: 'Updates', visible: canReadStatus },
         { to: '/system/backups', label: 'Backups', visible: capabilities.has('backups.create') || capabilities.has('backups.restore') },
         { to: '/system/notifications', label: 'Notifications', visible: canReadNotifications || canReadChanges },
@@ -281,6 +285,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     ['/diagnostics/traffic-flow', <TrafficFlowScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} api={api} canRename={capabilities.has('configuration.apply')} onSessionLost={onSessionLost} />],
+    ['/system/addons', <AddonsScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],
     ['/system/backups', <BackupScreen api={api} session={session} hostname={hostname} onRestored={() => { void reloadChanges(); void reloadNotifications(); void system.reload(); }} onSessionLost={onSessionLost} />],
     ['/system/notifications', <NotificationsScreen api={api} session={session} notifications={notifications} hostname={hostname} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
@@ -367,6 +372,12 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
           )}
           {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); void system.reload(); }} onSessionLost={onSessionLost} />} />}
           {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
+          {capabilities.has('addons.read') && (
+            <Route
+              path="/system/addons/:slug"
+              element={<AddonDetailScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />}
+            />
+          )}
           {canReadStatus && (
             <Route
               path="/network/*"

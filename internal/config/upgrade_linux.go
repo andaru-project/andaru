@@ -76,7 +76,7 @@ func (s *Store) Upgrade(ctx context.Context, actor authz.Actor, expected Version
 		return SaveResult{}, &Fault{Code: "VALIDATION_FAILED", Details: missing}
 	}
 	var preview RestorePreview
-	if p.prepared, preview, err = prepareRestoration(&current, decodedBackup{configuration: &answered, ownSecrets: true}, next, time.Now().UTC(), s.catalog); err != nil {
+	if p.prepared, preview, err = prepareRestoration(&current, decodedBackup{configuration: &answered, ownSecrets: true}, next, time.Now().UTC(), s.catalog, s.managementHosts); err != nil {
 		return SaveResult{}, err
 	}
 	if len(preview.BlockingSecrets) != 0 {

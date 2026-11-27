@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/andaru-project/andaru/internal/addon"
 )
 
 type Config struct {
@@ -117,7 +119,7 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, er
 	}
 	for _, origin := range config.Origins {
 		parsed, err := url.Parse(origin)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != origin {
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || !validOriginHostname(parsed.Hostname()) || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != origin {
 			return nil, nil, errors.New("management origins must be exact HTTPS origins without paths, queries, fragments, or credentials")
 		}
 		if _, duplicate := origins[origin]; duplicate {
@@ -127,6 +129,16 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, er
 		hosts[parsed.Host] = struct{}{}
 	}
 	return origins, hosts, nil
+}
+
+func validOriginHostname(host string) bool {
+	if host == "" {
+		return false
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return !addr.Is4In6() && addr.String() == host
+	}
+	return addon.ValidHostname(host)
 }
 
 func explicitListenAddress(value string) error {

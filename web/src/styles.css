@@ -973,3 +973,58 @@ path.traffic-sent {
     width: auto;
   }
 }
+
+/* Add-on catalog, declarative property descriptions, and bounded log view (strict-CSP static classes). */
+.addon-card-head {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.addon-digest-line {
+  font-family: var(--mantine-font-family-monospace);
+  overflow-wrap: anywhere;
+}
+
+.addon-markdown {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+  line-height: 1.45;
+}
+
+.addon-markdown-paragraph {
+  margin: 0.25rem 0 0;
+}
+
+.addon-markdown-paragraph:first-child {
+  margin-top: 0;
+}
+
+.addon-markdown-list {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.addon-property-description {
+  font-size: var(--mantine-font-size-xs);
+  margin-top: 0.25rem;
+}
+
+.addon-option-note {
+  border-left: 2px solid var(--mantine-color-default-border);
+  padding-left: var(--mantine-spacing-xs);
+}
+
+.addon-log-view {
+  background: var(--mantine-color-default);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-default);
+  font-family: var(--mantine-font-family-monospace);
+  font-size: var(--mantine-font-size-xs);
+  line-height: 1.45;
+  margin: 0;
+  max-height: 24rem;
+  overflow: auto;
+  padding: var(--mantine-spacing-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

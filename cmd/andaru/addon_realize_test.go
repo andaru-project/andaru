@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -84,5 +86,76 @@ func TestReadAddonBusTokensFileValidation(t *testing.T) {
 		if _, err := readAddonBusTokensFile(p); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
+	}
+}
+
+func TestWriteAddonLogOutput(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("writeAddonLogOutput requires root-owned state directory")
+	}
+	stateDir, err := os.MkdirTemp("/var/tmp", "andaru-log-state-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+	if err := os.Chmod(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	catDir := t.TempDir()
+	slugDir := filepath.Join(catDir, "sample")
+	if err := os.MkdirAll(slugDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{
+  "manifestVersion": 1,
+  "requires": [{"name": "andaru.extension-api", "version": ">=1.0.0 <2.0.0"}],
+  "id": "org.andaru.sample",
+  "slug": "sample",
+  "name": "Sample",
+  "version": "1.0.0",
+  "application": {"name": "Sample", "version": "1.0"},
+  "permissions": [{"name": "logs", "title": "Logs"}],
+  "runtime": {"image": "ghcr.io/example/sample@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "network": "host"},
+  "storage": [{"name": "logs", "purpose": "state", "mountPath": "/var/log/sample"}],
+  "logs": [{"name": "appfile", "title": "File", "permission": "logs", "source": {"type": "file", "storage": "logs", "path": "app.log"}}]
+}`
+	if err := os.WriteFile(filepath.Join(slugDir, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logDir := filepath.Join(stateDir, "addons", "sample", "logs")
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logDir, "app.log"), []byte("a\nb\nc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	outPath := filepath.Join(stateDir, "out.json")
+	if err := os.WriteFile(outPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAddonLogOutput(catDir, stateDir, "sample", "appfile", 2, outPath); err != nil {
+		t.Fatalf("writeAddonLogOutput: %v", err)
+	}
+	raw, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Lines     []string `json:"lines"`
+		Truncated bool     `json:"truncated"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil || !slices.Equal(got.Lines, []string{"b", "c"}) || !got.Truncated {
+		t.Fatalf("got %+v (err=%v)", got, err)
+	}
+
+	// Output path outside stateDir is rejected.
+	outside := filepath.Join(t.TempDir(), "escape.json")
+	if err := os.WriteFile(outside, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAddonLogOutput(catDir, stateDir, "sample", "appfile", 2, outside); err == nil {
+		t.Fatal("expected rejection for output path outside stateDir")
 	}
 }

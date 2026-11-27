@@ -110,6 +110,7 @@ type handlerDeps struct {
 	hostnameAPI      http.Handler
 	notificationsAPI http.Handler
 	aliasesAPI       http.Handler
+	addonsAPI        http.Handler
 	stateDir         string
 }
 
@@ -129,8 +130,8 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 }
 
 func newHandlerWithDeps(d handlerDeps) http.Handler {
-	readLinks, configuration, identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsAPI, aliasesAPI, stateDir :=
-		d.readLinks, d.configuration, d.identityAPI, d.auditAPI, d.fleetAPI, d.updateAPI, d.setupCodeAPI, d.hostnameAPI, d.notificationsAPI, d.aliasesAPI, d.stateDir
+	readLinks, configuration, identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsAPI, aliasesAPI, addonsAPI, stateDir :=
+		d.readLinks, d.configuration, d.identityAPI, d.auditAPI, d.fleetAPI, d.updateAPI, d.setupCodeAPI, d.hostnameAPI, d.notificationsAPI, d.aliasesAPI, d.addonsAPI, d.stateDir
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -168,6 +169,10 @@ func newHandlerWithDeps(d handlerDeps) http.Handler {
 		}
 		if (r.URL.Path == updateAPIPrefix || strings.HasPrefix(r.URL.Path, updateAPIPrefix+"/")) && updateAPI != nil {
 			updateAPI.ServeHTTP(w, r)
+			return
+		}
+		if (r.URL.Path == addonsAPIPrefix || strings.HasPrefix(r.URL.Path, addonsAPIPrefix+"/")) && addonsAPI != nil {
+			addonsAPI.ServeHTTP(w, r)
 			return
 		}
 		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath || r.URL.Path == "/api/v1/kept/recovery" || isBackupPath(r.URL.Path)

@@ -203,4 +203,5 @@ type Store interface {
 	ListSessions(context.Context, string, uint64) ([]Session, error)
 	RevokeSession(context.Context, string, string) error
 	RevokeSessionWithIntent(context.Context, string, string, func() error) error
+	RevokeAllSessions(context.Context) (int64, error)
 }

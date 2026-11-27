@@ -99,7 +99,7 @@ func (s *Store) PreviewRestore(ctx context.Context, input RestoreDocuments) (res
 		if e != nil || n == int64(^uint64(0)>>1) {
 			return unavailable()
 		}
-		_, result, e = prepareRestoration(&current, decoded, Version(fmt.Sprint(n+1)), time.Now().UTC(), s.catalog)
+		_, result, e = prepareRestoration(&current, decoded, Version(fmt.Sprint(n+1)), time.Now().UTC(), s.catalog, s.managementHosts)
 		return e
 	})
 	if err != nil {
@@ -135,7 +135,7 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 	if err = heldRestore(&current, decoded); err != nil {
 		return nil, empty, err
 	}
-	prepared, preview, err := prepareRestoration(&current, decoded, next, time.Now().UTC(), s.catalog)
+	prepared, preview, err := prepareRestoration(&current, decoded, next, time.Now().UTC(), s.catalog, s.managementHosts)
 	if err != nil {
 		return nil, empty, err
 	}
@@ -224,13 +224,13 @@ func sameSecrets(a, b []byte) bool {
 	})
 }
 
-func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time, cat *addon.Catalog) (preparedChange, RestorePreview, error) {
+func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time, cat *addon.Catalog, managementHosts []string) (preparedChange, RestorePreview, error) {
 	var empty preparedChange
 	preview := RestorePreview{ExpectedSavedVersion: current.Version, UnresolvedSecrets: []string{}, BlockingSecrets: []string{}}
 	candidate := current.Config
 	if decoded.configuration != nil {
 		candidate = *decoded.configuration
-		if errs := validateAddonsWebUISeparation(cat, &candidate); len(errs) > 0 {
+		if errs := validateAddonsWebUISeparation(cat, &candidate, managementHosts); len(errs) > 0 {
 			return empty, preview, boundaryFault(validationError(errs))
 		}
 	}

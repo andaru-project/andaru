@@ -55,6 +55,50 @@ func ValidDigestImage(ref string) bool { return validDigestImage(ref) }
 // ValidInterfaceName reports whether name is a valid, non-reserved add-on interface name.
 func ValidInterfaceName(name string) bool { return validAddonInterfaceName(name) }
 
+// ValidHostname reports whether val is a valid RFC 1123 hostname or canonical IPv4 literal,
+// rejecting WHATWG alternate IPv4 notations (hex, octal, decimal integer, or shorthand dotted forms).
+func ValidHostname(val string) bool {
+	if len(val) == 0 || len(val) > 253 || !hostnamePattern.MatchString(val) {
+		return false
+	}
+	trimmed := strings.TrimSuffix(val, ".")
+	lastLabel := trimmed
+	if idx := strings.LastIndexByte(trimmed, '.'); idx >= 0 {
+		lastLabel = trimmed[idx+1:]
+	}
+	if endsInNumericIPv4Label(lastLabel) {
+		a, err := netip.ParseAddr(val)
+		return err == nil && a.Is4() && a.String() == val
+	}
+	return true
+}
+
+func endsInNumericIPv4Label(label string) bool {
+	if label == "" {
+		return false
+	}
+	allDigits := true
+	for i := range len(label) {
+		if label[i] < '0' || label[i] > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return true
+	}
+	if len(label) >= 2 && label[0] == '0' && (label[1] == 'x' || label[1] == 'X') {
+		for i := 2; i < len(label); i++ {
+			c := label[i]
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // ErrUnsupportedManifestVersion reports a manifest whose manifestVersion or requires cannot run on this Andaru.
 var ErrUnsupportedManifestVersion = errors.New("unsupported add-on manifest version or API requirement")
 
@@ -1363,7 +1407,7 @@ func validateFormat(format, val string) string {
 	case "":
 		return ""
 	case "hostname":
-		if len(val) == 0 || len(val) > 253 || !hostnamePattern.MatchString(val) {
+		if !ValidHostname(val) {
 			return "invalid hostname"
 		}
 	case "uri":

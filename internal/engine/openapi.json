@@ -1190,7 +1190,7 @@
               "segments",
               "zones",
               "roles",
-              "dhcp", "dhcp6", "virtualAddresses"
+              "dhcp", "dhcp6", "virtualAddresses", "addons"
             ]
           }
         }
@@ -1599,7 +1599,7 @@
               "segments",
               "zones",
               "roles",
-              "dhcp", "dhcp6", "virtualAddresses"
+              "dhcp", "dhcp6", "virtualAddresses", "addons"
             ]
           }
         },
@@ -7633,6 +7633,164 @@
         }
       }
     },
+    "/api/v1/addons": {
+      "get": {
+        "operationId": "listAddons",
+        "x-required-capability": "addons.read",
+        "summary": "List catalog add-ons with staged image, runtime, health, and optional saved config state",
+        "responses": {
+          "200": { "description": "Add-on catalog and runtime list" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "head": {
+        "operationId": "headAddons",
+        "x-required-capability": "addons.read",
+        "responses": {
+          "200": { "description": "Add-on catalog and runtime list; no body" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/addons/{slug}": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "get": {
+        "operationId": "getAddon",
+        "x-required-capability": "addons.read",
+        "summary": "Read one catalog add-on's manifest, runtime state, WebUI link, and optional saved config",
+        "responses": {
+          "200": { "description": "Add-on detail" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on not found" }
+        }
+      },
+      "head": {
+        "operationId": "headAddon",
+        "x-required-capability": "addons.read",
+        "responses": {
+          "200": { "description": "Add-on detail; no body" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on not found" }
+        }
+      }
+    },
+    "/api/v1/addons/{slug}/stage": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "post": {
+        "operationId": "stageAddonImage",
+        "x-required-capability": "addons.manage",
+        "summary": "Start pulling and verifying a catalog add-on's pinned container image digest asynchronously",
+        "responses": {
+          "202": { "description": "Add-on image staging started" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on not found" },
+          "409": { "description": "Image staging already in progress" },
+          "503": { "description": "Staging or audit storage unavailable" }
+        }
+      },
+      "delete": {
+        "operationId": "unstageAddonImage",
+        "x-required-capability": "addons.manage",
+        "summary": "Remove an unreferenced staged add-on container image",
+        "responses": {
+          "204": { "description": "Staged image removed" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on not found" },
+          "409": { "description": "Image still referenced or staging in progress" },
+          "502": { "description": "Image removal failed" },
+          "503": { "description": "Staging, configuration, or audit storage unavailable" }
+        }
+      }
+    },
+    "/api/v1/addons/{slug}/start": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "post": {
+        "operationId": "startAddon",
+        "x-required-capability": "addons.manage",
+        "summary": "Start an applied add-on unit",
+        "responses": {
+          "200": { "description": "Updated add-on runtime state" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on not found" },
+          "409": { "description": "Safe mode active or add-on not applied" },
+          "502": { "description": "Add-on lifecycle command failed" },
+          "503": { "description": "Lifecycle control or audit storage unavailable" }
+        }
+      }
+    },
+    "/api/v1/addons/{slug}/stop": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "post": {
+        "operationId": "stopAddon",
+        "x-required-capability": "addons.manage",
+        "summary": "Stop an applied add-on unit",
+        "responses": {
+          "200": { "description": "Updated add-on runtime state" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on not found" },
+          "409": { "description": "Safe mode active or add-on not applied" },
+          "502": { "description": "Add-on lifecycle command failed" },
+          "503": { "description": "Lifecycle control or audit storage unavailable" }
+        }
+      }
+    },
+    "/api/v1/addons/{slug}/restart": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "post": {
+        "operationId": "restartAddon",
+        "x-required-capability": "addons.manage",
+        "summary": "Restart an applied add-on unit",
+        "responses": {
+          "200": { "description": "Updated add-on runtime state" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on not found" },
+          "409": { "description": "Safe mode active or add-on not applied" },
+          "502": { "description": "Add-on lifecycle command failed" },
+          "503": { "description": "Lifecycle control or audit storage unavailable" }
+        }
+      }
+    },
+    "/api/v1/addons/{slug}/logs/{name}": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "lines", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 1000 } },
+        { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" } }
+      ],
+      "get": {
+        "operationId": "getAddonLogs",
+        "x-required-capability": "addons.read",
+        "summary": "Read bounded tail of an add-on's declared runtime or file log stream",
+        "responses": {
+          "200": { "description": "Log lines" },
+          "400": { "description": "Invalid query parameters" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on or log stream not found" },
+          "503": { "description": "Logs unavailable" }
+        }
+      },
+      "head": {
+        "operationId": "headAddonLogs",
+        "x-required-capability": "addons.read",
+        "responses": {
+          "200": { "description": "Log lines; no body" },
+          "400": { "description": "Invalid query parameters" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Add-on or log stream not found" },
+          "503": { "description": "Logs unavailable" }
+        }
+      }
+    },
     "/api/v1/setup/code": {
       "get": {
         "operationId": "getSetupCode",
@@ -8946,7 +9104,17 @@
                   "UNSUPPORTED_ARCHIVE",
                   "SECRET_ENCRYPTION_REQUIRED",
                   "ENCRYPTION_FAILED",
-                  "UNSUPPORTED_SCHEMA"
+                  "UNSUPPORTED_SCHEMA",
+                  "AUDIT_UNAVAILABLE",
+                  "ADDON_UNAVAILABLE",
+                  "STAGE_IN_PROGRESS",
+                  "ADDON_STAGE_FAILED",
+                  "ADDON_IMAGE_IN_USE",
+                  "ADDON_UNSTAGE_FAILED",
+                  "SAFE_MODE_ACTIVE",
+                  "ADDON_NOT_APPLIED",
+                  "ADDON_CONTROL_FAILED",
+                  "LOGS_UNAVAILABLE"
                 ]
               },
               "message": {
@@ -8982,7 +9150,7 @@
                       "rules",
                       "management",
                       "nat.outbound",
-                      "dhcp", "dhcp6", "virtualAddresses", "notifications.channels",
+                      "dhcp", "dhcp6", "virtualAddresses", "addons", "notifications.channels",
                       "dns"
                     ]
                   },
@@ -9175,7 +9343,7 @@
               "rules",
               "management",
               "nat.outbound",
-              "dhcp", "dhcp6", "virtualAddresses", "notifications.channels",
+              "dhcp", "dhcp6", "virtualAddresses", "addons", "notifications.channels",
               "dns"
             ]
           },
@@ -9509,7 +9677,8 @@
               "DNS_NOT_APPLIED",
               "FOREIGN_FILTER",
               "MANAGEMENT_REQUIRED",
-              "DHCP_WITHOUT_DNS"
+              "DHCP_WITHOUT_DNS",
+              "ADDON_IMAGE_NOT_STAGED"
             ]
           },
           "path": {
@@ -9794,7 +9963,8 @@
               "NETDEV_CHANGE_UNSUPPORTED",
               "FOREIGN_FILTER",
               "MANAGEMENT_REQUIRED",
-              "DHCP_WITHOUT_DNS"
+              "DHCP_WITHOUT_DNS",
+              "ADDON_IMAGE_NOT_STAGED"
             ]
           },
           "path": {
