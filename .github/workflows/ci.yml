@@ -165,6 +165,7 @@ jobs:
           sudo install -o root -g root -m 0755 -t "$art" \
             "$build/andaru" "$build/config.test" "$build/engine.test" "$build/generation.test" "$build/identity.test" \
             "$build/audit.test" "$build/ctl.test" "$build/render.test" "$build/reset.test"
+          sudo install -o root -g root -m 0644 -t "$art" packaging/sysctl.d/50-andaru-proxy-arp.conf
           # They run where the image's packages are: Fedora's nftables, Kea and Unbound. A missing tool fails.
           # The PPPoE session test needs the kernel's PPP; a container cannot load modules.
           sudo modprobe -a ppp_generic pppoe

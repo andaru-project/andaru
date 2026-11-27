@@ -62,6 +62,9 @@ func applyFindings(in gateInput) []render.Finding {
 		Management struct {
 			Segment string `json:"segment"`
 		} `json:"management"`
+		VirtualAddresses []struct {
+			Kind string `json:"kind"`
+		} `json:"virtualAddresses"`
 	}
 	// The renderer decoded the same bytes already; an undecodable declaration never gets here.
 	_ = json.Unmarshal(in.Declaration, &declared)
@@ -87,6 +90,12 @@ func applyFindings(in gateInput) []render.Finding {
 	if declared.Management.Segment == "" && len(dns.VirtualAddresses) > 0 {
 		// A virtual address is on no segment: only the filter decides who may ask the DNS service there.
 		refuse("APPLY_UNSUPPORTED", "/dns/virtualAddresses", "The DNS service on virtual addresses needs the packet filter, which needs a management segment. Set management.segment.")
+	}
+	for i, v := range declared.VirtualAddresses {
+		if declared.Management.Segment == "" && v.Kind == "proxyArp" {
+			// The kernel proxies ARP only for routes it forwards to, and forwarding stays off without the filter.
+			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/virtualAddresses/%d/kind", i), "Proxy ARP entries need the packet filter, which needs a management segment. Set management.segment.")
+		}
 	}
 	for i, e := range declared.DHCP6 {
 		if declared.Management.Segment == "" && len(e.PrefixDelegation) > 0 && string(e.PrefixDelegation) != "null" {

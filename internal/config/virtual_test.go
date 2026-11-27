@@ -289,3 +289,168 @@ func TestIPv6ForwardSourceGroupFamily(t *testing.T) {
 	refusedAt(t, build(v4grp), "/nat/portForwards/0/from/0")
 	accepted(t, build(mixed))
 }
+
+const (
+	vipP = "vip_00000003-0000-4000-8000-000000000003"
+	vipQ = "vip_00000004-0000-4000-8000-000000000004"
+)
+
+// lanDHCP is a DHCP entry on the LAN, with fields set over a range clear of the proxy ARP entries.
+func lanDHCP(d map[string]any, fields map[string]any) map[string]any {
+	e := map[string]any{"id": "dhp_00000001-0000-4000-8000-000000000001", "name": "lan", "segment": item(segmentsOf(d), 1)["id"],
+		"ranges": []any{map[string]any{"first": "192.0.2.100", "last": "192.0.2.199"}}}
+	for k, v := range fields {
+		e[k] = v
+	}
+	return e
+}
+
+// proxyFixture adds two proxy ARP entries on the LAN, whose static subnet is 192.0.2.0/24: an address and a /29.
+func proxyFixture(t *testing.T) map[string]any {
+	t.Helper()
+	d := vipFixture(t)
+	lan := item(segmentsOf(d), 1)["id"]
+	d["virtualAddresses"] = append(d["virtualAddresses"].([]any),
+		map[string]any{"id": vipP, "name": "host", "kind": "proxyArp", "segment": lan, "address": "192.0.2.50"},
+		map[string]any{"id": vipQ, "name": "block", "kind": "proxyArp", "segment": lan, "address": "192.0.2.56/29"})
+	return d
+}
+
+func TestProxyARPValidation(t *testing.T) {
+	got := accepted(t, proxyFixture(t))
+	if v := got.VirtualAddresses[3]; v.Kind != "proxyArp" || v.Address != "192.0.2.56/29" || v.Segment == "" {
+		t.Fatalf("decoded %+v", got.VirtualAddresses)
+	}
+	t.Run("explicit kind address is stored absent", func(t *testing.T) {
+		d := proxyFixture(t)
+		item(d["virtualAddresses"].([]any), 0)["kind"] = "address"
+		if got := accepted(t, d); got.VirtualAddresses[0].Kind != "" {
+			t.Fatalf("stored kind %q", got.VirtualAddresses[0].Kind)
+		}
+	})
+	t.Run("a 1:1 external on it", func(t *testing.T) {
+		d := proxyFixture(t)
+		setNAT(d, "oneToOne", map[string]any{"id": otoA, "name": "block", "enabled": true, "zone": wanZone(d), "external": "192.0.2.56/29", "internal": "10.9.9.8/29", "destination": []any{}})
+		accepted(t, d)
+	})
+	t.Run("a /32 with its length is stored bare", func(t *testing.T) {
+		d := proxyFixture(t)
+		item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.50/32"
+		if got := accepted(t, d); got.VirtualAddresses[2].Address != "192.0.2.50" {
+			t.Fatalf("stored %q", got.VirtualAddresses[2].Address)
+		}
+	})
+	const p, q = "/virtualAddresses/2", "/virtualAddresses/3"
+	for name, tc := range map[string]struct {
+		edit    func(d map[string]any)
+		path    string
+		message string
+	}{
+		"ipv6":              {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "fd00:1::50" }, p + "/address", "Proxy NDP is not offered yet (#43)."},
+		"ipv6 prefix":       {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "fd00:1::/64" }, p + "/address", "Proxy NDP is not offered yet (#43)."},
+		"too short":         {func(d map[string]any) { item(d["virtualAddresses"].([]any), 3)["address"] = "192.0.0.0/23" }, q + "/address", ""},
+		"host bits":         {func(d map[string]any) { item(d["virtualAddresses"].([]any), 3)["address"] = "192.0.2.57/29" }, q + "/address", ""},
+		"not an address":    {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "lan" }, p + "/address", ""},
+		"off the subnet":    {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "198.51.100.50" }, p + "/address", "Expected an address on one of the segment's static IPv4 subnets."},
+		"holds own address": {func(d map[string]any) { item(d["virtualAddresses"].([]any), 3)["address"] = "192.0.2.0/29" }, q + "/address", "This range holds one of the firewall's own addresses."},
+		"holds the gateway": {func(d map[string]any) { v4(d, 1)["gateway"] = "192.0.2.58" }, q + "/address", "This range holds a segment's gateway."},
+		"holds the network address": {func(d map[string]any) {
+			v4(d, 1)["addresses"] = []any{"192.0.2.7/29"}
+			item(d["virtualAddresses"].([]any), 3)["address"] = "192.0.2.0/30"
+			item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.5"
+		}, q + "/address", "This range holds its subnet's network address."},
+		"holds the broadcast address": {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.255" }, p + "/address", "This range holds its subnet's broadcast address."},
+		"overlaps a DHCP range": {func(d map[string]any) {
+			d["dhcp"] = []any{lanDHCP(d, map[string]any{"ranges": []any{map[string]any{"first": "192.0.2.30", "last": "192.0.2.56"}}})}
+		}, q + "/address", "This range overlaps a DHCP range."},
+		"holds a static lease": {func(d map[string]any) {
+			d["dhcp"] = []any{lanDHCP(d, map[string]any{"staticLeases": []any{map[string]any{"mac": "02:00:00:00:00:10", "address": "192.0.2.50"}}})}
+		}, p + "/address", "This range holds a DHCP static lease."},
+		"holds a DHCP gateway": {func(d map[string]any) { d["dhcp"] = []any{lanDHCP(d, map[string]any{"gateway": "192.0.2.63"})} }, q + "/address", "This range holds a DHCP entry's gateway."},
+		"holds a segment's DNS server": {func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["dns"] = map[string]any{"servers": []any{"192.0.2.57"}}
+		}, q + "/address", "This range holds a segment's DNS server."},
+		"holds a DNS upstream": {func(d map[string]any) {
+			d["dns"] = map[string]any{"mode": "forward", "segments": []any{}, "upstreams": []any{map[string]any{"address": "192.0.2.50:5353", "protocol": "do53"}}}
+		}, p + "/address", "This range holds a DNS upstream."},
+		"holds a DHCP DNS server": {func(d map[string]any) {
+			d["dhcp"] = []any{lanDHCP(d, map[string]any{"dnsServers": []any{"192.0.2.57"}})}
+		}, q + "/address", "This range holds a DHCP entry's DNS server."},
+		"holds a DHCP NTP server": {func(d map[string]any) {
+			d["dhcp"] = []any{lanDHCP(d, map[string]any{"ntpServers": []any{"192.0.2.58"}})}
+		}, q + "/address", "This range holds a DHCP entry's NTP server."},
+		"holds a DHCP next server": {func(d map[string]any) { d["dhcp"] = []any{lanDHCP(d, map[string]any{"nextServer": "192.0.2.61"})} }, q + "/address", "This range holds a DHCP entry's next server."},
+		"holds a management source network": {func(d map[string]any) {
+			const net = "adr_00000005-0000-4000-8000-000000000005"
+			objs := d["aliases"].(map[string]any)
+			objs["addresses"] = append(objs["addresses"].([]any), map[string]any{"id": net, "name": "admin-net", "kind": "network", "prefix": "192.0.2.60/30"})
+			d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{net}}
+		}, q + "/address", "This range holds a management source address."},
+		"holds a management source range": {func(d map[string]any) {
+			const r = "adr_00000006-0000-4000-8000-000000000006"
+			objs := d["aliases"].(map[string]any)
+			objs["addresses"] = append(objs["addresses"].([]any), map[string]any{"id": r, "name": "admin-range", "kind": "range", "first": "192.0.2.40", "last": "192.0.2.57"})
+			d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{r}}
+		}, q + "/address", "This range holds a management source address."},
+		"holds a management source in a group": {func(d map[string]any) {
+			const host, group = "adr_00000003-0000-4000-8000-000000000003", "adr_00000004-0000-4000-8000-000000000004"
+			objs := d["aliases"].(map[string]any)
+			objs["addresses"] = append(objs["addresses"].([]any),
+				map[string]any{"id": host, "name": "admin", "kind": "host", "address": "192.0.2.59"},
+				map[string]any{"id": group, "name": "admins", "kind": "group", "members": []any{host}})
+			d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{group}}
+		}, q + "/address", "This range holds a management source address."},
+		"overlaps":   {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.60" }, q + "/address", `This range overlaps proxy ARP entry \"host\".`}, // quoted as the JSON-encoded error shows it
+		"no segment": {func(d map[string]any) { delete(item(d["virtualAddresses"].([]any), 2), "segment") }, p + "/segment", "Expected an existing segment."},
+		"unknown segment": {func(d map[string]any) {
+			item(d["virtualAddresses"].([]any), 2)["segment"] = "seg_00000009-0000-4000-8000-000000000009"
+		}, p + "/segment", "Expected an existing segment."},
+		"segment by PPPoE": {func(d map[string]any) {
+			item(d["virtualAddresses"].([]any), 2)["segment"] = item(segmentsOf(d), 0)["id"]
+		}, p + "/segment", "no known subnet"},
+		"segment on an address": {func(d map[string]any) {
+			item(d["virtualAddresses"].([]any), 0)["segment"] = item(segmentsOf(d), 1)["id"]
+		}, "/virtualAddresses/0/segment", "Only a proxy ARP entry names a segment."},
+		"address inside a proxy entry": {func(d map[string]any) { item(d["virtualAddresses"].([]any), 0)["address"] = "192.0.2.57" }, "/virtualAddresses/0/address", ""},
+		"unknown kind":                 {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["kind"] = "carp" }, p + "/kind", ""},
+		"dns listens on it": {func(d map[string]any) {
+			d["dns"] = map[string]any{"mode": "recursive", "segments": []any{}, "virtualAddresses": []any{vipA, vipP}}
+		}, "/dns/virtualAddresses/1", "the DNS service cannot listen on it"},
+		"forward target": {func(d map[string]any) {
+			setNAT(d, "portForwards", forward(d, map[string]any{"target": map[string]any{"address": "192.0.2.59"}}))
+		}, "/nat/portForwards/0/target/address", "This address is answered by proxy ARP and held by no host."},
+		"1:1 internal": {func(d map[string]any) {
+			setNAT(d, "oneToOne", map[string]any{"id": otoA, "name": "server", "enabled": true, "zone": wanZone(d), "external": "203.0.113.20", "internal": "192.0.2.50", "destination": []any{}})
+		}, "/nat/oneToOne/0/internal", "This address is answered by proxy ARP and held by no host."},
+		"1:1 internal prefix": {func(d map[string]any) {
+			setNAT(d, "oneToOne", map[string]any{"id": otoA, "name": "block", "enabled": true, "zone": wanZone(d), "external": "203.0.113.16/28", "internal": "192.0.2.48/28", "destination": []any{}})
+		}, "/nat/oneToOne/0/internal", "This address is answered by proxy ARP and held by no host."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := proxyFixture(t)
+			tc.edit(d)
+			refusedAt(t, d, tc.path)
+			_, e := decodeMap(t, d)
+			if raw, _ := json.Marshal(e); !strings.Contains(string(raw), tc.message) {
+				t.Fatalf("%s", raw)
+			}
+		})
+	}
+}
+
+// A batch can name the segment it creates in a proxy ARP entry by label.
+func TestProxyARPSegmentByLabel(t *testing.T) {
+	c, e := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"links","localId":"uplink","value":{"name":"uplink","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01"}},{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},{"op":"create","collection":"segments","localId":"seg","value":{"name":"wan","link":"@uplink","zone":"@wan","addressing":{"ipv4":{"mode":"static","addresses":["203.0.113.2/24"]},"ipv6":{"mode":"none"}}}},
+		{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"server","kind":"proxyArp","segment":"@seg","address":"203.0.113.50"}}]}`))
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := initialState()
+	p, e := prepareChanges(&s, c, "1", fixedTime)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if got := p.State.Config.VirtualAddresses[0].Segment; got != p.Created["seg"] {
+		t.Fatalf("segment %q, created %v", got, p.Created)
+	}
+}

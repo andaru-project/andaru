@@ -3898,9 +3898,18 @@
             "id": {
               "$ref": "#/$defs/virtualAddressID"
             },
+            "kind": {
+              "enum": [
+                "address",
+                "proxyArp"
+              ]
+            },
             "address": {
               "type": "string",
               "maxLength": 64
+            },
+            "segment": {
+              "$ref": "#/$defs/segmentRef"
             }
           },
           "required": [

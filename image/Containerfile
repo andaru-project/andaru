@@ -62,6 +62,7 @@ COPY packaging/systemd/networkd.conf.d/ /usr/lib/systemd/networkd.conf.d/
 COPY packaging/iproute2/andaru.conf /usr/share/iproute2/rt_protos.d/andaru.conf
 COPY packaging/tmpfiles.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
 COPY packaging/sysusers.d/andaru.conf /usr/lib/sysusers.d/andaru.conf
+COPY packaging/sysctl.d/50-andaru-proxy-arp.conf /usr/lib/sysctl.d/50-andaru-proxy-arp.conf
 COPY packaging/kea/andaru-lease-event /usr/share/kea/scripts/andaru-lease-event
 COPY packaging/unbound/andaru.conf /etc/unbound/conf.d/andaru.conf
 COPY image/files/ /

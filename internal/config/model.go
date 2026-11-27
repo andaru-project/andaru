@@ -449,11 +449,17 @@ func (c *channel) secrets() []channelSecret {
 	return nil
 }
 
-// virtualAddress is an address the firewall holds on its dummy interface, answered on every segment the filter lets reach it.
+// virtualAddress is an address the firewall holds on its dummy interface, answered on every segment the filter lets reach it;
+// or, of kind proxyArp, an address or prefix the firewall answers ARP for on one segment's link without holding it.
 type virtualAddress struct {
 	identity
+	Kind    string `json:"kind,omitempty"`
 	Address string `json:"address"`
+	Segment string `json:"segment,omitempty"`
 }
+
+// proxied says whether v is answered by proxy ARP rather than held by the firewall.
+func (v virtualAddress) proxied() bool { return v.Kind == "proxyArp" }
 
 func emptyDeclaration() declaration {
 	return declaration{SchemaVersion: schemaVersion, Links: []link{}, Segments: []segment{}, Zones: []zone{}}

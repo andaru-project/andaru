@@ -151,12 +151,19 @@ type declaration struct {
 	DHCP  []dhcpEntry  `json:"dhcp"`
 	DHCP6 []dhcp6Entry `json:"dhcp6"`
 	DNS   *dnsService  `json:"dns"`
-	// VirtualAddresses are held on the dummy device andaru-vip.
-	VirtualAddresses []struct {
-		ID      string `json:"id"`
-		Address string `json:"address"`
-	} `json:"virtualAddresses"`
+	// VirtualAddresses are held on the dummy device andaru-vip, or of kind proxyArp routed to it and answered on a segment.
+	VirtualAddresses []virtualAddress `json:"virtualAddresses"`
 }
+
+type virtualAddress struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Address string `json:"address"`
+	Segment string `json:"segment"`
+}
+
+// proxied says whether v is answered by proxy ARP rather than held by the firewall.
+func (v virtualAddress) proxied() bool { return v.Kind == "proxyArp" }
 
 type dhcpOption struct {
 	Code       int    `json:"code"`

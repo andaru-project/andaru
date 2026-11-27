@@ -13,10 +13,14 @@ import (
 // maxNATMapEntries caps the map entries shifted port ranges render, which grow with ports, zones and sources.
 const maxNATMapEntries = 65536
 
+// proxiedMessage refuses an inside host in a proxy ARP entry: its traffic would follow the route to andaru-vip.
+const proxiedMessage = "This address is answered by proxy ARP and held by no host."
+
 // validateNAT checks the port forwards and 1:1 entries against the zones, address objects and the
 // firewall's own static addresses, with pfSense's rules.
 func validateNAT(d *declaration) []FieldError {
 	var out []FieldError
+	proxies := proxied(d)
 	bad := func(path, msg string) {
 		if len(out) < 100 {
 			out = append(out, FieldError{path, msg})
@@ -124,9 +128,11 @@ func validateNAT(d *declaration) []FieldError {
 				bad(p+"/target/address", "Expected an IPv4 address; inbound NAT is IPv4 only.")
 			case a.IsLoopback():
 				// Linux drops a connection translated to 127.0.0.0/8 from another interface unless route_localnet is set.
-				bad(p+"/target/address", "Loopback addresses cannot be targets. Use a virtual address instead; proxy ARP and CARP are not supported yet.")
+				bad(p+"/target/address", "Loopback addresses cannot be targets. Use a virtual address instead; CARP is not supported yet.")
 			case !validUnicast(a):
 				bad(p+"/target/address", "Expected a unicast address.")
+			case slices.ContainsFunc(proxies, func(x netip.Prefix) bool { return x.Contains(a) }):
+				bad(p+"/target/address", proxiedMessage)
 			}
 		}
 		if f.TargetPort != nil && ok && *f.TargetPort+last-first > 65535 {
@@ -208,7 +214,7 @@ func validateNAT(d *declaration) []FieldError {
 	// A virtual address is the firewall's own, held for its services: 1:1 NAT takes it over in neither direction.
 	var virtual []netip.Addr
 	for _, v := range d.VirtualAddresses {
-		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() && !v.proxied() {
 			own, virtual = append(own, a), append(virtual, a)
 		}
 	}
@@ -243,6 +249,8 @@ func validateNAT(d *declaration) []FieldError {
 			bad(p+"/internal", "Expected an IPv4 address or a prefix with its host bits zero.")
 		} else if holdsOwn(internal) {
 			bad(p+"/internal", "This range holds one of the firewall's own addresses.")
+		} else if slices.ContainsFunc(proxies, internal.Overlaps) {
+			bad(p+"/internal", proxiedMessage)
 		}
 		if o.NoBinat {
 			if o.External != "" {
