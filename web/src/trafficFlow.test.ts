@@ -874,4 +874,59 @@ describe('simulateTrafficFlow', () => {
     );
     expect(noIpv4ViaPppoe6.verdict).toBe('no_route');
   });
+
+  it('does not treat proxyArp virtual addresses as local firewall owners and drops untranslated proxyArp traffic', () => {
+    const withProxyArp: Snapshot['value'] = {
+      ...baseConfig,
+      virtualAddresses: [
+        ...(baseConfig.virtualAddresses ?? []),
+        { id: 'vip_proxy_single', name: 'WAN extra 50', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' },
+        { id: 'vip_proxy_block', name: 'WAN extra /29', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.56/29' },
+      ],
+      nat: {
+        ...baseConfig.nat,
+        oneToOne: [
+          {
+            id: 'oto_1',
+            name: 'Server 1:1',
+            enabled: true,
+            zone: 'zon_wan',
+            external: '203.0.113.50',
+            internal: '192.168.1.10',
+            destination: [],
+          },
+        ],
+      },
+      rules: [
+        {
+          id: 'rul_allow_srv',
+          name: 'Allow WAN to server',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['zon_wan'], addresses: [] },
+          to: { zones: ['zon_lan'], addresses: [] },
+          ports: [],
+          log: false,
+        },
+        ...(baseConfig.rules ?? []),
+      ],
+    };
+
+    // Translated 1:1 traffic to the proxied address forwards to LAN rather than being treated as local firewall input.
+    const translated = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.50', dstPort: 443 },
+      withProxyArp,
+    );
+    expect(translated.verdict).toBe('accept');
+    expect(translated.chain).toBe('forward');
+    expect(translated.finalTuple).toBe('TCP 198.51.100.10 → 192.168.1.10:443');
+
+    // Untranslated traffic to an address inside a proxyArp prefix routes to dummy andaru-vip (no_route).
+    const untranslated = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.58', dstPort: 443 },
+      withProxyArp,
+    );
+    expect(untranslated.verdict).toBe('no_route');
+    expect(untranslated.decidedBy).toEqual({ label: 'Virtual IP WAN extra /29', to: '/network/virtual-ips' });
+  });
 });

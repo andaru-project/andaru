@@ -1,10 +1,20 @@
-import { Alert, Anchor, Badge, Button, Drawer, Fieldset, Group, Modal, ScrollArea, Stack, Table, Text, Textarea, TextInput, Title, VisuallyHidden } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Drawer, Fieldset, Group, Modal, NativeSelect, ScrollArea, Stack, Table, Text, Textarea, TextInput, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
 import { useResource } from '../useResource';
-import type { SavedObject, Session, VirtualAddress } from '../types';
-import { checkVirtualIp, ipFamily, maxVirtualAddresses, virtualAddressUses, type VirtualIpUse } from '../virtualIps';
+import type { SavedObject, Segment, Session, VirtualAddress, VirtualAddressKind } from '../types';
+import {
+  checkVirtualIp,
+  isProxyArpEligibleSegment,
+  maxVirtualAddresses,
+  staticIpv4Subnets,
+  virtualAddressFamily,
+  virtualAddressKind,
+  virtualAddressKindLabel,
+  virtualAddressUses,
+  type VirtualIpUse,
+} from '../virtualIps';
 import { Address } from './Address';
 import { Loaded } from './Loaded';
 
@@ -16,11 +26,17 @@ interface VirtualIpsScreenProps {
 }
 
 const mono = { input: 'mono-input' };
-const vipFieldPattern = /^(?:\/virtualAddresses\/\d+)?\/(name|address|description)(?:\/|$)/;
+const vipFieldPattern = /^(?:\/virtualAddresses\/\d+)?\/(name|kind|segment|address|description)(?:\/|$)/;
+
+const kindOptions: Array<{ value: VirtualAddressKind; label: string }> = [
+  { value: 'address', label: 'Held address (andaru-vip)' },
+  { value: 'proxyArp', label: 'Proxy ARP (IPv4)' },
+];
 
 function VirtualIpEditor({
   saved,
   existingVips,
+  segments,
   addressLocks,
   onClose,
   onSessionLost,
@@ -29,6 +45,7 @@ function VirtualIpEditor({
 }: {
   saved?: SavedObject<VirtualAddress>;
   existingVips: Array<SavedObject<VirtualAddress>>;
+  segments: Segment[];
   addressLocks: VirtualIpUse[];
   onClose(): void;
   onSessionLost(): void;
@@ -36,6 +53,8 @@ function VirtualIpEditor({
   onSave(vip: Omit<VirtualAddress, 'id'>, saved?: SavedObject<VirtualAddress>): Promise<void>;
 }) {
   const [name, setName] = useState(saved?.value.name ?? '');
+  const [kind, setKind] = useState<VirtualAddressKind>(saved ? virtualAddressKind(saved.value) : 'address');
+  const [segment, setSegment] = useState(saved?.value.segment ?? '');
   const [address, setAddress] = useState(saved?.value.address ?? '');
   const [description, setDescription] = useState(saved?.value.description ?? '');
   const [errors, setErrors] = useState(new Map<string, string>());
@@ -63,11 +82,53 @@ function VirtualIpEditor({
     }
   }, [errorFocusTick]);
 
+  const eligibleSegments = segments
+    .filter(isProxyArpEligibleSegment)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
+  const segmentOptions = (() => {
+    const items = eligibleSegments.map((s) => ({
+      value: s.id,
+      label: `${s.name} (${staticIpv4Subnets(s).map((sub) => sub.cidr).join(', ')})`,
+    }));
+    if (segment && !eligibleSegments.some((s) => s.id === segment)) {
+      const found = segments.find((s) => s.id === segment);
+      items.unshift({
+        value: segment,
+        label: found ? `${found.name} (no static IPv4 subnet)` : `${segment} (missing segment)`,
+      });
+    }
+    if (!segment) {
+      items.unshift({
+        value: '',
+        label: eligibleSegments.length === 0 ? 'No segment with a static IPv4 subnet' : 'Choose a segment…',
+      });
+    }
+    return items;
+  })();
+
+  function changeKind(next: VirtualAddressKind) {
+    setKind(next);
+    setFailure('');
+    setErrors((prev) => {
+      if (!prev.has('kind') && !prev.has('segment') && !prev.has('address')) return prev;
+      const copy = new Map(prev);
+      copy.delete('kind');
+      copy.delete('segment');
+      copy.delete('address');
+      return copy;
+    });
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
     setFailure('');
-    const { errors: localErrors, duplicate } = checkVirtualIp(name, address, existingVips, saved?.value.id);
+    const { errors: localErrors, duplicate } = checkVirtualIp(name, address, existingVips, saved?.value.id, {
+      kind,
+      segment,
+      segments,
+    });
     if (localErrors.size > 0) {
       setErrors(localErrors);
       setErrorFocusTick((tick) => tick + 1);
@@ -79,6 +140,7 @@ function VirtualIpEditor({
     setErrors(new Map());
     const body: Omit<VirtualAddress, 'id'> = {
       name: name.trim(),
+      ...(kind === 'proxyArp' ? { kind: 'proxyArp', segment: segment.trim() } : {}),
       address: address.trim(),
       ...(description.trim() ? { description: description.trim() } : {}),
     };
@@ -98,6 +160,7 @@ function VirtualIpEditor({
   }
 
   const singleLock = addressLocks.length === 1;
+  const isProxyArp = kind === 'proxyArp';
 
   return (
     <Drawer
@@ -126,11 +189,34 @@ function VirtualIpEditor({
                 error={errors.get('name')}
                 onChange={(event) => setName(event.currentTarget.value)}
               />
+              <NativeSelect
+                label="Kind"
+                description={isProxyArp
+                  ? 'Answered by ARP on a segment without being held on the firewall, for 1:1 NAT and port forwards. Proxy NDP (IPv6) is not offered yet.'
+                  : 'Held by the firewall on andaru-vip for services such as DNS and port forwards.'}
+                data={kindOptions}
+                value={kind}
+                error={errors.get('kind')}
+                onChange={(event) => changeKind(event.currentTarget.value as VirtualAddressKind)}
+              />
+              {isProxyArp && (
+                <NativeSelect
+                  label="Segment"
+                  description="Segment whose link answers ARP. Requires a static IPv4 subnet (DHCP and PPPoE segments cannot use proxy ARP)."
+                  required
+                  data={segmentOptions}
+                  value={segment}
+                  error={errors.get('segment')}
+                  onChange={(event) => setSegment(event.currentTarget.value)}
+                />
+              )}
               <TextInput
                 classNames={mono}
-                label="Address"
-                description="Single unicast IPv4 or IPv6 address without a prefix length, outside any configured interface subnet."
-                placeholder="172.16.53.53 or fd00:53::1"
+                label={isProxyArp ? 'Address or prefix' : 'Address'}
+                description={isProxyArp
+                  ? "IPv4 address or /24–/32 prefix inside the selected segment's static IPv4 subnet (host bits zero)."
+                  : 'Single unicast IPv4 or IPv6 address without a prefix length, outside any configured interface subnet.'}
+                placeholder={isProxyArp ? '203.0.113.50 or 203.0.113.56/29' : '172.16.53.53 or fd00:53::1'}
                 maxLength={64}
                 required
                 value={address}
@@ -143,7 +229,7 @@ function VirtualIpEditor({
                   role="status"
                   title={singleLock ? 'Address in use by port forward' : 'Address in use by port forwards'}
                 >
-                  {addressLocks.map((u) => u.label).join(', ')} {singleLock ? 'targets' : 'target'} this address. You can still rename or describe it, but changing the address requires updating or removing {singleLock ? 'the port forward' : 'those port forwards'} first.
+                  {addressLocks.map((u) => u.label).join(', ')} {singleLock ? 'targets' : 'target'} this address. You can still rename or describe it, but changing the address or kind requires updating or removing {singleLock ? 'the port forward' : 'those port forwards'} first.
                 </Alert>
               )}
               <Textarea
@@ -168,7 +254,7 @@ function VirtualIpEditor({
   );
 }
 
-// Standalone firewall virtual IP addresses held on andaru-vip for services such as DNS and port forwards.
+// Held firewall virtual IP addresses (on andaru-vip) and IPv4 proxy ARP entries on static segments.
 export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: VirtualIpsScreenProps) {
   const canWrite = session.capabilities.includes('configuration.write');
   // Retry up to twice when a save lands between the two reads so virtual IPs and snapshot match versions.
@@ -236,7 +322,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
         <div>
           <Title order={2}>Virtual IPs</Title>
           <Text c="dimmed">
-            Standalone host addresses held by the firewall outside interface subnets (on <Text span ff="monospace" inherit>andaru-vip</Text>) for services such as DNS and port forwards.
+            Held host addresses on <Text span ff="monospace" inherit>andaru-vip</Text> for services such as DNS and port forwards, and IPv4 proxy ARP entries answered on a segment without being held by the firewall.
           </Text>
         </div>
         <Group gap="xs">
@@ -251,16 +337,34 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
 
       <Loaded resource={resource} what="virtual IPs">
         {({ virtualAddresses, snapshot }) => {
+          const segmentById = new Map(snapshot.value.segments.map((s) => [s.id, s]));
           const sorted = [...virtualAddresses.items].sort((a, b) => a.value.name.localeCompare(b.value.name, undefined, { sensitivity: 'base' }));
           const words = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
-          const rows = sorted.map((item) => ({
-            item,
-            family: ipFamily(item.value.address),
-            uses: virtualAddressUses(item.value, snapshot),
-          }));
-          const shown = words.length === 0 ? rows : rows.filter(({ item, family, uses }) => {
+          const rows = sorted.map((item) => {
+            const kind = virtualAddressKind(item.value);
+            const segmentName = kind === 'proxyArp' && item.value.segment
+              ? (segmentById.get(item.value.segment)?.name ?? item.value.segment)
+              : undefined;
+            return {
+              item,
+              kind,
+              segmentName,
+              family: virtualAddressFamily(item.value),
+              uses: virtualAddressUses(item.value, snapshot),
+            };
+          });
+          const shown = words.length === 0 ? rows : rows.filter(({ item, kind, segmentName, family, uses }) => {
             const v = item.value;
-            const haystack = [v.name, v.address, family ?? '', v.description ?? '', ...uses.map((u) => u.label)].join(' ').toLowerCase();
+            const haystack = [
+              v.name,
+              virtualAddressKindLabel[kind],
+              kind,
+              segmentName ?? '',
+              v.address,
+              family ?? '',
+              v.description ?? '',
+              ...uses.map((u) => u.label),
+            ].join(' ').toLowerCase();
             return words.every((w) => haystack.includes(w));
           });
           const deletingRow = deletingId ? rows.find((r) => r.item.value.id === deletingId) : undefined;
@@ -282,7 +386,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
               {sorted.length > 0 && (
                 <TextInput
                   label="Filter virtual IPs"
-                  placeholder="Name, address, description, or use"
+                  placeholder="Name, kind, segment, address, description, or use"
                   value={filter}
                   onChange={(event) => setFilter(event.currentTarget.value)}
                 />
@@ -292,7 +396,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                 <Alert role="status" title="No virtual IPs">
                   {sorted.length === 0
                     ? (canWrite
-                      ? 'No virtual IP is saved yet. Add one here to give firewall services such as DNS or port forwards their own address.'
+                      ? 'No virtual IP is saved yet. Add a held address for services such as DNS and port forwards, or a proxy ARP entry for extra addresses on a static IPv4 segment.'
                       : 'No virtual IP is saved yet.')
                     : 'No virtual IP matches the filter.'}
                 </Alert>
@@ -302,13 +406,15 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                     <Table.Thead>
                       <Table.Tr>
                         <Table.Th>Name</Table.Th>
+                        <Table.Th>Kind</Table.Th>
                         <Table.Th>Address</Table.Th>
+                        <Table.Th>Segment</Table.Th>
                         <Table.Th>Used by</Table.Th>
                         {canWrite && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
-                      {shown.map(({ item, family, uses }) => {
+                      {shown.map(({ item, kind, segmentName, family, uses }) => {
                         const v = item.value;
                         return (
                           <Table.Tr key={v.id}>
@@ -318,11 +424,23 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                                 {v.description && <Text size="xs" c="dimmed">{v.description}</Text>}
                               </Stack>
                             </Table.Td>
+                            <Table.Td data-label="Kind">
+                              <Badge size="xs" variant="light" color={kind === 'proxyArp' ? 'teal' : 'gray'}>
+                                {virtualAddressKindLabel[kind]}
+                              </Badge>
+                            </Table.Td>
                             <Table.Td data-label="Address">
                               <Group gap="xs" wrap="wrap">
                                 <Address value={v.address} />
                                 {family && <Badge size="xs" variant="light" color={family === 'IPv6' ? 'violet' : 'blue'}>{family}</Badge>}
                               </Group>
+                            </Table.Td>
+                            <Table.Td data-label="Segment">
+                              {segmentName ? (
+                                <Text size="sm">{segmentName}</Text>
+                              ) : (
+                                <Text size="sm" c="dimmed">—</Text>
+                              )}
                             </Table.Td>
                             <Table.Td data-label="Used by">
                               {uses.length === 0 ? (
@@ -356,6 +474,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                   key={editing === 'new' ? 'new' : editing.value.id}
                   saved={editingSaved}
                   existingVips={virtualAddresses.items}
+                  segments={snapshot.value.segments}
                   addressLocks={editingAddressLocks}
                   onClose={() => setEditing(undefined)}
                   onSessionLost={onSessionLost}

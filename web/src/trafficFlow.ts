@@ -703,7 +703,13 @@ export function simulateTrafficFlow(
     warnings.push('Dynamic DHCP/PPPoE/SLAAC addresses are read from live interfaces because saved-only dynamic leases do not exist yet.');
   }
 
+  const proxyArpRoutes: Array<{ vip: NonNullable<Snapshot['value']['virtualAddresses']>[number]; prefix: ParsedPrefix }> = [];
   for (const vip of snapshot.virtualAddresses ?? []) {
+    if (vip.kind === 'proxyArp') {
+      const prefix = parsePrefix(vip.address);
+      if (prefix && prefix.family === 4) proxyArpRoutes.push({ vip, prefix });
+      continue;
+    }
     const ip = parseIp(vip.address);
     if (!ip) continue;
     localOwners.push({ ip, owner: { label: `Virtual IP ${vip.name}`, to: '/network/virtual-ips', isVirtual: true } });
@@ -998,6 +1004,20 @@ export function simulateTrafficFlow(
       if (!prefixContains(entry.prefix, effectiveDstIp)) continue;
       if (!bestConnected || entry.prefix.bits > bestConnected.prefix.bits) {
         bestConnected = { segment: entry.segment, prefix: entry.prefix };
+      }
+    }
+    if (effectiveDstIp.family === 4) {
+      let bestProxyArp: { vip: NonNullable<Snapshot['value']['virtualAddresses']>[number]; prefix: ParsedPrefix } | undefined;
+      for (const entry of proxyArpRoutes) {
+        if (!prefixContains(entry.prefix, effectiveDstIp)) continue;
+        if (!bestProxyArp || entry.prefix.bits > bestProxyArp.prefix.bits) bestProxyArp = entry;
+      }
+      if (bestProxyArp && bestProxyArp.prefix.bits >= (bestConnected?.prefix.bits ?? -1)) {
+        return stopUnroutable(
+          `Destination ${effectiveDstIp.canonical} matches proxy ARP entry "${bestProxyArp.vip.name}" (${bestProxyArp.vip.address}) without a matching port forward or 1:1 NAT rule; routed to dummy interface andaru-vip.`,
+          'Untranslated traffic to a proxy ARP address is dropped on dummy interface andaru-vip.',
+          { label: `Virtual IP ${bestProxyArp.vip.name}`, to: '/network/virtual-ips' },
+        );
       }
     }
     // Active DHCPv6 prefix-delegation lease routes (internal/generation/pdroutes.go:243-293) and

@@ -8,6 +8,7 @@ import {
 } from '../dnsEdit';
 import type { DnsMode, DnsService, DnsUpstreamProtocol, SavedObject, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
+import { virtualAddressKind } from '../virtualIps';
 import { zoneColorMap } from '../zones';
 import { ZoneBadge } from './ZoneBadge';
 
@@ -116,10 +117,11 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   const selectableSegments = segments.filter((s) => isDnsEligibleSegment(s) || retainedSegmentIds.has(s.id));
   const danglingSegmentIds = Array.from(retainedSegmentIds).filter((id) => !segmentById.has(id));
 
-  const virtualAddresses = snapshot.value.virtualAddresses ?? [];
-  const vipById = new Map(virtualAddresses.map((v) => [v.id, v]));
+  const allVirtualAddresses = snapshot.value.virtualAddresses ?? [];
+  const allVipById = new Map(allVirtualAddresses.map((v) => [v.id, v]));
   const retainedVipIds = new Set([...(dns?.value.virtualAddresses ?? []), ...activeDraft.virtualAddresses]);
-  const danglingVipIds = Array.from(retainedVipIds).filter((id) => !vipById.has(id));
+  const virtualAddresses = allVirtualAddresses.filter((v) => virtualAddressKind(v) === 'address' || retainedVipIds.has(v.id));
+  const danglingVipIds = Array.from(retainedVipIds).filter((id) => !allVipById.has(id));
   const showVirtualAddresses = virtualAddresses.length > 0 || danglingVipIds.length > 0;
   const needsManagementForVips = activeDraft.virtualAddresses.length > 0 && !snapshot.value.management?.segment;
   const showForm = Boolean(dns) || enabling;
@@ -499,7 +501,10 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                               onChange={(e) => toggleVirtualAddress(vip.id, e.currentTarget.checked)}
                               label={<Text fw={600} size="sm">{vip.name}</Text>}
                             />
-                            <Text size="xs" c="dimmed" ff="monospace">{vip.address}</Text>
+                            <Group gap="xs" wrap="wrap">
+                              <Text size="xs" c="dimmed" ff="monospace">{vip.address}</Text>
+                              {virtualAddressKind(vip) === 'proxyArp' && <Text size="xs" className="warning-text">Proxy ARP (cannot listen)</Text>}
+                            </Group>
                           </Group>
                         ))}
                         {danglingVipIds.map((id) => (
