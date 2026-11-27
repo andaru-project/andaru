@@ -197,7 +197,7 @@ func (r Realizer) Teardown(ctx context.Context) error {
 		return err
 	}
 	if p.Live == nil {
-		return nil
+		return r.cleanupAddonsOnTeardownIfPresent(ctx)
 	}
 	// Paths only, so a live generation whose stored files are damaged still comes off.
 	set, err := r.live(p)
@@ -214,5 +214,8 @@ func (r Realizer) Teardown(ctx context.Context) error {
 	if err := r.place(set, keep); err != nil {
 		return err
 	}
-	return r.settle(ctx, set, keep)
+	if err := r.settle(ctx, set, keep); err != nil {
+		return err
+	}
+	return r.cleanupAddonsOnTeardown(ctx)
 }

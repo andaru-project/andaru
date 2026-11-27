@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
@@ -52,6 +53,8 @@ type hostReader struct {
 	Managed func(context.Context) ([]host.Managed, error)
 	// BootUnit reports andaru-network-boot.service enabled.
 	BootUnit func() bool
+	Catalog  *addon.Catalog
+	StateDir string
 }
 
 func isAppliesPath(path string) bool {
@@ -73,7 +76,7 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 		return gate, errors.Join(errInventory, err)
 	}
 	gate.BootUnit = read.BootUnit()
-	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, AddonSecrets: addonSecrets, Links: gate.Links, Facts: facts}); err != nil {
+	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, AddonSecrets: addonSecrets, Catalog: read.Catalog, StateDir: read.StateDir, Links: gate.Links, Facts: facts}); err != nil {
 		return gate, errors.Join(errRender, err)
 	}
 	if pointers.Live != nil {
@@ -427,9 +430,32 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		contents[f.Path] = []byte(f.Real())
 	}
 	var id int
+	var neededAddonImages []string
+	for path, body := range contents {
+		if strings.HasPrefix(path, "/run/containers/systemd/andaru-addon-") && strings.HasSuffix(path, ".container") {
+			for line := range strings.SplitSeq(string(body), "\n") {
+				if img, ok := strings.CutPrefix(strings.TrimSpace(line), "Image="); ok && img != "" {
+					neededAddonImages = append(neededAddonImages, img)
+				}
+			}
+		}
+	}
 	store := func(observed generation.Observation) error {
 		if observed.Pending != nil || !sameGenerationPointer(observed.Live, pointers.Live) {
 			return authz.ErrTransitionInProgress
+		}
+		// Re-verify staged add-on images under generations/lock so concurrent addon-unstage cannot
+		// remove an image between gatherGate and generation.Create.
+		if len(neededAddonImages) > 0 && h.read.StateDir != "" {
+			st, stErr := addon.ReadStagedState(h.read.StateDir)
+			if stErr != nil {
+				return stErr
+			}
+			for _, img := range neededAddonImages {
+				if _, ok := st.Images[img]; !ok {
+					return authz.ErrTransitionInProgress
+				}
+			}
 		}
 		return h.coordinator.withAuthorizationLock(ctx, func() error {
 			revision, revisionErr := h.identities.Revision(ctx)

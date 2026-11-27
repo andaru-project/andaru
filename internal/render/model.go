@@ -5,6 +5,7 @@ package render
 import (
 	"encoding/json"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/host"
 )
 
@@ -154,6 +155,25 @@ type declaration struct {
 	// VirtualAddresses are held on the dummy device andaru-vip, or of kind proxyArp routed to it and answered on a
 	// segment, or of kind proxyNdp answered on a segment and routed to the host's segment.
 	VirtualAddresses []virtualAddress `json:"virtualAddresses"`
+	Addons           []addonEntry     `json:"addons"`
+}
+
+type addonInterface struct {
+	Name string `json:"name"`
+	Zone string `json:"zone"`
+}
+
+type addonBusGrants struct {
+	Publish   map[string]string `json:"publish"`
+	Subscribe map[string]string `json:"subscribe"`
+}
+
+type addonEntry struct {
+	ID         string           `json:"id"`
+	Enabled    bool             `json:"enabled"`
+	Settings   map[string]any   `json:"settings"`
+	Interfaces []addonInterface `json:"interfaces"`
+	BusGrants  addonBusGrants   `json:"busGrants"`
 }
 
 type virtualAddress struct {
@@ -227,6 +247,8 @@ type Input struct {
 	Declaration  json.RawMessage
 	Secrets      map[string]string
 	AddonSecrets map[string]map[string]string
+	Catalog      *addon.Catalog
+	StateDir     string
 	Links        []host.LinkStatus
 	Facts        host.RealizerFacts
 }

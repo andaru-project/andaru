@@ -86,7 +86,6 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 	if val == nil {
 		return []FieldError{{Path: p, Message: "null values are not allowed"}}
 	}
-	envBound := prop.Binding != nil && prop.Binding.Type == "environment"
 	switch prop.Type {
 	case "string":
 		s, ok := val.(string)
@@ -96,8 +95,8 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 		if strings.ContainsRune(s, 0) {
 			return []FieldError{{Path: p, Message: "NUL bytes are not allowed"}}
 		}
-		if envBound && strings.ContainsAny(s, "\r\n") {
-			return []FieldError{{Path: p, Message: "newlines are not allowed in environment-bound settings"}}
+		if strings.ContainsAny(s, "\r\n") {
+			return []FieldError{{Path: p, Message: "newlines are not allowed in add-on settings"}}
 		}
 		n := utf8.RuneCountInString(s)
 		if prop.MinLength != nil && n < *prop.MinLength {
@@ -136,8 +135,8 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 			if strings.ContainsRune(item, 0) {
 				errs = append(errs, FieldError{Path: ip, Message: "NUL bytes are not allowed"})
 			}
-			if envBound && strings.ContainsAny(item, "\r\n") {
-				errs = append(errs, FieldError{Path: ip, Message: "newlines are not allowed in environment-bound settings"})
+			if strings.ContainsAny(item, "\r\n") {
+				errs = append(errs, FieldError{Path: ip, Message: "newlines are not allowed in add-on settings"})
 			}
 			if seen[item] {
 				errs = append(errs, FieldError{Path: ip, Message: "duplicate item"})
@@ -221,6 +220,9 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 	return nil
 }
 
+// ToStringSlice converts []string or []any of strings into a []string.
+func ToStringSlice(v any) ([]string, bool) { return toStringSlice(v) }
+
 func toStringSlice(v any) ([]string, bool) {
 	switch x := v.(type) {
 	case []string:
@@ -241,6 +243,9 @@ func toStringSlice(v any) ([]string, bool) {
 }
 
 const maxSafeJSONInt = 1<<53 - 1
+
+// ToExactInt64 converts int, int64, json.Number, or an exact integer float64 into int64.
+func ToExactInt64(v any) (int64, bool) { return toExactInt64(v) }
 
 func toExactInt64(v any) (int64, bool) {
 	switch x := v.(type) {

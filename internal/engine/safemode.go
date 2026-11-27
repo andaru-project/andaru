@@ -45,6 +45,10 @@ func (h *addonsHold) nudge() {
 }
 
 func (h *addonsHold) run(ctx context.Context) {
+	h.runWithInitial(ctx, h.check(ctx))
+}
+
+func (h *addonsHold) runWithInitial(ctx context.Context, initialRetry bool) {
 	var retry *time.Timer
 	var retryCh <-chan time.Time
 	schedule := func(needRetry bool) {
@@ -67,7 +71,7 @@ func (h *addonsHold) run(ctx context.Context) {
 			retry.Stop()
 		}
 	}()
-	schedule(h.check(ctx))
+	schedule(initialRetry)
 	for {
 		select {
 		case <-ctx.Done():

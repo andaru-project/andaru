@@ -63,9 +63,8 @@ func (r Realizer) pppSum(name string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// stopSession stops a session's pppd and waits for it to exit, so its interface is gone when this returns.
-func (r Realizer) stopSession(ctx context.Context, name string) error {
-	unit := pppUnitName(name)
+// stopUnit stops a systemd unit, ignoring units systemd does not know (LoadState=not-found).
+func (r Realizer) stopUnit(ctx context.Context, unit string) error {
 	_, err := r.Run(ctx, "/usr/bin/systemctl", "stop", unit)
 	if err == nil {
 		return nil
@@ -74,7 +73,16 @@ func (r Realizer) stopSession(ctx context.Context, name string) error {
 	if state, showErr := r.Run(ctx, "/usr/bin/systemctl", "show", "-p", "LoadState", "--value", unit); showErr == nil && strings.TrimSpace(string(state)) == "not-found" {
 		return nil
 	}
-	return fmt.Errorf("stop the PPPoE session %s: %w", unit, err)
+	return err
+}
+
+// stopSession stops a session's pppd and waits for it to exit, so its interface is gone when this returns.
+func (r Realizer) stopSession(ctx context.Context, name string) error {
+	unit := pppUnitName(name)
+	if err := r.stopUnit(ctx, unit); err != nil {
+		return fmt.Errorf("stop the PPPoE session %s: %w", unit, err)
+	}
+	return nil
 }
 
 // sessions stops the PPPoE sessions the new set dropped and starts the ones it carries. pppd reads its options only

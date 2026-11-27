@@ -76,6 +76,24 @@ func TestReadRealizerFacts(t *testing.T) {
 	if _, err = readRealizerFacts(filepath.Join(root, "pppd"), run, "", "", "", root); err == nil {
 		t.Fatal("an unreadable configuration directory was reported as empty")
 	}
+	// Podman tool and staged add-on image index under root are observed.
+	if err := os.MkdirAll(filepath.Join(root, "usr/bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "usr/bin/podman"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "var/lib/andaru"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const digest = "ghcr.io/tailscale/tailscale@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(filepath.Join(root, "var/lib/andaru/addons-staged.json"), []byte(`{"images":{"`+digest+`":{"digest":"`+digest+`","imageId":"sha256:abc"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withPodman, err := readRealizerFacts(etc, run, filepath.Join(root, "pppd"), filepath.Join(root, "*", "pppoe.so"), filepath.Join(root, "ppp"), root)
+	if err != nil || !withPodman.PodmanTool || !slices.Equal(withPodman.StagedImages, []string{digest}) {
+		t.Fatalf("podman/staged facts = %+v, err=%v", withPodman, err)
+	}
 }
 
 //go:embed testdata/networkctl-list.json

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/aliasfeed"
 )
 
@@ -53,6 +54,7 @@ func (r *renderer) filterChains() {
 
 	// Zones are sets of interface names, so an interface that appears later is matched too.
 	zones := map[string][]string{}
+	segmentZone := map[string]string{}
 	uplinks := []string{}
 	for _, s := range d.Segments {
 		name, ok := r.name[s.Link]
@@ -60,9 +62,37 @@ func (r *renderer) filterChains() {
 			continue
 		}
 		zones[s.Zone] = append(zones[s.Zone], name)
+		segmentZone[name] = s.Zone
 		l := d.Links[r.index[s.Link]]
 		if s.Addressing.IPv4.Gateway != "" || s.Addressing.IPv4.Mode == "dhcp" || l.Kind == "pppoe" {
 			uplinks = append(uplinks, name)
+		}
+	}
+	hasAddonZones := false
+	for i, a := range d.Addons {
+		if !a.Enabled || r.in.Catalog == nil {
+			continue
+		}
+		m, ok := r.in.Catalog.ByID(a.ID)
+		if !ok {
+			continue
+		}
+		for j, ifc := range a.Interfaces {
+			if ifc.Zone == "" || !addon.ValidInterfaceName(ifc.Name) {
+				continue
+			}
+			if !slices.ContainsFunc(m.Interfaces, func(spec addon.InterfaceSpec) bool { return spec.Name == ifc.Name }) {
+				continue
+			}
+			if existingZone, conflict := segmentZone[ifc.Name]; conflict {
+				if existingZone != ifc.Zone {
+					r.find("error", "ADDON_INTERFACE_CONFLICT", fmt.Sprintf("/addons/%d/interfaces/%d/name", i, j), fmt.Sprintf("Add-on interface %q conflicts with an interface already assigned to another zone.", ifc.Name))
+				}
+				continue
+			}
+			segmentZone[ifc.Name] = ifc.Zone
+			zones[ifc.Zone] = append(zones[ifc.Zone], ifc.Name)
+			hasAddonZones = true
 		}
 	}
 	for _, z := range d.Zones {
@@ -196,7 +226,11 @@ func (r *renderer) filterChains() {
 		}
 	}
 	script := cards.String() + head + "\tcomment \"sha256:" + hex.EncodeToString(sum[:]) + "\"\n" + body.String() + "}\n"
-	r.file(nftPath, "0644", script, []string{"/rules", "/aliases", "/nat", "/management"})
+	nftSources := []string{"/rules", "/aliases", "/nat", "/management"}
+	if hasAddonZones {
+		nftSources = append(nftSources, "/addons")
+	}
+	r.file(nftPath, "0644", script, nftSources)
 }
 
 // clampMSS lowers the MSS of TCP handshakes through each PPPoE session to fit its MTU, both ways: many hosts

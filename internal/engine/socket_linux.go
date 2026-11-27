@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/aliasfeed"
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/bus"
@@ -69,6 +70,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			result = err
 		}
 	}()
+	catalog, err := addon.LoadCatalog(addon.DefaultCatalogDir)
+	if err != nil {
+		return fmt.Errorf("load add-on catalog: %w", err)
+	}
+	store.SetCatalog(catalog)
 	if err = initializeAuthorizationState(ctx, stateDir); err != nil {
 		return fmt.Errorf("initialize live authorization state: %w", err)
 	}
@@ -153,7 +159,8 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}
 	coordinator := newSecurityCoordinator(identities, audits, stateDir)
-	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
+	readFacts := func() (host.RealizerFacts, error) { return host.ReadRealizerFactsFor(stateDir) }
+	read := hostReader{Links: host.ReadLinks, Facts: readFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit, Catalog: catalog, StateDir: stateDir}
 	applies := newAppliesHandler(store.ApplyInput, store.RealizationInput, store.Roles, read, runner, stateDir, identities, coordinator, publishApply(events, "engine"))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
@@ -193,8 +200,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	fed := make(chan struct{})
 	go func() { defer close(fed); feeds.run(lifetime) }()
 	defer func() { cancel(context.Canceled); <-fed }()
+	// Evaluate and release the boot add-on hold synchronously before serving API requests so an early
+	// Activate never mistakes boot startup for a pending settings hold.
+	initialHoldRetry := hold.check(lifetime)
 	held := make(chan struct{})
-	go func() { defer close(held); hold.run(lifetime) }()
+	go func() { defer close(held); hold.runWithInitial(lifetime, initialHoldRetry) }()
 	defer func() { cancel(context.Canceled); <-held }()
 	// The traffic history fills for as long as the engine serves, and the sampler is gone before this returns.
 	sampled := make(chan struct{})
@@ -223,7 +233,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	updateAPI := newUpdateAPI(stateDir, nil)
 	rootAPI := newHandlerWithDeps(handlerDeps{
 		readLinks:        host.ReadLinks,
-		configuration:    newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups),
+		configuration:    newSavedHandler(store, host.ReadLinks, readFacts, applies, backups),
 		identityAPI:      identityAPI,
 		auditAPI:         auditAPI,
 		fleetAPI:         fleetAPI,

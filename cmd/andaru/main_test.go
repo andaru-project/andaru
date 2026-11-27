@@ -253,6 +253,11 @@ func (f *fakeVerbs) ReleaseAddonsHold(context.Context) error {
 	return f.err
 }
 
+func (f *fakeVerbs) AddonControl(_ context.Context, action, slug string) error {
+	f.calls = append(f.calls, "addon-ctl "+action+" "+slug)
+	return f.err
+}
+
 func (f *fakeVerbs) Fence(_ context.Context, denyAll bool) error {
 	f.calls = append(f.calls, fmt.Sprint("fence ", denyAll))
 	return f.err
@@ -278,6 +283,8 @@ func TestRealizeExitCodes(t *testing.T) {
 		{[]string{"aliases"}, nil, "aliases", 0},
 		{[]string{"addons-release-hold"}, nil, "addons-release-hold", 0},
 		{[]string{"addons-release-hold"}, errors.New("busy"), "addons-release-hold", 1},
+		{[]string{"addon-ctl", "restart", "tailscale"}, nil, "addon-ctl restart tailscale", 0},
+		{[]string{"addon-ctl", "start", "tailscale"}, generation.ErrSafeModeActive, "addon-ctl start tailscale", 1},
 	} {
 		verbs := &fakeVerbs{err: row.err}
 		var diagnostics bytes.Buffer
