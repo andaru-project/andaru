@@ -111,8 +111,14 @@ func normalizeDeclaration(d *declaration) {
 	}
 	slices.SortFunc(d.VirtualAddresses, func(a, b virtualAddress) int { return strings.Compare(a.ID, b.ID) })
 	for i := range d.VirtualAddresses {
-		if a, e := netip.ParseAddr(d.VirtualAddresses[i].Address); e == nil {
-			d.VirtualAddresses[i].Address = a.String() // one spelling, so the renderer and forwards agree
+		v := &d.VirtualAddresses[i]
+		if v.Kind == "address" {
+			v.Kind = "" // absent is address: one form, so older declarations keep theirs
+		}
+		if a, e := netip.ParseAddr(v.Address); e == nil {
+			v.Address = a.String() // one spelling, so the renderer and forwards agree
+		} else if p, e := netip.ParsePrefix(v.Address); e == nil && v.proxied() {
+			v.Address = p.String()
 		}
 	}
 	if len(d.Notifications.Channels) == 0 {

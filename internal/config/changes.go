@@ -815,7 +815,7 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 			}
 		}
 		resolveAll(v, "ports")
-	case "management", "dhcp", "dhcp6":
+	case "management", "dhcp", "dhcp6", "virtualAddresses":
 		resolve(v, "segment")
 		resolveAll(v, "allowedSources")
 	case "dns":
