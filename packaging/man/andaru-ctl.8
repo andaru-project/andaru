@@ -8,15 +8,15 @@ andaru\-ctl \- read and change the configuration through the running engine
 andaru ctl [\-\-socket PATH] COMMAND [ARGUMENTS]
 .fi
 .SH DESCRIPTION
-Read and change Andaru's configuration through the running engine. Success is JSON on stdout, except for kept and factory\-reset, which print text; diagnostics go to stderr.
+Read and change Andaru\(aqs configuration through the running engine. Success is JSON on stdout, except for kept and factory\-reset, which print text; diagnostics go to stderr.
 .SH COMMANDS
 .nf
-  links          Show the host's network interfaces and their addresses
+  links          Show the host\(aqs network interfaces and their addresses
   prefixes       Show the delegated IPv6 prefixes and how they are used
   leases         Show the DHCPv4 and DHCPv6 leases
   lldp           Show live LLDP neighbors discovered on host interfaces
   offloads       Show the live offloads of the Ethernet devices
-  openapi        Print the engine API's OpenAPI description
+  openapi        Print the engine API\(aqs OpenAPI description
   setup\-code     Show or rotate the one\-time WebUI first\-boot setup code
   config         Read and change the saved configuration
   versions       List the saved versions and show one
@@ -28,7 +28,7 @@ Read and change Andaru's configuration through the running engine. Success is JS
   users          Manage user accounts
   tokens         Manage API tokens
   audit          List the audit log
-  factory\-reset  Erase Andaru's state and start over
+  factory\-reset  Erase Andaru\(aqs state and start over
 .fi
 .SH OPTIONS
 .nf
@@ -37,12 +37,12 @@ Read and change Andaru's configuration through the running engine. Success is JS
 .fi
 .PP
 .nf
-Run 'andaru ctl COMMAND \-\-help' for the arguments of a command.
+Run \(aqandaru ctl COMMAND \-\-help\(aq for the arguments of a command.
 .fi
 .SH COMMANDS IN DETAIL
 .SS andaru ctl links
 .nf
-Show the host's network interfaces and their addresses.
+Show the host\(aqs network interfaces and their addresses.
 
 usage: andaru ctl links
 
@@ -54,8 +54,8 @@ Show the delegated IPv6 prefixes and how they are used.
 
 usage: andaru ctl prefixes
 
-Each WAN's requested length, its current prefix and lifetimes, each
-delegated segment's /64 and each pool's range, as JSON on stdout.
+Each WAN\(aqs requested length, its current prefix and lifetimes, each
+delegated segment\(aqs /64 and each pool\(aqs range, as JSON on stdout.
 .fi
 .SS andaru ctl leases
 .nf
@@ -84,7 +84,7 @@ the device can change it, as JSON on stdout.
 .fi
 .SS andaru ctl openapi
 .nf
-Print the engine API's OpenAPI description.
+Print the engine API\(aqs OpenAPI description.
 
 usage: andaru ctl openapi
 .fi
@@ -116,7 +116,7 @@ Commands:
   create   Create an object from the JSON document on stdin
   replace  Replace an object or singleton with the JSON document on stdin
   delete   Delete an object, or unset a singleton
-  order    Set the order of a list: every entry's ID once, first to last
+  order    Set the order of a list: every entry\(aqs ID once, first to last
   changes  Save the batch of changes on stdin, all or nothing
 
 Collections: links, segments, zones, aliases/addresses, aliases/ports, dhcp,
@@ -130,7 +130,7 @@ Options:
                that is not set yet
 
 Example:
-  printf '%s\en' '{"name":"lan"}' | sudo andaru ctl config create zones
+  printf \(aq%s\en\(aq \(aq{"name":"lan"}\(aq | sudo andaru ctl config create zones
 .fi
 .SS andaru ctl versions
 .nf
@@ -229,7 +229,7 @@ Keep the saved network for after a factory reset.
 usage: andaru ctl kept store\-recovery
 
 Commands:
-  store\-recovery  Keep the saved head's network as the network a factory
+  store\-recovery  Keep the saved head\(aqs network as the network a factory
                   reset brings the box back on
 .fi
 .SS andaru ctl users
@@ -256,11 +256,11 @@ Commands:
   update           Change an account; give at least one field
   disable          Disable an account
   delete           Delete an account
-  password\-reset   Set an account's password; asks for it twice
+  password\-reset   Set an account\(aqs password; asks for it twice
 
 Options:
-  \-\-login LOGIN        login name, 3\-64 characters: letters, digits, '.',
-                       '_' and '\-', starting with a letter or digit; stored
+  \-\-login LOGIN        login name, 3\-64 characters: letters, digits, \(aq.\(aq,
+                       \(aq_\(aq and \(aq\-\(aq, starting with a letter or digit; stored
                        in lower case
   \-\-display\-name NAME  display name, at most 128 characters
   \-\-kind KIND          human or service
@@ -268,7 +268,7 @@ Options:
   \-\-disabled           create the account disabled
   \-\-enabled BOOL       true enables the account, false disables it
   \-\-revision N         identity revision your last read returned
-  \-\-cursor CURSOR      continue from a previous page's nextCursor
+  \-\-cursor CURSOR      continue from a previous page\(aqs nextCursor
   \-\-limit N            maximum accounts, 1\-100 (default 50)
 
 These commands require root.
@@ -285,7 +285,7 @@ usage: andaru ctl tokens create \-\-account\-id ID \-\-name NAME \-\-scope CAP,.
 
 Commands:
   create  Issue a token; its secret is shown once
-  list    List an account's tokens
+  list    List an account\(aqs tokens
   revoke  Revoke a token by its selector
 
 Options:
@@ -295,8 +295,8 @@ Options:
   \-\-expires\-at RFC3339            expiry time
   \-\-no\-expiry                     never expire; revoke it explicitly
   \-\-revoke\-on\-password\-change B   true revokes the token when the
-                                  account's password changes
-  \-\-cursor CURSOR                 continue from a previous page's nextCursor
+                                  account\(aqs password changes
+  \-\-cursor CURSOR                 continue from a previous page\(aqs nextCursor
   \-\-limit N                       maximum tokens, 1\-50 (default 50)
 
 These commands require root.
@@ -308,14 +308,14 @@ List the audit log.
 usage: andaru ctl audit list [\-\-cursor CURSOR] [\-\-limit N]
 
 Options:
-  \-\-cursor CURSOR  continue from a previous page's nextCursor
+  \-\-cursor CURSOR  continue from a previous page\(aqs nextCursor
   \-\-limit N        maximum events, 1\-100 (default 50)
 
 This command requires root.
 .fi
 .SS andaru ctl factory\-reset
 .nf
-Erase Andaru's state and start over.
+Erase Andaru\(aqs state and start over.
 
 usage: andaru ctl factory\-reset run|abort|status
 

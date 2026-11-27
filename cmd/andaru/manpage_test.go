@@ -1,3 +1,7 @@
+//go:build !integration
+
+// Not in the integration binaries: CI runs them away from the repository, where packaging/man is not.
+
 package main
 
 import (
@@ -12,7 +16,7 @@ import (
 
 var updateMan = flag.Bool("update-man", false, "rewrite packaging/man from the help texts")
 
-// The man pages the image ships are the help texts, rendered: run `go test ./cmd/... -update-man` after a help
+// The man pages the image ships are the help texts, rendered: run `go test ./cmd/andaru ./cmd/andaru-web -update-man` after a help
 // change.
 func TestManPagesMatchTheHelp(t *testing.T) {
 	var ctl bytes.Buffer
@@ -33,6 +37,16 @@ func TestManPagesMatchTheHelp(t *testing.T) {
 func checkManPages(t *testing.T, pages map[string][]byte) {
 	t.Helper()
 	dir := filepath.Join("..", "..", "packaging", "man")
+	// Every page there ships: one for a command gone is an error. andaru-web's own test checks its page.
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if _, ok := pages[f.Name()]; !ok && f.Name() != "andaru-web.8" {
+			t.Errorf("%s/%s is the page of no command: remove it", dir, f.Name())
+		}
+	}
 	for name, page := range pages {
 		path := filepath.Join(dir, name)
 		if *updateMan {
@@ -42,7 +56,7 @@ func checkManPages(t *testing.T, pages map[string][]byte) {
 			continue
 		}
 		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, page) {
-			t.Errorf("%s does not match the help (%v): run go test ./cmd/... -update-man", path, err)
+			t.Errorf("%s does not match the help (%v): run go test ./cmd/andaru ./cmd/andaru-web -update-man", path, err)
 		}
 	}
 }

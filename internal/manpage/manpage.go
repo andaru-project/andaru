@@ -14,7 +14,7 @@ type Section struct{ Title, Help string }
 // or not, is kept as preformatted text, as --help prints it. Each of more follows under COMMANDS IN DETAIL.
 func Page(name, section, summary, help string, more ...Section) []byte {
 	var b strings.Builder
-	fmt.Fprintf(&b, ".TH %s %s \"\" \"Andaru\" \"Andaru Manual\"\n", strings.ToUpper(escape(name)), section)
+	fmt.Fprintf(&b, ".TH %s %s \"\" \"Andaru\" \"Andaru Manual\"\n", escape(strings.ToUpper(name)), section)
 	// Unhyphenated and ragged: paths and options must read as they are typed.
 	fmt.Fprintf(&b, ".nh\n.ad l\n.SH NAME\n%s \\- %s\n", escape(name), escape(summary))
 	var description []string
@@ -32,7 +32,7 @@ func Page(name, section, summary, help string, more ...Section) []byte {
 			description = append(description, escape(strings.Join(strings.Fields(p), " "))+"\n")
 		default:
 			if heading, body, ok := strings.Cut(p, "\n"); ok && strings.HasSuffix(heading, ":") && !strings.HasPrefix(heading, " ") {
-				fmt.Fprintf(&b, ".SH %s\n", strings.ToUpper(escape(strings.TrimSuffix(heading, ":"))))
+				fmt.Fprintf(&b, ".SH %s\n", escape(strings.ToUpper(strings.TrimSuffix(heading, ":"))))
 				preformatted(&b, body, "")
 				continue
 			}
@@ -65,10 +65,10 @@ func preformatted(b *strings.Builder, text, indent string) {
 	b.WriteString(".fi\n")
 }
 
-// escape keeps text literal in roff: backslashes, hyphens (a plain one renders as a typographic hyphen, which breaks
-// a copied option), and a line that would start with a control character.
+// escape keeps text literal in roff: backslashes; hyphens, quotes, carets and tildes, which a terminal would show
+// as their typographic forms and so break a copied command; and a line that would start with a control character.
 func escape(s string) string {
-	s = strings.NewReplacer(`\`, `\e`, "-", `\-`).Replace(s)
+	s = strings.NewReplacer(`\`, `\e`, "-", `\-`, "'", `\(aq`, "`", `\(ga`, "^", `\(ha`, "~", `\(ti`).Replace(s)
 	if strings.HasPrefix(s, ".") || strings.HasPrefix(s, "'") {
 		s = `\&` + s
 	}

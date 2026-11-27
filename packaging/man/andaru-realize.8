@@ -13,7 +13,7 @@ andaru realize [OPTIONS] update\-rollback|update\-reboot
 andaru realize [OPTIONS] set\-hostname NAME
 .fi
 .SH DESCRIPTION
-Privileged host steps. The engine runs them in transient systemd units, and Andaru's own units and timers run the rest; they are not meant to be typed.
+Privileged host steps. The engine runs them in transient systemd units, and Andaru\(aqs own units and timers run the rest; they are not meant to be typed.
 .SH VERBS
 .nf
   activate N         Make generation N live
@@ -33,6 +33,6 @@ Privileged host steps. The engine runs them in transient systemd units, and Anda
 .SH OPTIONS
 .nf
   \-\-state\-dir PATH   absolute private state directory (default /var/lib/andaru)
-  \-\-bus\-socket PATH  the engine's event bus socket, told of each activate,
+  \-\-bus\-socket PATH  the engine\(aqs event bus socket, told of each activate,
                      confirm and rollback; without it, the bus is not told
 .fi
