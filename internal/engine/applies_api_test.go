@@ -338,7 +338,7 @@ func TestAppliesListSaysWhetherTheHeadIsUnapplied(t *testing.T) {
 		}
 		return *list.Unapplied
 	}
-	b.saved = map[config.Version]string{}
+	b.saved = map[config.Version]string{"0": b.declaration} // realized alike, but the factory network is no apply
 	if !unapplied() {
 		t.Fatal("saved version 7 over the factory network is not unapplied")
 	}
@@ -358,6 +358,22 @@ func TestAppliesListSaysWhetherTheHeadIsUnapplied(t *testing.T) {
 	b.mu.Unlock()
 	if !unapplied() {
 		t.Fatal("a changed declaration needs no apply")
+	}
+	b.mu.Lock()
+	b.head, b.declaration = "7", b.saved["7"]
+	b.mu.Unlock()
+	if unapplied() {
+		t.Fatal("the live head is unapplied")
+	}
+	b.mu.Lock()
+	b.head = "0" // which needs no apply over the factory network
+	b.mu.Unlock()
+	pointers := filepath.Join(generation.Dir(b.state), "pointers.json")
+	if err := os.WriteFile(pointers, []byte(`{"confirmed":null,"lastKnownGood":null,"pending":null,"live":99}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !unapplied() {
+		t.Fatal("a live generation that is not listed runs nothing unknown")
 	}
 }
 
