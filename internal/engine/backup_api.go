@@ -255,7 +255,7 @@ func (h *backupHandler) create(w http.ResponseWriter, r *http.Request) {
 		SavedVersion:  string(documents.SavedVersion),
 		CapturedAt:    captured,
 		Network:       backup.NetworkObservation{Live: observed.Live, Pending: observed.Pending, LiveSavedVersion: observed.LiveSavedVersion},
-		Realized:      realized,
+		Realized:      observed.Live != nil && realized, // archives over the factory network say network, as they always did
 	}, backup.Documents{Configuration: documents.Configuration, ConfigurationSecrets: documents.ConfigurationSecrets, Users: identityDocuments.Users, UserCredentials: identityDocuments.UserCredentials}, options.Passphrase)
 	if err != nil {
 		writeBackupError(w, r, err)

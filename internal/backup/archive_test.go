@@ -322,13 +322,13 @@ func TestV1ArchiveRemainsReadableWithoutIdentityMembers(t *testing.T) {
 	}
 }
 
-// A network that realizes the saved version, a live generation made from an older one or the factory network, leaves
-// nothing unapplied. Both archives read back.
+// A live generation that realizes the saved version, made from an older one, leaves nothing unapplied; over the
+// factory network, the network is unapplied whatever the engine says, as older releases require. Both read back.
 func TestRealizedSavedVersionIsNotUnapplied(t *testing.T) {
 	for _, c := range []struct {
 		live bool
 		want []string
-	}{{true, []string{}}, {false, []string{}}} {
+	}{{true, []string{}}, {false, []string{"network"}}} {
 		source := sourceFixture()
 		source.Realized = true
 		if !c.live {

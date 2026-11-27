@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -339,7 +338,7 @@ func TestAppliesListSaysWhetherTheHeadIsUnapplied(t *testing.T) {
 		}
 		return *list.Unapplied
 	}
-	b.saved = map[config.Version]string{"0": `{}`} // the factory declaration
+	b.saved = map[config.Version]string{}
 	if !unapplied() {
 		t.Fatal("saved version 7 over the factory network is not unapplied")
 	}
@@ -801,8 +800,8 @@ func TestUnchangedRolesKeepTheLiveDigestFromAnOlderRelease(t *testing.T) {
 	}
 }
 
-// The head needs an apply only when it differs from the network that runs in something an apply realizes: a saved
-// notification channel does not. No live generation runs the factory network, version 0.
+// The head needs an apply only when it differs from the live generation in something an apply realizes: a saved
+// notification channel does not. Over the factory network, every version but 0 needs one.
 func TestRealizesIgnoresSettingsThatTakeEffectWhenSaved(t *testing.T) {
 	values := map[config.Version]string{
 		"0": `{"rules":[]}`,
@@ -814,7 +813,7 @@ func TestRealizesIgnoresSettingsThatTakeEffectWhenSaved(t *testing.T) {
 	for _, c := range []struct {
 		head, live string // live "" is no live generation
 		same       bool
-	}{{"5", "5", true}, {"6", "5", true}, {"7", "5", false}, {"7", "6", false}, {"0", "", true}, {"1", "", true}, {"5", "", false}} {
+	}{{"5", "5", true}, {"6", "5", true}, {"7", "5", false}, {"7", "6", false}, {"0", "", true}, {"1", "", false}, {"5", "", false}} {
 		reads := 0
 		read := func(_ context.Context, v *config.Version) (config.RealizationInput, error) {
 			reads++
@@ -829,7 +828,7 @@ func TestRealizesIgnoresSettingsThatTakeEffectWhenSaved(t *testing.T) {
 			if got, err := realizes(t.Context(), read, head, config.Version(c.live)); err != nil || got != c.same {
 				t.Errorf("head %s, live %q: %v, %v", c.head, c.live, got, err)
 			}
-			if c.head == cmp.Or(c.live, "0") && reads > 1 {
+			if (c.head == c.live || c.live == "") && reads > 1 {
 				t.Errorf("head %s, live %q: %d reads for one version", c.head, c.live, reads)
 			}
 		}
