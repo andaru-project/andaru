@@ -168,8 +168,11 @@ type virtualAddress struct {
 // proxied says whether v is answered by proxy ARP rather than held by the firewall.
 func (v virtualAddress) proxied() bool { return v.Kind == "proxyArp" }
 
+// proxyNDP says whether v is an inside host's address answered by proxy NDP and routed to its host segment.
+func (v virtualAddress) proxyNDP() bool { return v.Kind == "proxyNdp" }
+
 // held says whether the firewall holds v: neither proxy ARP nor proxy NDP answers for it.
-func (v virtualAddress) held() bool { return !v.proxied() && v.Kind != "proxyNdp" }
+func (v virtualAddress) held() bool { return !v.proxied() && !v.proxyNDP() }
 
 type dhcpOption struct {
 	Code       int    `json:"code"`

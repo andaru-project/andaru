@@ -360,7 +360,7 @@ func (r *renderer) networkd(i int) {
 		for _, v := range r.d.VirtualAddresses {
 			a, e := netip.ParseAddr(v.Address)
 			switch {
-			case v.Kind != "proxyNdp" || e != nil:
+			case !v.proxyNDP() || e != nil:
 			case v.Segment == id:
 				network, ndp = append(network, "IPv6ProxyNDPAddress="+a.String()), true
 			case v.HostSegment == id:
@@ -388,7 +388,7 @@ func deref(p *int, fallback int) int {
 func (r *renderer) virtualAddresses() {
 	r.proxyNDPOnLink()
 	// A proxy NDP entry is not the firewall's, and is on no andaru-vip.
-	if !slices.ContainsFunc(r.d.VirtualAddresses, func(v virtualAddress) bool { return v.Kind != "proxyNdp" }) {
+	if !slices.ContainsFunc(r.d.VirtualAddresses, func(v virtualAddress) bool { return !v.proxyNDP() }) {
 		return
 	}
 	var addresses []string
@@ -396,7 +396,7 @@ func (r *renderer) virtualAddresses() {
 	for _, v := range r.d.VirtualAddresses {
 		x := prefixOf(v.Address)
 		switch {
-		case !x.IsValid() || v.Kind == "proxyNdp":
+		case !x.IsValid() || v.proxyNDP():
 		case v.proxied():
 			// The route that leaves by another interface, without which the kernel proxies no ARP for it.
 			routes = append(routes, section{"Route", []string{"Destination=" + x.String()}})
@@ -463,15 +463,14 @@ func (r *renderer) heldOnLearned() {
 func (r *renderer) proxyNDPOnLink() {
 	for i, v := range r.d.VirtualAddresses {
 		a, e := netip.ParseAddr(v.Address)
-		seg := slices.IndexFunc(r.d.Segments, func(s segment) bool { return s.ID == v.Segment })
-		if v.Kind != "proxyNdp" || e != nil || seg < 0 {
+		s, found := r.segmentByID(v.Segment)
+		if !v.proxyNDP() || e != nil || !found {
 			continue
 		}
-		s := r.d.Segments[seg]
 		var subnets []netip.Prefix
 		for _, raw := range s.Addressing.IPv6.Addresses {
 			if p, e := netip.ParsePrefix(raw); e == nil {
-				subnets = append(subnets, p.Masked())
+				subnets = append(subnets, p)
 			}
 		}
 		for _, l := range r.in.Links {
@@ -479,8 +478,8 @@ func (r *renderer) proxyNDPOnLink() {
 				continue
 			}
 			for _, x := range l.Addresses {
-				if y, e := netip.ParseAddr(x.Address); e == nil && x.Scope == "global" {
-					subnets = append(subnets, netip.PrefixFrom(y, x.PrefixLength).Masked())
+				if y, e := netip.ParseAddr(x.Address); e == nil {
+					subnets = append(subnets, netip.PrefixFrom(y, x.PrefixLength))
 				}
 			}
 		}

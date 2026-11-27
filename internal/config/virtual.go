@@ -42,10 +42,10 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 			bad(p+"/name", "Name already exists in this collection.")
 		}
 		seen[v.ID], seen["name:"+v.Name] = true, true
-		if v.HostSegment != "" && v.Kind != "proxyNdp" {
+		if v.HostSegment != "" && !v.proxyNDP() {
 			bad(p+"/hostSegment", "Only a proxy NDP entry names a host segment.")
 		}
-		if v.Kind == "proxyNdp" {
+		if v.proxyNDP() {
 			validateProxyNDP(d, i, p, subnets, taken, bad)
 			continue
 		}
@@ -365,7 +365,7 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken
 	// Before i, every kind; after it, all but proxy NDP entries, which refuse the overlap themselves.
 	other := -1
 	for j, o := range d.VirtualAddresses {
-		if j != i && (j < i || o.Kind != "proxyNdp") && heldContains(o, a) {
+		if (j < i || !o.proxyNDP()) && heldContains(o, a) {
 			other = j
 			break
 		}
