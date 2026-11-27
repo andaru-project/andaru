@@ -125,4 +125,11 @@ func TestSafeModeFailClosedSimultaneousAndFence(t *testing.T) {
 	if got := ReadSafeMode(b.net.root, b.r.StateDir); !got.Active || !slices.Equal(got.Reasons, []string{"boot", "kernelArg", "settingsHold"}) {
 		t.Fatalf("simultaneous reasons after Fence: %+v", got)
 	}
+	// A subsequent Boot in the same boot must preserve the "boot" reason alongside "kernelArg".
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadSafeMode(b.net.root, b.r.StateDir); !got.Active || !slices.Equal(got.Reasons, []string{"boot", "kernelArg", "settingsHold"}) {
+		t.Fatalf("simultaneous reasons after repeated Boot: %+v", got)
+	}
 }

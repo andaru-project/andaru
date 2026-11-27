@@ -83,7 +83,10 @@ func (r Realizer) applySafeModeOnBoot() {
 	}
 	marker := "boot\n"
 	if !nextPresent {
-		marker = "kernelArg\n"
+		// Preserve an existing "boot" reason if applySafeModeOnBoot runs more than once in the same boot.
+		if raw, err := os.ReadFile(r.Root + SafeModeBootFile); err != nil || strings.TrimSpace(string(raw)) == "kernelArg" {
+			marker = "kernelArg\n"
+		}
 	}
 	if err := writeAtomic(r.Root+SafeModeBootFile, []byte(marker), 0o644); err != nil {
 		// Leave safe-mode-next in place on failure so ConditionPathExists=!/var/lib/andaru/safe-mode-next still holds.
