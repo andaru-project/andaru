@@ -480,6 +480,9 @@ func (r *renderer) proxyNDPOnLink() {
 			}
 			for _, x := range l.Addresses {
 				if y, e := netip.ParseAddr(x.Address); e == nil {
+					if y == a { // given to the firewall by DHCPv6 or SLAAC, which validation could not see
+						r.find("warning", "PROXY_NDP_ADDRESS_HELD", fmt.Sprintf("/virtualAddresses/%d/address", i), "The uplink's link holds this address itself, so the firewall answers for it as its own and the inside host cannot have it. Name another address of the uplink's prefix.")
+					}
 					subnets = append(subnets, netip.PrefixFrom(y, x.PrefixLength))
 					// Only a global prefix tells the provider's: every link has its fe80::/64, and a ULA says nothing either.
 					known = known || y.Is6() && y.IsGlobalUnicast() && !y.IsPrivate() && x.PrefixLength < 128

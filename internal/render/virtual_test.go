@@ -155,6 +155,11 @@ func TestProxyNDPOffSubnet(t *testing.T) {
 	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) {
 		t.Fatalf("a DHCPv6 /128 alone warned: %+v", r.Findings)
 	}
+	// Given to the firewall itself, by DHCPv6: the host cannot have it.
+	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:1::50", PrefixLength: 128, Scope: "global"}}
+	if r := render(t, in); !findingAt(r, "PROXY_NDP_ADDRESS_HELD", one) || findingAt(r, "PROXY_NDP_ADDRESS_HELD", two) {
+		t.Fatalf("the uplink's own address not warned, or another warned: %+v", r.Findings)
+	}
 	// The uplink on another prefix: the address is off it, whatever the LAN learned.
 	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:9::2", PrefixLength: 64, Scope: "global"}}
 	in.Links[1].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:1::9", PrefixLength: 64, Scope: "global"}}

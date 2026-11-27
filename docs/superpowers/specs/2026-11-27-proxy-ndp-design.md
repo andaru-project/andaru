@@ -47,6 +47,7 @@ Kernel 6.12, systemd 257 (Debian 13), 2026-11-27, in network namespaces. The pro
 - **The segment's link `.network`** gains `IPv6ProxyNDPAddress=<address>` for each entry that names it. That implies `IPv6ProxyNDP=yes`; the kernel answers only for the listed addresses.
 - **The host segment's link `.network`** gains a `[Route]` with `Destination=<address>/128` for each entry that names it, an on-link route.
 - **Traffic to the host** is routed, not translated: the filter's forward chain governs it like any traffic between the two zones.
+- **The warning `PROXY_NDP_ADDRESS_HELD`** (at `/virtualAddresses/<i>/address`) fires when the segment's link holds the address itself at run time, given by DHCPv6 or SLAAC.
 - **The warning `PROXY_NDP_OFF_SUBNET`** (at `/virtualAddresses/<i>/address`) fires for an address on no subnet the segment's link has at run time. It stays silent while the uplink's global prefix is unknown: nothing learned yet, a DHCPv6 address alone (a /128, whose on-link prefix comes as a route), or only link-local and unique local prefixes. Nothing on the uplink would ask for it there.
 
 ## The host
