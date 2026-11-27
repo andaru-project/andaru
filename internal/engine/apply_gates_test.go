@@ -233,3 +233,20 @@ func TestVirtualDNSGate(t *testing.T) {
 		t.Fatalf("with the filter: %+v", got)
 	}
 }
+
+func TestProxyARPGate(t *testing.T) {
+	gate := func(declaration string) []render.Finding {
+		in := taken()
+		in.Declaration = []byte(declaration)
+		return applyFindings(in)
+	}
+	plain := `"links":[{"kind":"ethernet","enabled":true}],"segments":[{"id":"seg_a","addressing":{"ipv4":{"mode":"static","addresses":["203.0.113.2/24"]},"ipv6":{"mode":"none"}}}]`
+	vips := `"virtualAddresses":[{"address":"172.16.53.53"},{"kind":"proxyArp","segment":"seg_a","address":"203.0.113.50"}]`
+	got := gate(`{` + plain + `,` + vips + `}`)
+	if len(got) != 1 || got[0].Code != "APPLY_UNSUPPORTED" || got[0].Path != "/virtualAddresses/1/kind" || got[0].Message != "Proxy ARP entries need the packet filter, which needs a management segment. Set management.segment." {
+		t.Fatalf("without the filter: %+v", got)
+	}
+	if got := gate(`{"management":{"segment":"seg_a"},` + plain + `,` + vips + `}`); len(got) != 0 {
+		t.Fatalf("with the filter: %+v", got)
+	}
+}
