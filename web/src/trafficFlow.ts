@@ -707,11 +707,10 @@ export function simulateTrafficFlow(
   const proxyArpRoutes: Array<{ vip: NonNullable<Snapshot['value']['virtualAddresses']>[number]; prefix: ParsedPrefix }> = [];
   for (const vip of snapshot.virtualAddresses ?? []) {
     if (vip.kind === 'proxyArp') {
-      const seg = vip.segment ? segmentsById.get(vip.segment) : undefined;
-      if (seg && isLinkUsable(seg.link, linksById) && seg.addressing.ipv4.mode === 'static') {
-        const prefix = parsePrefix(vip.address);
-        if (prefix && prefix.family === 4) proxyArpRoutes.push({ vip, prefix });
-      }
+      // Matches internal/render/networkd.go virtualAddresses(): every proxyArp route lives on
+      // the independent andaru-vip dummy device regardless of the associated segment's link state.
+      const prefix = parsePrefix(vip.address);
+      if (prefix && prefix.family === 4) proxyArpRoutes.push({ vip, prefix });
       continue;
     }
     const ip = parseIp(vip.address);

@@ -985,18 +985,17 @@ describe('simulateTrafficFlow', () => {
     expect(explicitHit.verdict).toBe('accept');
     expect(explicitHit.finalTuple).toBe('TCP 198.51.100.10 → 192.168.1.20:8443');
 
-    // A proxyArp entry on a segment switched to DHCP is ignored in routing.
-    const dhcpProxy: Snapshot['value'] = {
+    // A proxyArp route on andaru-vip still intercepts traffic even when its associated segment link is disabled.
+    const disabledWanProxy: Snapshot['value'] = {
       ...withProxyArp,
-      segments: withProxyArp.segments.map((s) => (s.id === 'seg_wan'
-        ? { ...s, addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } }
-        : s)),
+      links: withProxyArp.links.map((l) => (l.id === 'lnk_wan' ? { ...l, enabled: false } : l)),
     };
-    const ignoredOnDhcp = simulateTrafficFlow(
+    const stillDroppedOnDisabledLink = simulateTrafficFlow(
       { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '203.0.113.58', dstPort: 443 },
-      dhcpProxy,
+      disabledWanProxy,
     );
-    expect(ignoredOnDhcp.decidedBy).not.toEqual({ label: 'Virtual IP WAN extra /29', to: '/network/virtual-ips' });
+    expect(stillDroppedOnDisabledLink.verdict).toBe('no_route');
+    expect(stillDroppedOnDisabledLink.decidedBy).toEqual({ label: 'Virtual IP WAN extra /29', to: '/network/virtual-ips' });
 
     // Internal whitespace in CIDR input is rejected by parsePrefix.
     expect(parsePrefix('203.0.113.56 /29')).toBeNull();
