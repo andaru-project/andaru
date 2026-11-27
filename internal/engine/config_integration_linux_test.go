@@ -157,6 +157,10 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/system/update": {"get", "head"}, "/api/v1/system/update/check": {"post"},
 		"/api/v1/system/update/stage": {"post"}, "/api/v1/system/update/rollback": {"post"},
 		"/api/v1/system/update/reboot": {"post"}, "/api/v1/system/hostname": {"post"},
+		"/api/v1/addons": {"get", "head"}, "/api/v1/addons/{slug}": {"get", "head"},
+		"/api/v1/addons/{slug}/stage": {"post", "delete"}, "/api/v1/addons/{slug}/start": {"post"},
+		"/api/v1/addons/{slug}/stop": {"post"}, "/api/v1/addons/{slug}/restart": {"post"},
+		"/api/v1/addons/{slug}/logs/{name}": {"get", "head"},
 		"/api/v1/setup/code": {"get", "head", "post"}, "/api/v1/setup/bootstrap": {"post"},
 	}
 	if len(document.Paths) != len(expected) {
