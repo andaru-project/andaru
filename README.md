@@ -15,10 +15,6 @@ activate networking.
 See [docs/dev/core-api.md](docs/dev/core-api.md) for commands, installation,
 security boundaries, and current limits.
 
-AI-assisted work uses a CodeGraph index; run
-`sh scripts/setup-hooks.sh` once per clone. See
-[docs/dev/agent-tooling.md](docs/dev/agent-tooling.md).
-
 ## Design research
 
 - [Extension contracts: reuse, avoid, unresolved](docs/research/extension-contract.md)
