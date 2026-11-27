@@ -16,8 +16,8 @@ import (
 
 var updateMan = flag.Bool("update-man", false, "rewrite packaging/man from the help texts")
 
-// The man pages the image ships are the help texts, rendered: run `go test ./cmd/andaru ./cmd/andaru-web -update-man` after a help
-// change.
+// The man pages the image ships are the help texts, rendered. After a help change, run
+// go test ./cmd/andaru ./cmd/andaru-web -update-man.
 func TestManPagesMatchTheHelp(t *testing.T) {
 	var ctl bytes.Buffer
 	ctlHelp(&ctl)

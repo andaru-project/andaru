@@ -9,7 +9,7 @@ import (
 )
 
 // Every help line stays within 80 columns; help_test.go checks it. The man pages in packaging/man are these texts,
-// rendered: manpage_test.go checks them;
+// rendered: manpage_test.go checks them, and
 // go test ./cmd/andaru ./cmd/andaru-web -update-man rewrites them.
 
 const topUsage = `usage: andaru engine [OPTIONS]

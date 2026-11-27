@@ -16,7 +16,8 @@ import (
 
 var updateMan = flag.Bool("update-man", false, "rewrite packaging/man from the help text")
 
-// The man page the image ships is the help text, rendered: run `go test ./cmd/andaru ./cmd/andaru-web -update-man` after a help change.
+// The man page the image ships is the help text, rendered. After a help change, run
+// go test ./cmd/andaru ./cmd/andaru-web -update-man.
 func TestManPageMatchesTheHelp(t *testing.T) {
 	page := manpage.Page("andaru-web", "8", "serve the Andaru web interface", help)
 	path := filepath.Join("..", "..", "packaging", "man", "andaru-web.8")

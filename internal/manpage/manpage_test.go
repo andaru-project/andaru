@@ -11,7 +11,7 @@ usage: tool [--flag] ARG
 
 Options:
   --flag  a \ backslash
-.dot  at a line's start, 'quoted' ~ ^ `+"`"+`
+.dot  at a line's start, 'quoted' ~ ^ ` + "`" + `
 `
 	got := string(Page("tool", "8", "run the thing", help, Section{"tool other", "Other.\n\nusage: tool other\n"}))
 	want := `.TH TOOL 8 "" "Andaru" "Andaru Manual"
