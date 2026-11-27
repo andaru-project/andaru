@@ -39,7 +39,6 @@ export function SignInScreen({ notice, onSignIn }: SignInScreenProps) {
         autoFocus
         error={error || undefined}
         label="API token"
-        maxLength={512}
         required
         value={token}
         onChange={(event) => setToken(event.currentTarget.value)}

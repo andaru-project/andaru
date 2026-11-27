@@ -34,8 +34,8 @@ export interface FleetWorkspaceProps {
 const oldPaths = ['topology', 'vlans', 'vlans/flow', 'devices', 'devices/:id', 'clients', 'diagnostics'];
 
 function ToNetwork() {
-  const { pathname, search } = useLocation();
-  return <Navigate to={`/network${pathname}${search}`} replace />;
+  const { pathname, search, hash } = useLocation();
+  return <Navigate to={`/network${pathname}${search}${hash}`} replace />;
 }
 
 export function FleetWorkspace({

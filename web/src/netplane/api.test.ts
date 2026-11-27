@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, expect, it, vi } from 'vitest';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
-import { api, configureNetplaneApi, hasAccess, signIn, signOut } from './api';
+import { answersWithoutToken, api, configureNetplaneApi, hasAccess, signIn, signOut } from './api';
 import { pinAppRoot, resetPinnedRoot } from './routing';
 
 afterEach(() => {
@@ -24,8 +24,23 @@ it('keeps the token in a SameSite=Strict cookie scoped to the app, Secure on htt
 
   await signIn('  s3cret/+ \n');
   expect(cookies).toHaveBeenLastCalledWith('netplane_token=s3cret%2F%2B; path=/api/hassio_ingress/tok_1/; SameSite=Strict; Secure');
+  cookies.mockClear();
   signOut();
-  expect(cookies).toHaveBeenLastCalledWith('netplane_token=; path=/api/hassio_ingress/tok_1/; SameSite=Strict; Max-Age=0; Secure');
+  // Expired at the app's path and at every path above it, where an older build may have left one.
+  for (const path of ['/api/hassio_ingress/tok_1/', '/api/hassio_ingress/', '/api/', '/']) {
+    expect(cookies).toHaveBeenCalledWith(`netplane_token=; path=${path}; SameSite=Strict; Max-Age=0; Secure`);
+  }
+});
+
+it('takes the server for one without a token only on a plain success without the cookie', async () => {
+  for (const [answer, free] of [[{ items: [] }, true], [jsonResponse(502, {}), false], [unauthorized(), false], [new TypeError('Failed to fetch'), false]] as const) {
+    fetchRoutes({ '/api/v1/diagnostics': answer });
+    expect(await answersWithoutToken()).toBe(free);
+  }
+  const redirected = jsonResponse(200, {});
+  Object.defineProperty(redirected, 'redirected', { value: true });
+  fetchRoutes({ '/api/v1/diagnostics': redirected });
+  expect(await answersWithoutToken()).toBe(false); // a proxy's login page
 });
 
 it('keeps no token it could not check, and says the server is unreachable', async () => {

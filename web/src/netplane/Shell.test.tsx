@@ -15,8 +15,8 @@ afterEach(() => {
 });
 
 function Where() {
-  const { pathname, search } = useLocation();
-  return <output data-testid="where">{pathname + search}</output>;
+  const { pathname, search, hash } = useLocation();
+  return <output data-testid="where">{pathname + search + hash}</output>;
 }
 
 function mount(path: string, onSignOut?: () => void, routes: Parameters<typeof fetchRoutes>[0] = emptyFleet) {
@@ -72,7 +72,7 @@ it.each([
   ['/vlans', '/network/vlans'],
   ['/vlans/flow?vlan=20', '/network/vlans/flow?vlan=20'],
   ['/devices', '/network/devices'],
-  ['/devices/sw%2F1?port=ge-0', '/network/devices/sw%2F1?port=ge-0'],
+  ['/devices/sw%2F1?port=ge-0#ports', '/network/devices/sw%2F1?port=ge-0#ports'],
   ['/clients', '/network/clients'],
   ['/diagnostics', '/network/diagnostics'],
 ])('sends the old standalone path %s to %s', async (path, to) => {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Container, Loader } from '@mantine/core';
 import { useCallback, useEffect, useState } from 'react';
-import { hasAccess, hasToken, signIn, signOut } from './api';
+import { answersWithoutToken, hasAccess, hasToken, signIn, signOut } from './api';
 import { SignInScreen } from './screens/SignInScreen';
 import { Shell } from './Shell';
 
@@ -16,9 +16,9 @@ export function App() {
     setSignedIn(null);
     try {
       const answered = await hasAccess();
-      // A server that also answers without the cookie needs no token: the cookie, perhaps one at a parent path, goes.
+      // A server that also answers without any cookie needs no token: the stored one goes, at every path it may be at.
       const stored = answered && hasToken();
-      const needed = stored && !(await hasAccess('omit'));
+      const needed = stored && !(await answersWithoutToken());
       if (stored && !needed) signOut();
       setTokenNeeded(needed);
       setSignedIn(answered);

@@ -456,13 +456,18 @@ function formatErrorMessage(status: number, text: string): string {
 
 const readTimeoutMs = 30_000;
 
+// AbortSignal.timeout is missing from older browsers (Safari before 16): there, reads go without a deadline.
+function readSignal(): AbortSignal | undefined {
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(readTimeoutMs) : undefined;
+}
+
 // The standalone server's API token is kept in a SameSite=Strict cookie, which fetch and EventSource both send;
 // EventSource cannot set an Authorization header. It is scoped to the app's base path, so other apps on the origin
 // (e.g. other HA ingress add-ons) never get it.
-function setTokenCookie(value: string, maxAge?: number): void {
+function setTokenCookie(value: string, maxAge?: number, path = apiBasePath()): void {
   const secure = window.location.protocol === 'https:' ? '; Secure' : '';
   const age = maxAge === undefined ? '' : `; Max-Age=${maxAge}`;
-  document.cookie = `netplane_token=${encodeURIComponent(value)}; path=${apiBasePath()}; SameSite=Strict${age}${secure}`;
+  document.cookie = `netplane_token=${encodeURIComponent(value)}; path=${path}; SameSite=Strict${age}${secure}`;
 }
 
 function storedToken(): string | undefined {
@@ -478,17 +483,33 @@ export function hasToken(): boolean {
 // tab signed in), is stale: it must not sign the new token out.
 let signInGen = 0;
 
+// The cookie is expired at the app's base path and every path above it: an older build, or the app moved, may have
+// left one there, which the browser sends here too.
 export function signOut(): void {
-  setTokenCookie('', 0);
+  const parts = apiBasePath().split('/').filter(Boolean);
+  for (let i = parts.length; i >= 0; i--) setTokenCookie('', 0, `/${parts.slice(0, i).join('/')}${i > 0 ? '/' : ''}`);
 }
 
 /**
  * Whether the standalone server answers this browser, with its token if it holds one. A server without a token
  * answers everyone. Throws when the server cannot be reached.
  */
-export async function hasAccess(credentials: RequestCredentials = 'same-origin'): Promise<boolean> {
-  const resp = await fetch(buildApiUrl('/diagnostics?limit=1', null), { credentials, cache: 'no-store', signal: AbortSignal.timeout(readTimeoutMs) });
+export async function hasAccess(): Promise<boolean> {
+  const resp = await fetch(buildApiUrl('/diagnostics?limit=1', null), { credentials: 'same-origin', cache: 'no-store', signal: readSignal() });
   return resp.status !== 401;
+}
+
+/**
+ * Whether the server answers without any cookie: then it needs no token. Only a plain success counts; an error, a
+ * redirect (a proxy's login page) or no answer keeps the stored token, which a wrong guess would cost.
+ */
+export async function answersWithoutToken(): Promise<boolean> {
+  try {
+    const resp = await fetch(buildApiUrl('/diagnostics?limit=1', null), { credentials: 'omit', cache: 'no-store', signal: readSignal() });
+    return resp.ok && !resp.redirected;
+  } catch {
+    return false;
+  }
 }
 
 /** Stores the token and checks the server accepts it; a token it refuses, or could not check, is not kept. */
