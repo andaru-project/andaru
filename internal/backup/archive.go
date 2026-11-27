@@ -263,8 +263,10 @@ func decodeManifest(raw []byte) (Manifest, error) {
 	source := Source{AndaruVersion: manifest.AndaruVersion, SavedVersion: manifest.SavedVersion, CapturedAt: manifest.CreatedAt, Network: manifest.Network}
 	_, offset := manifest.CreatedAt.Zone()
 	if err != nil || len(id) != 16 || !validSource(source) || offset != 0 || manifest.Scopes == nil || manifest.SavedButUnappliedAreas == nil ||
-		// Format 3 may also say a live generation realizes the saved version: the engine's finding, which only it could check.
-		!slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) && !(manifest.FormatVersion == 3 && source.Network.Live != nil && len(manifest.SavedButUnappliedAreas) == 0) {
+		!slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) && manifest.FormatVersion != 3 ||
+		// Format 3 says only that a live generation realizes a newer saved version: the engine's finding, which only it
+		// could check, and the one archive written in it.
+		manifest.FormatVersion == 3 && (source.Network.Live == nil || source.Network.LiveSavedVersion == source.SavedVersion || len(manifest.SavedButUnappliedAreas) != 0) {
 		return Manifest{}, invalid
 	}
 	maxScopes := 2

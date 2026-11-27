@@ -482,7 +482,7 @@ func TestBackupUnappliedIgnoresSavedChannels(t *testing.T) {
 	handler := newHandler(func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil },
 		newSavedHandler(store, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil },
 			func() (host.RealizerFacts, error) { return host.RealizerFacts{}, nil }, http.NotFoundHandler(), backups))
-	areas := func() []string {
+	areas := func(format int) []string {
 		t.Helper()
 		response := httptest.NewRecorder()
 		request := rootRequest(http.MethodPost, backupPath)
@@ -495,6 +495,9 @@ func TestBackupUnappliedIgnoresSavedChannels(t *testing.T) {
 		archive, err := backup.Decode(context.Background(), response.Body.Bytes(), "")
 		if err != nil {
 			t.Fatal(err)
+		}
+		if archive.Manifest.FormatVersion != format {
+			t.Fatalf("manifest format %d, want %d", archive.Manifest.FormatVersion, format)
 		}
 		return archive.Manifest.SavedButUnappliedAreas
 	}
@@ -511,13 +514,13 @@ func TestBackupUnappliedIgnoresSavedChannels(t *testing.T) {
 	if saved := configCall(handler, http.MethodPost, "/api/v1/config/notifications/channels", `{"name":"ops","kind":"webhook","webhook":{"url":{"secret":"OPS_URL","set":"https://hooks.example/x","expectedVersion":"0"}}}`, ""); saved.Code != http.StatusCreated {
 		t.Fatalf("save channel: %d %s", saved.Code, saved.Body)
 	}
-	if got := areas(); len(got) != 0 {
+	if got := areas(3); len(got) != 0 {
 		t.Fatalf("a saved channel left %q unapplied", got)
 	}
 	if saved := configCall(handler, http.MethodPost, "/api/v1/config/zones", `{"name":"dmz"}`, ""); saved.Code != http.StatusCreated {
 		t.Fatalf("save zone: %d %s", saved.Code, saved.Body)
 	}
-	if got := areas(); !slices.Equal(got, []string{"network"}) {
+	if got := areas(2); !slices.Equal(got, []string{"network"}) {
 		t.Fatalf("a saved zone left %q unapplied", got)
 	}
 }

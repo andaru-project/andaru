@@ -323,8 +323,8 @@ func TestV1ArchiveRemainsReadableWithoutIdentityMembers(t *testing.T) {
 	}
 }
 
-// Format 3 trusts the engine's unapplied areas over a live generation; format 2 and the factory network keep them
-// derived from the versions, and a later format is unsupported (#233).
+// Format 3 holds one finding of the engine's: a live generation realizes a newer saved version, nothing is unapplied.
+// Format 2 keeps the areas derived from the versions, and a later format is unsupported (#233).
 func TestFormat3UnappliedAreas(t *testing.T) {
 	archive := func(format int, live any, liveSaved string, areas []string) []byte {
 		config, users := []byte(configJSON), []byte(usersJSON)
@@ -354,11 +354,11 @@ func TestFormat3UnappliedAreas(t *testing.T) {
 		{2, 3, "6", []string{}, "INVALID_ARCHIVE"},
 		{2, 3, "7", []string{}, ""},
 		{3, 3, "6", []string{}, ""},
-		{3, 3, "6", []string{"network"}, ""},
-		{3, 3, "7", []string{}, ""},
+		{3, 3, "6", []string{"network"}, "INVALID_ARCHIVE"},
+		{3, 3, "7", []string{}, "INVALID_ARCHIVE"},
 		{3, 3, "7", []string{"network"}, "INVALID_ARCHIVE"},
 		{3, nil, "", []string{}, "INVALID_ARCHIVE"},
-		{3, nil, "", []string{"network"}, ""},
+		{3, nil, "", []string{"network"}, "INVALID_ARCHIVE"},
 		{4, 3, "6", []string{"network"}, "UNSUPPORTED_SCHEMA"},
 	} {
 		_, err := Decode(context.Background(), archive(c.format, c.live, c.liveSaved, c.areas), "")

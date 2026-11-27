@@ -2,12 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/backup"
-	"slices"
-	"testing"
 )
 
 func TestBackupCommandParsingIsExact(t *testing.T) {
