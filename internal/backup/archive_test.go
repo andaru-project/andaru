@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"slices"
@@ -291,8 +292,8 @@ func TestIdentityDocumentsRequireV2AndCredentialEncryption(t *testing.T) {
 	}
 
 	if _, err = Encode(context.Background(), source, Documents{
-		Configuration:  []byte(configJSON),
-		Users:          []byte(usersJSON),
+		Configuration:   []byte(configJSON),
+		Users:           []byte(usersJSON),
 		UserCredentials: []byte(credentialsJSON),
 	}, ""); err == nil {
 		t.Fatal("plaintext credentials were accepted")
@@ -319,5 +320,77 @@ func TestV1ArchiveRemainsReadableWithoutIdentityMembers(t *testing.T) {
 	decoded, err := Decode(context.Background(), raw, "")
 	if err != nil || decoded.Manifest.FormatVersion != 1 || decoded.Documents.Users != nil || decoded.Documents.UserCredentials != nil {
 		t.Fatalf("v1 archive: %+v %v", decoded, err)
+	}
+}
+
+// Format 3 holds one finding of the engine's: a live generation realizes a newer saved version, nothing is unapplied.
+// Format 2 keeps the areas derived from the versions, and a later format is unsupported (#233).
+func TestFormat3UnappliedAreas(t *testing.T) {
+	archive := func(format int, live any, liveSaved string, areas []string) []byte {
+		config, users := []byte(configJSON), []byte(usersJSON)
+		cd, ud := sha256.Sum256(config), sha256.Sum256(users)
+		raw, err := json.Marshal(map[string]any{
+			"formatVersion": format, "backupId": strings.Repeat("1", 32), "createdAt": "2026-11-15T09:00:00Z", "andaruVersion": "0.4.0~dev-1", "savedVersion": "7",
+			"scopes": []string{"configuration", "users"},
+			"payloads": map[string]any{
+				"config.json": map[string]any{"schemaVersion": 1, "size": len(config), "sha256": hex.EncodeToString(cd[:])},
+				"users.json":  map[string]any{"schemaVersion": 1, "size": len(users), "sha256": hex.EncodeToString(ud[:])},
+			},
+			"network": map[string]any{"live": live, "pending": nil, "liveSavedVersion": liveSaved}, "savedButUnappliedAreas": areas,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fixtureZIP(t, []archiveEntry{{name: "manifest.json", body: raw}, {name: "config.json", body: config}, {name: "users.json", body: users}})
+	}
+	for _, c := range []struct {
+		format    int
+		live      any
+		liveSaved string
+		areas     []string
+		code      string // "" accepted
+	}{
+		{2, 3, "6", []string{"network"}, ""},
+		{2, 3, "6", []string{}, "INVALID_ARCHIVE"},
+		{2, 3, "7", []string{}, ""},
+		{3, 3, "6", []string{}, ""},
+		{3, 3, "6", []string{"network"}, "INVALID_ARCHIVE"},
+		{3, 3, "7", []string{}, "INVALID_ARCHIVE"},
+		{3, 3, "7", []string{"network"}, "INVALID_ARCHIVE"},
+		{3, nil, "", []string{}, "INVALID_ARCHIVE"},
+		{3, nil, "", []string{"network"}, "INVALID_ARCHIVE"},
+		{4, 3, "6", []string{"network"}, "UNSUPPORTED_SCHEMA"},
+	} {
+		_, err := Decode(context.Background(), archive(c.format, c.live, c.liveSaved, c.areas), "")
+		var e *Error
+		if c.code == "" && err != nil || c.code != "" && (!errors.As(err, &e) || e.Code != c.code) {
+			t.Errorf("format %d, live %v from %q, areas %q: %v", c.format, c.live, c.liveSaved, c.areas, err)
+		}
+	}
+
+	// The engine's finding takes format 3 only when it changes the areas; a format 1 archive cannot carry it, and
+	// every other archive stays readable by older releases.
+	for _, c := range []struct {
+		realized  bool
+		users     []byte
+		liveSaved string
+		format    int
+		areas     []string
+	}{
+		{true, []byte(usersJSON), "6", 3, []string{}},
+		{true, nil, "6", 1, []string{"network"}},
+		{true, []byte(usersJSON), "7", 2, []string{}},
+		{false, []byte(usersJSON), "6", 2, []string{"network"}},
+	} {
+		source := sourceFixture()
+		source.Realized, source.Network.LiveSavedVersion = c.realized, c.liveSaved
+		raw, err := Encode(context.Background(), source, Documents{Configuration: json.RawMessage(configJSON), Users: c.users}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := Decode(context.Background(), raw, "")
+		if err != nil || decoded.Manifest.FormatVersion != c.format || !slices.Equal(decoded.Manifest.SavedButUnappliedAreas, c.areas) {
+			t.Errorf("%+v: %+v %v", c, decoded.Manifest, err)
+		}
 	}
 }

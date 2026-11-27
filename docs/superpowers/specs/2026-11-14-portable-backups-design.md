@@ -11,7 +11,7 @@ The owner approved this prerequisite order after mapping the code:
 - Build manual backup/restore for the existing configuration and configuration-secret stores, through the root-local engine API and CLI.
 - For this console-only stage, verified OS-root access authorizes secret export instead of re-entering an Andaru account password: no Andaru account/credential store or password authentication exists yet.
 - Future network/web secret export still requires the approved administrator permission, fresh password reauthentication and auditing. This exception does not authorize a network listener or a password-bypass endpoint.
-- Users, user credentials, extension manifests/data/secrets, remote destinations and scheduled jobs remain separate planned stages. They are not represented by fake empty stores, stub backends or claims of full issue completion.
+- Extension manifests/data/secrets, remote destinations and scheduled jobs remain separate planned stages. Users and user credentials came later, in manifest format 2. They are not represented by fake empty stores, stub backends or claims of full issue completion.
 
 This is not the cold local package-recovery set from PR #56. Portable backups contain logical documents, not database copies, executables, rendered generations, runtime sessions, audit logs, usage statistics or local configuration history. They do not revert Debian packages or install extensions.
 
@@ -45,9 +45,9 @@ The writer creates a ZIP containing only:
 
 Normal creation includes configuration. `--include-secrets` adds configuration secrets and makes the entire ZIP an age-encrypted `.zip.age` file. Creation without that flag produces a secret-free `.zip`; do not add a separate encryption-options framework in this stage. Restore can select either included store or both.
 
-The manifest has its own integer `formatVersion: 1`, a random backup ID, creation time in UTC, source Andaru version, source saved version, included scopes, each document's schema version, and each payload member's exact size and SHA-256 digest. Payload metadata is an allowlisted mapping, not a list of extraction paths. The manifest does not checksum itself. It records the captured live/pending network generation identity, when present, and `savedButUnappliedAreas`.
+The manifest has its own integer `formatVersion` (1, or 2 and 3 below), a random backup ID, creation time in UTC, source Andaru version, source saved version, included scopes, each document's schema version, and each payload member's exact size and SHA-256 digest. Payload metadata is an allowlisted mapping, not a list of extraction paths. The manifest does not checksum itself. It records the captured live/pending network generation identity, when present, and `savedButUnappliedAreas`. Format 2 adds the users. Format 3 (#233) holds what format 2 does and is written only when the engine finds that the live generation realizes a newer saved version: an apply would change nothing, as after a save that takes effect at once (a notification channel). Its `savedButUnappliedAreas` is then empty, which a reader accepts in format 3 while a generation is live; every other case is checked as below. Releases that know only formats 1 and 2 refuse format 3 as `UNSUPPORTED_SCHEMA`, and read every other new archive as before.
 
-Currently network realization is the only apply domain. Mark that area saved-but-unapplied when its live generation does not identify the exported saved version; report absent/live-baseline and pending states explicitly. This is conservative version-level information, not a claim of field-level semantic diffs or a portable rendered generation.
+Currently network realization is the only apply domain. Mark that area saved-but-unapplied when its live generation does not identify the exported saved version; report absent/live-baseline and pending states explicitly. In formats 1 and 2 this is conservative version-level information, not a claim of field-level semantic diffs or a portable rendered generation; format 3 above carries the engine's own comparison for the one case where the versions differ and nothing would change.
 
 `config.json` is a schema-versioned logical declaration with stable object IDs and references, rule/list order and explicit unresolved-reference state when present. It contains no secret values, object-history records, local concurrency tokens or runtime generation files. Source saved-version provenance belongs in the manifest, not in the destination's numbering.
 
@@ -172,11 +172,11 @@ Use failing consumer-visible tests for uncertain edges and focused real round tr
 - Real root-local CLI/API tests verify non-root denial, no passphrase/secret logging, no generic extraction, no destination overwrite, no archive mode/owner restoration and no plaintext scratch files. Do not claim secure memory erasure.
 - Package-level smoke and both Debian baseline VMs verify export, altered saved configuration, inspect/restore, engine restart, unresolved-secret repair and ordinary reviewed apply/rollback. Capture evidence that backup and saved-only restore do not restart network services or mutate live rules. Do not execute a management-disrupting apply without the established VM safety snapshot/console procedure.
 
-Before calling this stage complete: update OpenAPI, CLI help, backup/restore and release-compatibility docs, include the new dependency in normal security review, and run the affected suites plus existing required gates. Do not claim users, extensions, schedules, remote retention or full issue #13 completion.
+Before calling this stage complete: update OpenAPI, CLI help, backup/restore and release-compatibility docs, include the new dependency in normal security review, and run the affected suites plus existing required gates. Do not claim extensions, schedules, remote retention or full issue #13 completion; users and their credentials are in format 2.
 
 ## Remaining issue stages, not part of this implementation
 
-The approved roadmap still includes independent users/credentials, extension restoration, filesystem/S3/SFTP/FTPS destinations, disabled-until-configured daily jobs, visible failures and per-job default retention of 30 successful backups. Their secret, trust, reauthentication and backup-password recovery policies remain in force. This foundation must not pretend those capabilities exist or lock in fake empty representations for them.
+The approved roadmap still includes extension restoration (users and their credentials came in format 2), filesystem/S3/SFTP/FTPS destinations, disabled-until-configured daily jobs, visible failures and per-job default retention of 30 successful backups. Their secret, trust, reauthentication and backup-password recovery policies remain in force. This foundation must not pretend those capabilities exist or lock in fake empty representations for them.
 
 ## Author calls for approval
 

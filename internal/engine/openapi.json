@@ -7787,7 +7787,7 @@
         "additionalProperties": false,
         "required": ["formatVersion", "backupId", "createdAt", "andaruVersion", "savedVersion", "scopes", "payloads", "network", "savedButUnappliedAreas"],
         "properties": {
-          "formatVersion": {"type": "integer", "enum": [1, 2]},
+          "formatVersion": {"type": "integer", "enum": [1, 2, 3]},
           "backupId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
           "createdAt": {"type": "string", "format": "date-time"},
           "andaruVersion": {"type": "string"},

@@ -46,6 +46,9 @@ type Source struct {
 	AndaruVersion, SavedVersion string
 	CapturedAt                  time.Time
 	Network                     NetworkObservation
+	// Realized says the live generation realizes the saved version although it was made from an older one: what
+	// changed since takes effect when saved, as notifications do. Only format 3 can say so (#233).
+	Realized bool
 }
 
 type Payload struct {
@@ -95,7 +98,7 @@ func validSource(source Source) bool {
 }
 
 func unapplied(source Source) []string {
-	if source.Network.Live == nil || source.Network.LiveSavedVersion != source.SavedVersion {
+	if source.Network.Live == nil || source.Network.LiveSavedVersion != source.SavedVersion && !source.Realized {
 		return []string{"network"}
 	}
 	return []string{}
@@ -139,9 +142,16 @@ func Encode(ctx context.Context, source Source, docs Documents, passphrase strin
 	} else if passphrase != "" {
 		return nil, &Error{Code: "PASSPHRASE_INVALID"}
 	}
+	// Format 1 holds the configuration alone, format 2 the users too. Format 3 holds what format 2 does, and is
+	// written only when its areas say what format 2 cannot: a live generation that realizes a newer saved version.
+	// Older releases refuse it as unsupported rather than read those areas as a lie; format 1 cannot carry it.
 	format := 1
 	if docs.Users != nil {
 		format = 2
+	}
+	source.Realized = source.Realized && format == 2 && source.Network.Live != nil && source.Network.LiveSavedVersion != source.SavedVersion
+	if source.Realized {
+		format = 3
 	}
 	manifest := Manifest{FormatVersion: format, CreatedAt: source.CapturedAt.UTC(), AndaruVersion: source.AndaruVersion, SavedVersion: source.SavedVersion, Scopes: []string{}, Payloads: map[string]Payload{}, Network: source.Network, SavedButUnappliedAreas: unapplied(source)}
 	var identity [16]byte
@@ -245,21 +255,26 @@ func decodeManifest(raw []byte) (Manifest, error) {
 	if decoder.Decode(&manifest) != nil {
 		return Manifest{}, invalid
 	}
-	if manifest.FormatVersion != 1 && manifest.FormatVersion != 2 {
+	if manifest.FormatVersion < 1 || manifest.FormatVersion > 3 {
 		return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 	}
+	shape := min(manifest.FormatVersion, 2) // format 3 holds what format 2 does
 	id, err := hex.DecodeString(manifest.BackupID)
 	source := Source{AndaruVersion: manifest.AndaruVersion, SavedVersion: manifest.SavedVersion, CapturedAt: manifest.CreatedAt, Network: manifest.Network}
 	_, offset := manifest.CreatedAt.Zone()
-	if err != nil || len(id) != 16 || !validSource(source) || offset != 0 || manifest.Scopes == nil || manifest.SavedButUnappliedAreas == nil || !slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) {
+	if err != nil || len(id) != 16 || !validSource(source) || offset != 0 || manifest.Scopes == nil || manifest.SavedButUnappliedAreas == nil ||
+		!slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) && manifest.FormatVersion != 3 ||
+		// Format 3 says only that a live generation realizes a newer saved version: the engine's finding, which only it
+		// could check, and the one archive written in it.
+		manifest.FormatVersion == 3 && (source.Network.Live == nil || source.Network.LiveSavedVersion == source.SavedVersion || len(manifest.SavedButUnappliedAreas) != 0) {
 		return Manifest{}, invalid
 	}
 	maxScopes := 2
-	if manifest.FormatVersion == 2 {
+	if shape == 2 {
 		maxScopes = 4
 	}
-	if len(manifest.Scopes) < manifest.FormatVersion || len(manifest.Scopes) > maxScopes || len(manifest.Payloads) != len(manifest.Scopes) ||
-		manifest.Scopes[0] != "configuration" || manifest.FormatVersion == 2 && manifest.Scopes[1] != "users" {
+	if len(manifest.Scopes) < shape || len(manifest.Scopes) > maxScopes || len(manifest.Payloads) != len(manifest.Scopes) ||
+		manifest.Scopes[0] != "configuration" || shape == 2 && manifest.Scopes[1] != "users" {
 		return Manifest{}, invalid
 	}
 	var rawPayloads map[string]json.RawMessage
@@ -271,7 +286,7 @@ func decodeManifest(raw []byte) (Manifest, error) {
 	last := -1
 	for _, scope := range manifest.Scopes {
 		position, known := order[scope]
-		if !known || position <= last || seen[scope] || manifest.FormatVersion == 1 && position != 0 && position != 2 {
+		if !known || position <= last || seen[scope] || shape == 1 && position != 0 && position != 2 {
 			return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 		}
 		last, seen[scope] = position, true
