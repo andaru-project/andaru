@@ -708,8 +708,8 @@ export function simulateTrafficFlow(
   const proxyNdpRoutes: Array<{ vip: NonNullable<Snapshot['value']['virtualAddresses']>[number]; ip: ParsedIp; hostSegment: Segment }> = [];
   for (const vip of snapshot.virtualAddresses ?? []) {
     if (vip.kind === 'proxyNdp') {
-      // Matches docs/superpowers/specs/2026-11-27-proxy-ndp-design.md: each proxyNdp entry installs a /128 on-link route
-      // on hostSegment's link, which stays active whenever hostSegment's link is usable regardless of uplink link state.
+      // Matches internal/render/networkd.go: each proxyNdp entry installs a /128 on-link route
+      // on hostSegment's link, active whenever hostSegment's link is usable regardless of uplink link state.
       const ip = parseIp(vip.address);
       const hostSeg = vip.hostSegment ? segmentsById.get(vip.hostSegment) : undefined;
       if (ip && ip.family === 6 && hostSeg && isLinkUsable(hostSeg.link, linksById)) {

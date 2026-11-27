@@ -284,7 +284,35 @@ describe('VirtualIpsScreen helpers', () => {
       zone: 'zon_lan',
       addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'static', addresses: ['2001:db8:2::1/64'] } },
     };
-    const segments = [wanStatic6, wanSlaac, lan6];
+    const dmz6 = {
+      id: 'seg_dmz',
+      name: 'DMZ',
+      link: 'lnk_dmz',
+      zone: 'zon_dmz',
+      addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'static', addresses: ['2001:db8:3::1/64'] } },
+    };
+    const ipv4Only = {
+      id: 'seg_v4only',
+      name: 'Legacy',
+      link: 'lnk_lan',
+      zone: 'zon_lan',
+      addressing: { ipv4: { mode: 'static', addresses: ['10.0.0.1/24'] }, ipv6: { mode: 'none' } },
+    };
+    const wanPppoe6 = {
+      id: 'seg_pppoe6',
+      name: 'DSL PPPoE',
+      link: 'lnk_pppoe',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'pppoe' }, ipv6: { mode: 'slaac' } },
+    };
+    const links = [
+      { id: 'lnk_wan', name: 'eth0', kind: 'ethernet' as const, enabled: true, mtu: 1500 },
+      { id: 'lnk_slaac', name: 'eth1', kind: 'ethernet' as const, enabled: true, mtu: 1500 },
+      { id: 'lnk_lan', name: 'eth2', kind: 'ethernet' as const, enabled: true, mtu: 1500 },
+      { id: 'lnk_dmz', name: 'eth3', kind: 'ethernet' as const, enabled: true, mtu: 1500 },
+      { id: 'lnk_pppoe', name: 'ppp0', kind: 'pppoe' as const, enabled: true, mtu: 1492, parent: 'lnk_wan' },
+    ];
+    const segments = [wanStatic6, wanSlaac, lan6, dmz6, ipv4Only, wanPppoe6];
 
     expect(virtualAddressKind({ kind: 'proxyNdp' })).toBe('proxyNdp');
     expect(virtualAddressFamily({ kind: 'proxyNdp', address: '2001:db8:1::50' })).toBe('IPv6');
@@ -292,34 +320,40 @@ describe('VirtualIpsScreen helpers', () => {
     expect(virtualAddressFamily({ kind: 'proxyNdp', address: '203.0.113.50' })).toBeUndefined();
     expect(isSingleVirtualAddress({ kind: 'proxyNdp', address: '2001:db8:1::50' })).toBe(false);
 
-    // Missing or identical segments.
-    const missingSegs = checkVirtualIp('Host 1', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: '', hostSegment: '', segments });
+    // Missing, identical, PPPoE uplink, or IPv6-disabled host segments.
+    const missingSegs = checkVirtualIp('Host 1', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: '', hostSegment: '', segments, links });
     expect(missingSegs.errors.get('segment')).toMatch(/uplink segment/);
     expect(missingSegs.errors.get('hostSegment')).toMatch(/host lives/);
-    expect(checkVirtualIp('Same seg', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_wan6', segments }).errors.get('hostSegment'))
+    expect(checkVirtualIp('Same seg', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_wan6', segments, links }).errors.get('hostSegment'))
       .toMatch(/must differ/);
+    expect(checkVirtualIp('PPPoE uplink', '2001:db8:9::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_pppoe6', hostSegment: 'seg_lan', segments, links }).errors.get('segment'))
+      .toMatch(/PPPoE/);
+    expect(checkVirtualIp('No v6 host', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_v4only', segments, links }).errors.get('hostSegment'))
+      .toMatch(/IPv6 enabled/);
 
     // Invalid addresses (IPv4, prefixes, ULA fc00::/7, link-local fe80::/10, loopback, unspecified, multicast, 4in6).
     for (const bad of ['203.0.113.50', '2001:db8:1::50/128', '2001:db8:1::/64', 'fc00::1', 'fd00::50', 'fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe80::50', 'febf::1', '::1', '::', 'ff02::1', '::ffff:1.2.3.4', '::ffff:102:304']) {
-      expect(checkVirtualIp('Bad ndp', bad, [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+      expect(checkVirtualIp('Bad ndp', bad, [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments, links }).errors.get('address'))
         .toBe('Expected one global unicast IPv6 address, without a length.');
     }
     // Exact outside-range boundaries just outside fc00::/7, fe80::/10, and ::/::1 are accepted on a non-static uplink.
     for (const boundary of ['fbff::1', 'fe00::1', 'fec0::1', '::2']) {
-      expect(checkVirtualIp('Boundary ok', boundary, [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments }).errors.size).toBe(0);
+      expect(checkVirtualIp('Boundary ok', boundary, [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments, links }).errors.size).toBe(0);
     }
-    expect(checkVirtualIp('Zone', '2001:db8:1::50%eth0', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+    expect(checkVirtualIp('Zone', '2001:db8:1::50%eth0', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments, links }).errors.get('address'))
       .toMatch(/interface zone/);
 
-    // Static uplink subnet membership, own static address, static IPv6 gateway, and host segment subnet collision.
-    expect(checkVirtualIp('Off static uplink', '2001:db8:9::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+    // Static uplink subnet membership, own static address, static IPv6 gateway, host segment subnet, and other segment subnet collisions.
+    expect(checkVirtualIp('Off static uplink', '2001:db8:9::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments, links }).errors.get('address'))
       .toMatch(/static IPv6 subnets/);
-    expect(checkVirtualIp('Own static addr', '2001:db8:1::2', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+    expect(checkVirtualIp('Own static addr', '2001:db8:1::2', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments, links }).errors.get('address'))
       .toMatch(/static address held by a segment/);
-    expect(checkVirtualIp('Hits v6 gateway', '2001:db8:1::1', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+    expect(checkVirtualIp('Hits v6 gateway', '2001:db8:1::1', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments, links }).errors.get('address'))
       .toMatch(/gateway/);
-    expect(checkVirtualIp('On host subnet', '2001:db8:2::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments }).errors.get('address'))
+    expect(checkVirtualIp('On host subnet', '2001:db8:2::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments, links }).errors.get('address'))
       .toMatch(/host segment's subnet/);
+    expect(checkVirtualIp('On other subnet', '2001:db8:3::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments, links }).errors.get('address'))
+      .toMatch(/another segment's static IPv6 subnet/);
 
     // Valid on static uplink and on SLAAC uplink.
     expect(checkVirtualIp('Valid static', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.size).toBe(0);
@@ -901,9 +935,15 @@ describe('VirtualIpsScreen', () => {
       ...sampleSnapshot,
       value: {
         ...sampleSnapshot.value,
+        links: [
+          ...sampleSnapshot.value.links,
+          { id: 'lnk_pppoe', name: 'ppp0', kind: 'pppoe', enabled: true, mtu: 1492, parent: 'lnk_1' },
+        ],
         segments: [
-          ...sampleSnapshot.value.segments,
+          { id: 'seg_lan', name: 'LAN', link: 'lnk_1', zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'static', addresses: ['fd00:1::1/64'] } } },
           { id: 'seg_wan', name: 'Uplink', link: 'lnk_1', zone: 'zon_wan', addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'static', addresses: ['2001:db8:1::2/64'] } } },
+          { id: 'seg_pppoe', name: 'DSL PPPoE', link: 'lnk_pppoe', zone: 'zon_wan', addressing: { ipv4: { mode: 'pppoe' }, ipv6: { mode: 'slaac' } } },
+          { id: 'seg_v4only', name: 'IPv4 only', link: 'lnk_1', zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['10.0.0.1/24'] }, ipv6: { mode: 'none' } } },
         ],
         virtualAddresses: [...sampleSnapshot.value.virtualAddresses!, ndpVip.value],
       },
@@ -959,6 +999,9 @@ describe('VirtualIpsScreen', () => {
 
     const uplinkSelect = within(drawer).getByLabelText(/^Uplink segment/);
     const hostSelect = within(drawer).getByLabelText(/^Host segment/);
+    // PPPoE uplink excluded from Uplink segment; IPv6-disabled segment excluded from Host segment.
+    expect(within(uplinkSelect).getAllByRole('option').some((o) => o.textContent?.includes('DSL PPPoE'))).toBe(false);
+    expect(within(hostSelect).getAllByRole('option').some((o) => o.textContent?.includes('IPv4 only'))).toBe(false);
     await user.type(within(drawer).getByLabelText(/^Name/), 'Mail v6');
     await user.selectOptions(uplinkSelect, 'seg_wan');
     await user.selectOptions(hostSelect, 'seg_lan');

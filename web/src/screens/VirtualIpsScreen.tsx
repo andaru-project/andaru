@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router';
 import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
 import { useResource } from '../useResource';
-import type { SavedObject, Segment, Session, VirtualAddress, VirtualAddressKind } from '../types';
+import type { SavedLink, SavedObject, Segment, Session, VirtualAddress, VirtualAddressKind } from '../types';
 import {
   checkVirtualIp,
   isProxyArpEligibleSegment,
@@ -53,6 +53,7 @@ function VirtualIpEditor({
   saved,
   existingVips,
   segments,
+  links,
   uses,
   onClose,
   onSessionLost,
@@ -62,6 +63,7 @@ function VirtualIpEditor({
   saved?: SavedObject<VirtualAddress>;
   existingVips: Array<SavedObject<VirtualAddress>>;
   segments: Segment[];
+  links: SavedLink[];
   uses: VirtualIpUse[];
   onClose(): void;
   onSessionLost(): void;
@@ -99,9 +101,12 @@ function VirtualIpEditor({
     }
   }, [errorFocusTick]);
 
+  const linksById = new Map(links.map((l) => [l.id, l]));
   const sortedSegments = [...segments].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
   const eligibleSegments = sortedSegments.filter(isProxyArpEligibleSegment);
+  const eligibleNdpUplinks = sortedSegments.filter((s) => linksById.get(s.link)?.kind !== 'pppoe');
+  const eligibleNdpHosts = sortedSegments.filter((s) => s.addressing.ipv6.mode !== 'none');
 
   const segmentOptions = (() => {
     const items = eligibleSegments.map((s) => ({
@@ -124,13 +129,23 @@ function VirtualIpEditor({
     return items;
   })();
 
-  const ndpSegmentOptions = (selectedId: string, emptyLabel: string) => {
-    const items = sortedSegments.map((s) => ({ value: s.id, label: ndpSegmentLabel(s) }));
-    if (selectedId && !sortedSegments.some((s) => s.id === selectedId)) {
-      items.unshift({ value: selectedId, label: `${selectedId} (missing segment)` });
+  const ndpSegmentOptions = (
+    eligible: Segment[],
+    selectedId: string,
+    emptyLabel: string,
+    noneLabel: string,
+    ineligibleNote: string,
+  ) => {
+    const items = eligible.map((s) => ({ value: s.id, label: ndpSegmentLabel(s) }));
+    if (selectedId && !eligible.some((s) => s.id === selectedId)) {
+      const found = segments.find((s) => s.id === selectedId);
+      items.unshift({
+        value: selectedId,
+        label: found ? `${found.name} (${ineligibleNote})` : `${selectedId} (missing segment)`,
+      });
     }
     if (!selectedId) {
-      items.unshift({ value: '', label: sortedSegments.length === 0 ? 'No segments available' : emptyLabel });
+      items.unshift({ value: '', label: eligible.length === 0 ? noneLabel : emptyLabel });
     }
     return items;
   };
@@ -142,6 +157,14 @@ function VirtualIpEditor({
       && segment
       && !eligibleSegments.some((s) => s.id === segment)
       && !(saved && virtualAddressKind(saved.value) === 'proxyArp' && saved.value.segment === segment)
+    ) {
+      setSegment('');
+    }
+    if (
+      next === 'proxyNdp'
+      && segment
+      && !eligibleNdpUplinks.some((s) => s.id === segment)
+      && !(saved && virtualAddressKind(saved.value) === 'proxyNdp' && saved.value.segment === segment)
     ) {
       setSegment('');
     }
@@ -166,6 +189,7 @@ function VirtualIpEditor({
       segment,
       hostSegment,
       segments,
+      links,
     });
     if (localErrors.size > 0) {
       setErrors(localErrors);
@@ -266,18 +290,18 @@ function VirtualIpEditor({
                 <>
                   <NativeSelect
                     label="Uplink segment"
-                    description="Segment on whose link the firewall answers IPv6 neighbour discovery for this address."
+                    description="Non-PPPoE segment on whose link the firewall answers IPv6 neighbour discovery for this address."
                     required
-                    data={ndpSegmentOptions(segment, 'Choose an uplink segment…')}
+                    data={ndpSegmentOptions(eligibleNdpUplinks, segment, 'Choose an uplink segment…', 'No eligible uplink segment', 'PPPoE unsupported')}
                     value={segment}
                     error={errors.get('segment')}
                     onChange={(event) => setSegment(event.currentTarget.value)}
                   />
                   <NativeSelect
                     label="Host segment"
-                    description="Inside segment where the host lives. The firewall adds a /128 on-link route there."
+                    description="Inside segment with IPv6 enabled where the host lives. The firewall adds a /128 on-link route there."
                     required
-                    data={ndpSegmentOptions(hostSegment, 'Choose a host segment…')}
+                    data={ndpSegmentOptions(eligibleNdpHosts, hostSegment, 'Choose a host segment…', 'No segment with IPv6 enabled', 'IPv6 disabled')}
                     value={hostSegment}
                     error={errors.get('hostSegment')}
                     onChange={(event) => setHostSegment(event.currentTarget.value)}
@@ -585,6 +609,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                   saved={editingSaved}
                   existingVips={virtualAddresses.items}
                   segments={snapshot.value.segments}
+                  links={snapshot.value.links}
                   uses={editingUses}
                   onClose={() => setEditing(undefined)}
                   onSessionLost={onSessionLost}

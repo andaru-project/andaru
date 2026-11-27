@@ -1294,17 +1294,25 @@ describe('simulateTrafficFlow', () => {
     expect(dmzToProxyHost.chain).toBe('forward');
     expect(dmzToProxyHost.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Inside v6 host', to: '/network/virtual-ips' });
 
-    // Proxy NDP /128 beats an overlapping unreachable static DHCPv6 PD pool prefix.
-    const withOverlappingPool: Snapshot['value'] = {
+    // Proxy NDP /128 beats an overlapping unreachable static DHCPv6 PD pool prefix (WAN on SLAAC so no /64 connected route masks the pool).
+    const slaacWanWithPool: Snapshot['value'] = {
       ...withProxyNdp,
+      segments: withProxyNdp.segments.map((s) => (
+        s.id === 'seg_wan' ? { ...s, addressing: { ...s.addressing, ipv6: { mode: 'slaac' } } } : s
+      )),
       dhcp6: [
         ...(withProxyNdp.dhcp6 ?? []),
         { id: 'dh6_pd', name: 'PD pool', segment: 'seg_dmz', ranges: [], prefixDelegation: { prefix: '2001:db8:1::/64', delegatedLength: 64 } },
       ],
     };
+    const withoutNdpHitsUnreachable = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:99::1', dstIp: '2001:db8:1::50', dstPort: 443 },
+      { ...slaacWanWithPool, virtualAddresses: baseConfig.virtualAddresses },
+    );
+    expect(withoutNdpHitsUnreachable.verdict).toBe('no_route');
     const beatsUnreachable = simulateTrafficFlow(
       { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:99::1', dstIp: '2001:db8:1::50', dstPort: 443 },
-      withOverlappingPool,
+      slaacWanWithPool,
     );
     expect(beatsUnreachable.verdict).toBe('accept');
     expect(beatsUnreachable.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Inside v6 host', to: '/network/virtual-ips' });

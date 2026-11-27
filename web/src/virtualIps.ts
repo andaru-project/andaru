@@ -1,5 +1,5 @@
 import { parseIp, parsePrefix, prefixContains, type ParsedPrefix } from './trafficFlow';
-import type { SavedObject, Segment, Snapshot, VirtualAddress, VirtualAddressKind } from './types';
+import type { SavedLink, SavedObject, Segment, Snapshot, VirtualAddress, VirtualAddressKind } from './types';
 
 export interface VirtualIpUse {
   key: string;
@@ -162,6 +162,7 @@ export function checkVirtualIp(
     segment?: string;
     hostSegment?: string;
     segments?: Segment[];
+    links?: SavedLink[];
   },
 ): { errors: Map<string, string>; duplicate: boolean; stale: boolean } {
   const kind: VirtualAddressKind = virtualAddressKind({ kind: options?.kind });
@@ -181,17 +182,22 @@ export function checkVirtualIp(
 
   const others = existingVips.filter((v) => v.value.id !== editingId);
   const segments = options?.segments;
+  const links = options?.links;
 
   if (kind === 'proxyNdp') {
     const segmentId = (options?.segment ?? '').trim();
     const hostSegmentId = (options?.hostSegment ?? '').trim();
     const chosenSegment = segments?.find((s) => s.id === segmentId);
     const chosenHostSegment = segments?.find((s) => s.id === hostSegmentId);
+    const chosenLink = chosenSegment && links ? links.find((l) => l.id === chosenSegment.link) : undefined;
 
     if (!segmentId) {
       errors.set('segment', 'Choose the uplink segment that answers neighbour discovery.');
     } else if (segments && !chosenSegment) {
       errors.set('segment', 'Choose an existing uplink segment.');
+      stale = true;
+    } else if (chosenLink?.kind === 'pppoe') {
+      errors.set('segment', 'Proxy NDP cannot use a PPPoE uplink.');
       stale = true;
     }
 
@@ -202,6 +208,9 @@ export function checkVirtualIp(
       stale = true;
     } else if (segmentId && hostSegmentId === segmentId) {
       errors.set('hostSegment', 'Host segment must differ from the uplink segment.');
+    } else if (chosenHostSegment && chosenHostSegment.addressing.ipv6.mode === 'none') {
+      errors.set('hostSegment', 'Choose a host segment with IPv6 enabled.');
+      stale = true;
     }
 
     if (!trimmedAddress) {
@@ -236,10 +245,15 @@ export function checkVirtualIp(
             stale = true;
           }
         }
-        if (!errors.has('address') && chosenHostSegment) {
-          const hostSubnets = staticSegmentPrefixes(chosenHostSegment).filter((sub) => sub.family === 6);
-          if (hostSubnets.some((sub) => prefixContains(sub, parsed))) {
-            errors.set('address', "This address is already on the host segment's subnet.");
+        if (!errors.has('address') && segments) {
+          const otherSeg = segments.find((seg) => seg.id !== segmentId && staticSegmentPrefixes(seg).some((sub) => sub.family === 6 && prefixContains(sub, parsed)));
+          if (otherSeg) {
+            errors.set(
+              'address',
+              otherSeg.id === hostSegmentId
+                ? "This address is already on the host segment's subnet."
+                : "This address is on another segment's static IPv6 subnet.",
+            );
             stale = true;
           }
         }
