@@ -89,7 +89,8 @@ Options:
 const outboundUsage = "usage: andaru outbound [--bus-socket PATH] [--cache-dir PATH]\n"
 
 const outboundHelp = `Run andaru-outbound, the unprivileged service that talks to the outside world
-for the engine: it reads delivery jobs from the event bus and sends them.
+for the engine: it reads delivery jobs from the event bus and sends them, and
+fetches the lists of the address aliases fed from a URL or from host names.
 Its systemd unit runs it as the andaru-outbound user.
 
 ` + outboundUsage + `

@@ -733,12 +733,13 @@ func TestFilterChangeIsAGap(t *testing.T) {
 	}
 }
 
-// A refused client is told why.
+// A refused client is told why, as a RefusedError.
 func TestRefusalSaysWhy(t *testing.T) {
 	h := newHarness(t, Options{})
 	for range 20 {
 		_, err := Dial(ctx(t), h.socket, "web", "wrong")
-		if err == nil || !strings.Contains(err.Error(), "not authorized") {
+		var refused *RefusedError
+		if !errors.As(err, &refused) || refused.Message != "not authorized" {
 			t.Fatalf("refused with %v", err)
 		}
 	}
@@ -808,7 +809,7 @@ func TestClientBacklogOfOthers(t *testing.T) {
 
 func TestPayloadLimit(t *testing.T) {
 	h := newHarness(t, Options{})
-	big := []byte(`"` + strings.Repeat("x", maxPayload) + `"`)
+	big := []byte(`"` + strings.Repeat("x", MaxPayload) + `"`)
 	if h.bus.Publish("config/head", big, true) == nil {
 		t.Fatal("a payload over the limit was published")
 	}
@@ -857,7 +858,7 @@ func TestUnescapedFrames(t *testing.T) {
 	if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
 		t.Fatal(err)
 	}
-	payload := `"` + strings.Repeat("<", maxPayload-2) + `"`
+	payload := `"` + strings.Repeat("<", MaxPayload-2) + `"`
 	h.publish("config/head", payload, true)
 	if d := receive(t, web.Messages()); string(d.Payload) != payload {
 		t.Fatalf("got %d bytes", len(d.Payload))

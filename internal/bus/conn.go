@@ -31,7 +31,7 @@ type frame struct {
 }
 
 const (
-	maxFrame     = 1 << 20 // a payload is at most maxPayload, half of it
+	maxFrame     = 1 << 20 // a payload is at most MaxPayload, half of it
 	queued       = 256     // frames waiting for a client; a client this far behind is disconnected
 	window       = 64      // events a consumer is sent before it acks
 	helloTimeout = 10 * time.Second

@@ -44,6 +44,12 @@ type Delivery struct {
 	Message
 }
 
+// RefusedError is the bus's answer to a request it refused, as a publish it does not grant or a payload too large.
+// Any other error from a request means the connection is gone, or the context ended.
+type RefusedError struct{ Message string }
+
+func (e *RefusedError) Error() string { return "bus: " + e.Message }
+
 // Dial connects to the bus on a Unix socket as user, with token.
 func Dial(ctx context.Context, socket, user, token string) (*Client, error) {
 	nc, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
@@ -169,7 +175,7 @@ func (c *Client) read() {
 			c.mu.Unlock()
 			if reply != nil {
 				if f.Op == "error" {
-					reply <- errors.New("bus: " + f.Message)
+					reply <- &RefusedError{Message: f.Message}
 				} else {
 					reply <- nil
 				}

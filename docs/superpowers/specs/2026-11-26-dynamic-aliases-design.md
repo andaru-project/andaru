@@ -50,4 +50,4 @@ For each URL or host-name alias of the saved head, from its saved source: when i
 
 1. The two kinds in the saved configuration, their validation, and their empty sets in the rendered filter.
 2. The state files, `realize aliases`, the fill after each load, the engine's scheduler, result handling, notifications, the status API and "Refresh now". Built.
-3. The fetcher and resolver in `andaru-outbound`.
+3. The fetcher and resolver in `andaru-outbound`. Built: it reads `alias-fetches` in the same session as `deliveries`, eight requests at a time, each acked once its result is published. Requests for one source that arrive while it is being fetched are answered by that fetch, as the newest of them, which the engine takes as the answer to every older one, so one fetch counts once. A URL is fetched with a client of its own (30 seconds in all, the user agent `andaru-outbound`); a line that is not an address, a network, blank or a comment fails the list with its number, as do more than 10,000 entries. A name is resolved, A and AAAA, by Go's own resolver within 10 seconds. An error never names the URL, whose query may hold a token.

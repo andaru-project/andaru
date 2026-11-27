@@ -1,5 +1,6 @@
 // Package outbound is andaru-outbound: the unprivileged service that talks to the outside world for the engine,
-// which has no network. It reads delivery jobs from the bus and sends them.
+// which has no network. It reads delivery jobs from the bus and sends them, and fetches the lists of the address
+// aliases fed from a URL or from host names.
 package outbound
 
 import (
@@ -10,10 +11,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sync"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/aliasfeed"
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/delivery"
 	"github.com/andaru-project/andaru/internal/notify"
@@ -30,14 +33,19 @@ type Service struct {
 	Socket   string // the bus's services socket
 	CacheDir string // where sent job IDs and jobs waiting for a retry are kept
 	HTTP     *http.Client
-	Log      *slog.Logger
+	// AliasHTTP fetches alias lists; nil is aliasClient's default.
+	AliasHTTP *http.Client
+	// Lookup resolves a host name's addresses; nil is Go's own resolver.
+	Lookup func(ctx context.Context, name string) ([]netip.Addr, error)
+	Log    *slog.Logger
 	// RetryFor is how long after its first attempt a failing job is given up; zero means an hour.
 	RetryFor time.Duration
 	// Backoff is the wait before the nth retry; nil doubles from 5 s up to 5 minutes.
 	Backoff func(n int) time.Duration
-	// Ready, if set, is called each time the consumer is attached.
+	// Ready, if set, is called each time the consumers are attached.
 	Ready func()
 
+	feeds        feeds
 	sent         *sent
 	retries      *retries
 	mu           sync.Mutex
@@ -61,6 +69,13 @@ func (s *Service) Run(ctx context.Context) error {
 		s.HTTP = &http.Client{Timeout: 15 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
+	if s.AliasHTTP == nil {
+		s.AliasHTTP = aliasClient(nil)
+	}
+	if s.Lookup == nil {
+		s.Lookup = lookupGo
+	}
+	s.feeds.inFlight = map[string]*feed{}
 	if s.RetryFor == 0 {
 		s.RetryFor = time.Hour
 	}
@@ -87,8 +102,9 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 }
 
-// session reads the consumer over one connection. Jobs are sent concurrently and acked in order; a job whose first
-// send fails is acked once it waits in the retry queue.
+// session reads the consumers over one connection. Jobs are sent concurrently and acked in order; a job whose first
+// send fails is acked once it waits in the retry queue. Alias requests are fetched concurrently too, maxFetches at a
+// time, and acked in order once their result is published.
 func (s *Service) session(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -100,13 +116,17 @@ func (s *Service) session(ctx context.Context) error {
 	if err := c.Consume(ctx, delivery.Consumer, delivery.Filter); err != nil {
 		return err
 	}
-	s.Log.Info("reading delivery jobs", "socket", s.Socket)
+	if err := c.Consume(ctx, aliasfeed.Consumer, aliasfeed.Filter); err != nil {
+		return err
+	}
+	s.Log.Info("reading delivery jobs and alias requests", "socket", s.Socket)
 	s.queueNotice(ctx, c)
 	if s.Ready != nil {
 		s.Ready()
 	}
-	var acks order
-	done := make(chan int64)
+	var acks, aliasAcks order
+	done, aliasDone, aliasFailed := make(chan int64), make(chan []int64), make(chan error)
+	slots := make(chan struct{}, maxFetches)
 	var running sync.WaitGroup
 	defer running.Wait()
 	defer cancel() // runs first: the jobs still being sent stop, unacked, and the bus delivers them again
@@ -125,12 +145,51 @@ func (s *Service) session(ctx context.Context) error {
 					return err
 				}
 			}
+		case err := <-aliasFailed:
+			return err
+		case seqs := <-aliasDone:
+			var ack int64
+			for _, seq := range seqs {
+				ack = max(ack, aliasAcks.finish(seq))
+			}
+			if ack > 0 {
+				if err := c.Ack(aliasfeed.Consumer, ack); err != nil {
+					return err
+				}
+			}
 		case d, ok := <-c.Messages():
 			switch {
 			case !ok:
 				return errors.New("the bus closed the connection")
 			case d.Detached:
-				return errors.New("another connection took the deliveries consumer over")
+				return fmt.Errorf("another connection took the %s consumer over", d.Consumer)
+			case d.Consumer == aliasfeed.Consumer && d.Gap:
+				s.Log.Warn("alias requests may have been missed; the engine asks again on each alias's interval")
+				if err := c.Ack(aliasfeed.Consumer, d.Seq); err != nil {
+					return err
+				}
+			case d.Consumer == aliasfeed.Consumer:
+				if aliasAcks.has(d.Seq) {
+					break // delivered again after a gap; the first copy is still being handled
+				}
+				aliasAcks.start(d.Seq)
+				running.Add(1)
+				go func(m bus.Message) {
+					defer running.Done()
+					seqs, err := s.handleAlias(ctx, c, slots, m)
+					switch {
+					case err != nil:
+						select {
+						case aliasFailed <- err:
+						case <-ctx.Done():
+						}
+					case len(seqs) > 0:
+						select {
+						case aliasDone <- seqs:
+						case <-ctx.Done():
+						}
+					}
+				}(d.Message)
 			case d.Gap:
 				s.raise(ctx, c, notify.Raise{Key: "missed", Severity: notify.Warning,
 					Subject: "Notifications may not have been delivered",
