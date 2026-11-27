@@ -312,24 +312,25 @@ func listenRootSocket(socketPath, name string) (_ *net.UnixListener, closeListen
 	if !info.IsDir() || info.Mode().Perm() != 0700 || !securefs.RootOwned(info) {
 		return nil, nil, errors.New(name + " socket parent must be a root-owned directory with mode 0700, not a symlink")
 	}
-	if _, err := os.Lstat(socketPath); err == nil {
-		return nil, nil, errors.New(name + " socket path already exists; investigate it rather than replacing it")
-	} else if !os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("inspect %s socket path: %w", name, err)
+	claim, err := claimSocket(socketPath, name)
+	if err != nil {
+		return nil, nil, err
 	}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
+		_ = claim.Close()
 		return nil, nil, fmt.Errorf("listen on %s socket: %w", name, err)
 	}
 	listener.SetUnlinkOnClose(false)
 	owned, err := os.Lstat(socketPath)
 	if err != nil || owned.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(owned) {
 		_ = listener.Close()
+		_ = claim.Close()
 		return nil, nil, errors.New("cannot establish ownership of the bound " + name + " socket")
 	}
 	closeListener = func() error {
 		_ = listener.Close()
-		return removeOwnedSocket(socketPath, owned)
+		return errors.Join(removeOwnedSocket(socketPath, owned), claim.Close())
 	}
 	if err := os.Chmod(socketPath, 0600); err != nil {
 		return nil, nil, errors.Join(fmt.Errorf("protect %s socket: %w", name, err), closeListener())
@@ -373,7 +374,7 @@ func listenGroupSocket(socketPath string, gid uint32, group, name string) (*net.
 		}
 		return nil, nil, errors.New(name + " socket parent must be a root-owned 0710 directory with the configured group, not a symlink")
 	}
-	claim, err := claimWebSocket(socketPath, name)
+	claim, err := claimSocket(socketPath, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -522,11 +523,11 @@ func webGroupHint(err error, gid uint32, group string) error {
 	return err
 }
 
-// claimWebSocket takes a group socket's path for this engine and clears what a killed engine left there: systemd
-// restarts the engine, but the socket's directory comes from tmpfiles.d, so nothing else removes the file.
-// The lock beside the socket is held for the engine's life, so a socket found under it has no owner among engines
-// that take the lock. The lock file stays; it is root's, 0600.
-func claimWebSocket(path, name string) (_ *os.File, err error) {
+// claimSocket takes a socket's path for this engine and clears what a killed engine left there: systemd
+// restarts the engine while preserving runtime directories (tmpfiles.d or RuntimeDirectoryPreserve=yes), so nothing else
+// removes a stale socket file. The lock beside the socket is held for the engine's life, so a socket found under it has
+// no owner among engines that take the lock. The lock file stays; it is root's, 0600.
+func claimSocket(path, name string) (_ *os.File, err error) {
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("open %s socket lock: %w", name, err)

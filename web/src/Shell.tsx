@@ -193,9 +193,10 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     if (upgradeError && read) refreshUpgrade();
   }, [read, upgradeError, refreshUpgrade]);
   const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
-  // Once upgrade decisions are answered (or absent), addons-release-hold clears /run/andaru/addons-held
+  // Once upgrade decisions are confirmed clear, addons-release-hold removes /run/andaru/addons-held
   // asynchronously; refresh system status promptly until settingsHold disappears.
-  const waitingHoldRelease = !upgradePending && (system.data?.info.safeMode?.reasons.includes('settingsHold') ?? false);
+  const waitingHoldRelease = upgrade.data !== undefined && upgrade.data.questions.length === 0
+    && (system.data?.info.safeMode?.reasons.includes('settingsHold') ?? false);
   useVisiblePoll(system.refresh, 2_000, canReadStatus && connected && waitingHoldRelease);
   const onUpgradePage = useMatch('/system/upgrade') !== null;
   // The visit opens on the questions once, so the dashboard stays reachable for those who cannot answer.
