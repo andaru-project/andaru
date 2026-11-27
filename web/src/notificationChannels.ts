@@ -39,7 +39,7 @@ export interface NotificationChannelDraft {
   emailTo: string[];
 }
 
-export const knownNotificationSources = ['engine', 'apply', 'upgrade', 'disk', 'delivery', 'notifications'];
+export const knownNotificationSources = ['engine', 'apply', 'upgrade', 'disk', 'delivery', 'notifications', 'alias'];
 
 export const channelKindLabel: Record<KnownNotificationChannelKind, string> = {
   webhook: 'Webhook',

@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
-import { render, screen, waitFor, within } from '../test/render';
+import { act, render, screen, waitFor, within } from '../test/render';
 import { AliasesScreen } from './AliasesScreen';
 
 const addresses = [
@@ -34,7 +34,7 @@ function show(routes: Parameters<typeof fetchRoutes>[0] = {}, capabilities = ['c
   const onSaved = vi.fn();
   const fetch = fetchRoutes({
     '/api/v1/config/aliases/addresses': list(addresses), '/api/v1/config/aliases/ports': list(ports),
-    '/api/v1/config': config, ...routes,
+    '/api/v1/config': config, '/api/v1/aliases/addresses/status': { items: [] }, ...routes,
   });
   render(<MemoryRouter><AliasesScreen api={new ApiClient('csrf')} session={session(capabilities)} onSaved={onSaved} onSessionLost={vi.fn()} /></MemoryRouter>);
   return { fetch, onSaved };
@@ -513,4 +513,247 @@ it('edits existing dynamic aliases and blocks switching an alias in a forbidden 
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   expect(within(panel).getByText(/management segment's allowed sources/i)).toBeInTheDocument();
   expect(sent(fetch, 'PUT')).toHaveLength(1);
+});
+
+it('shows dynamic alias fetch status, failure streaks, per-name resolutions, filtering, and read-only Reload status', async () => {
+  const user = userEvent.setup();
+  let statusLoads = 0;
+  const dynamicAddresses = [
+    ...addresses,
+    { id: 'adr_cf', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+    { id: 'adr_vpn', name: 'vpn-peers', kind: 'hostnames', names: ['vpn.example.com', 'dead.example.com', 'pending.example.com'], refreshSeconds: 300 },
+    { id: 'adr_warn', name: 'warn-feed', kind: 'url', url: 'https://lists.example/warn', refreshSeconds: 600 },
+    { id: 'adr_new', name: 'fresh-feed', kind: 'url', url: 'https://lists.example/new', refreshSeconds: 600 },
+    { id: 'adr_switched', name: 'switched-feed', kind: 'url', url: 'https://lists.example/switched', refreshSeconds: 600 },
+  ];
+  show({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    '/api/v1/aliases/addresses/status': () => {
+      statusLoads += 1;
+      return jsonResponse(200, {
+        items: [
+          {
+            id: 'adr_cf',
+            name: 'cf-feed',
+            kind: 'url',
+            lastSuccess: '2026-11-26T20:00:00Z',
+            lastAttempt: '2026-11-26T21:00:00Z',
+            entries: 14,
+            lastError: 'upstream HTTP 503',
+            failures: 3,
+          },
+          {
+            id: 'adr_vpn',
+            name: 'vpn-peers',
+            kind: 'hostnames',
+            lastSuccess: '2026-11-26T20:30:00Z',
+            lastAttempt: '2026-11-26T20:30:00Z',
+            entries: 1,
+            failures: 0,
+            names: [
+              { name: 'vpn.example.com', addresses: ['203.0.113.10'], error: 'stale AAAA', resolvedAt: '2026-11-26T20:30:00Z' },
+              { name: 'dead.example.com', addresses: null, error: 'NXDOMAIN', resolvedAt: null },
+              { name: 'pending.example.com', addresses: [], resolvedAt: null },
+            ],
+          },
+          {
+            id: 'adr_warn',
+            name: 'warn-feed',
+            kind: 'url',
+            lastSuccess: null,
+            lastAttempt: '2026-11-26T21:15:00Z',
+            entries: 0,
+            lastError: 'timeout! ',
+            failures: 1,
+          },
+          {
+            id: 'adr_new',
+            name: 'fresh-feed',
+            kind: 'url',
+            lastSuccess: null,
+            lastAttempt: null,
+            entries: 0,
+            failures: 0,
+          },
+          // Stale kind mismatches (both static and dynamic-to-dynamic) must be ignored.
+          {
+            id: 'adr_nas',
+            name: 'nas',
+            kind: 'hostnames',
+            lastSuccess: null,
+            lastAttempt: null,
+            entries: 0,
+            lastError: 'stale-mismatch-error',
+            failures: 5,
+          },
+          {
+            id: 'adr_switched',
+            name: 'switched-feed',
+            kind: 'hostnames',
+            lastSuccess: '2026-11-26T20:00:00Z',
+            lastAttempt: '2026-11-26T20:00:00Z',
+            entries: 2,
+            lastError: 'stale-dynamic-kind-error',
+            failures: 2,
+            names: [{ name: 'old.example.com', addresses: ['198.51.100.9'], resolvedAt: '2026-11-26T20:00:00Z' }],
+          },
+        ],
+      });
+    },
+  }, ['configuration.read']);
+
+  expect(await screen.findByText(/14 entries · Last updated/)).toBeInTheDocument();
+  const errorMsg = screen.getByText(/Last refresh failed at .+ \(3 failures in a row\): upstream HTTP 503\. Keeping the last good list\./);
+  expect(errorMsg).toHaveClass('error-text');
+
+  // 1-2 failures uses warning-text, preserves trailing '!', and does not claim a last good list when never succeeded.
+  const warnMsg = screen.getByText(/Last refresh failed \(1 failure in a row\): timeout!$/);
+  expect(warnMsg).toHaveClass('warning-text');
+  expect(screen.getByText(/0 entries · Last attempt .+ — matches nothing until its first fetch\./)).toBeInTheDocument();
+
+  // Hostnames alias displays singular entry count, resolved/total + error count summary, null addresses, cached+error, and Not resolved yet.
+  expect(screen.getByText(/1 entry · Last updated/)).toBeInTheDocument();
+  expect(screen.getByText('Resolved names (1/3, 2 errors)')).toBeInTheDocument();
+  expect(screen.getByText('203.0.113.10')).toBeInTheDocument();
+  expect(screen.getByText('(stale AAAA)')).toBeInTheDocument();
+  expect(screen.getByText('NXDOMAIN')).toBeInTheDocument();
+  expect(screen.getByText(/Not resolved yet/)).toBeInTheDocument();
+  expect(screen.getByText('Not fetched yet — matches nothing until its first fetch.')).toBeInTheDocument();
+  expect(screen.queryByText(/stale-mismatch-error/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/stale-dynamic-kind-error/)).not.toBeInTheDocument();
+  expect(screen.queryByText('198.51.100.9')).not.toBeInTheDocument();
+
+  // Filter matches resolved IPs and per-name errors, and ignores stale mismatched status.
+  const filterInput = screen.getByLabelText('Filter aliases');
+  await user.type(filterInput, '203.0.113.10');
+  expect(rows()).toHaveLength(1);
+  expect(rows()[0]).toHaveTextContent('vpn-peers');
+  await user.clear(filterInput);
+  await user.type(filterInput, 'nxdomain');
+  expect(rows()).toHaveLength(1);
+  expect(rows()[0]).toHaveTextContent('vpn-peers');
+  await user.clear(filterInput);
+  await user.type(filterInput, 'stale-dynamic-kind-error');
+  expect(screen.getByText('No alias matches the filter.')).toBeInTheDocument();
+  await user.clear(filterInput);
+
+  // Read-only accounts can reload status but see no write/refresh controls or Actions column.
+  expect(screen.queryByRole('columnheader', { name: 'Actions' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^(Add|Edit|Delete|Refresh) / })).not.toBeInTheDocument();
+  const reloadBtn = screen.getByRole('button', { name: 'Reload status' });
+  await user.click(reloadBtn);
+  await waitFor(() => expect(statusLoads).toBe(2));
+});
+
+it('requests an immediate dynamic alias refresh without marking config unsaved, guards double-click, and handles 404/503/401', async () => {
+  const user = userEvent.setup();
+  const onSessionLost = vi.fn();
+  const onSaved = vi.fn();
+  const dynamicAddresses = [
+    ...addresses,
+    { id: 'adr_cf', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+  ];
+  let mode: 'hold' | '404' | '503' = 'hold';
+  let releaseRefresh: ((res: Response) => void) | undefined;
+  let statusCalls = 0;
+
+  const fetch = fetchRoutes({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    '/api/v1/config/aliases/ports': list(ports),
+    '/api/v1/config': config,
+    '/api/v1/aliases/addresses/status': () => {
+      statusCalls += 1;
+      return jsonResponse(200, {
+        items: [{
+          id: 'adr_cf',
+          name: 'cf-feed',
+          kind: 'url',
+          lastSuccess: statusCalls > 1 ? '2026-11-26T22:00:00Z' : null,
+          lastAttempt: statusCalls > 1 ? '2026-11-26T22:00:00Z' : null,
+          entries: statusCalls > 1 ? 5 : 0,
+          failures: 0,
+        }],
+      });
+    },
+    'POST /api/v1/aliases/addresses/adr_cf/refresh': () => {
+      if (mode === 'hold') return new Promise<Response>((resolve) => { releaseRefresh = resolve; });
+      if (mode === '404') return jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Gone.' } });
+      return jsonResponse(503, { error: { code: 'ALIASES_UNAVAILABLE', message: 'Aliases are temporarily unavailable.' } });
+    },
+  });
+
+  const view = render(<MemoryRouter><AliasesScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onSaved={onSaved} onSessionLost={onSessionLost} /></MemoryRouter>);
+  expect(await screen.findByText('Not fetched yet — matches nothing until its first fetch.')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Refresh address alias nas' })).not.toBeInTheDocument();
+
+  // Synchronous double-click fires only one POST, and all row/reload controls lock while in flight.
+  const refreshBtn = screen.getByRole('button', { name: 'Refresh address alias cf-feed' });
+  act(() => {
+    refreshBtn.click();
+    refreshBtn.click();
+  });
+  await waitFor(() => expect(releaseRefresh).toBeDefined());
+  expect(sent(fetch, 'POST')).toHaveLength(1);
+  expect(screen.getByRole('button', { name: 'Refresh address alias cf-feed' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Reload status' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Edit address alias cf-feed' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Delete address alias cf-feed' })).toBeDisabled();
+
+  releaseRefresh!(jsonResponse(202, { request: 'req_1' }));
+  expect(await screen.findByText(/Refresh requested for cf-feed/)).toBeInTheDocument();
+  expect(await screen.findByText(/5 entries · Last updated/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Refresh address alias cf-feed' })).toBeEnabled();
+  expect(onSaved).not.toHaveBeenCalled();
+
+  const [[path, init]] = sent(fetch, 'POST');
+  expect(path).toBe('/api/v1/aliases/addresses/adr_cf/refresh');
+  expect(init?.body).toBeUndefined();
+  expect(new Headers(init?.headers).get('X-Andaru-CSRF')).toBe('csrf');
+
+  // 503 error replaces the prior refresh notice with a refresh-specific error banner.
+  mode = '503';
+  await user.click(screen.getByRole('button', { name: 'Refresh address alias cf-feed' }));
+  expect(await screen.findByText('Could not refresh alias')).toBeInTheDocument();
+  expect(screen.getByText('Aliases are temporarily unavailable.')).toBeInTheDocument();
+  expect(screen.queryByText(/Refresh requested for cf-feed/)).not.toBeInTheDocument();
+
+  // 404 reloads and explains the alias is no longer dynamic.
+  mode = '404';
+  const before404 = statusCalls;
+  await user.click(screen.getByRole('button', { name: 'Refresh address alias cf-feed' }));
+  expect(await screen.findByText(/deleted or is no longer fed from a URL or host names/i)).toBeInTheDocument();
+  await waitFor(() => expect(statusCalls).toBeGreaterThan(before404));
+
+  // Unmounting mid-flight while 401 arrives still notifies onSessionLost.
+  mode = 'hold';
+  releaseRefresh = undefined;
+  await user.click(screen.getByRole('button', { name: 'Refresh address alias cf-feed' }));
+  await waitFor(() => expect(releaseRefresh).toBeDefined());
+  view.unmount();
+  releaseRefresh!(jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } }));
+  await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+});
+
+it('keeps the aliases table usable on status 503 and signs out on status 401', async () => {
+  const dynamicAddresses = [
+    ...addresses,
+    { id: 'adr_cf', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+  ];
+  show({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    '/api/v1/aliases/addresses/status': jsonResponse(503, { error: { code: 'ALIASES_UNAVAILABLE', message: 'Status store unavailable.' } }),
+  });
+  expect(await screen.findByText('Dynamic alias status unavailable')).toBeInTheDocument();
+  expect(screen.getByText('Status store unavailable.')).toBeInTheDocument();
+  expect(screen.getByText('https://www.cloudflare.com/ips-v4')).toBeInTheDocument();
+
+  const onSessionLost = vi.fn();
+  fetchRoutes({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    '/api/v1/config/aliases/ports': list(ports),
+    '/api/v1/config': config,
+    '/api/v1/aliases/addresses/status': jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } }),
+  });
+  render(<MemoryRouter><AliasesScreen api={new ApiClient('csrf')} session={session(['configuration.read'])} onSaved={vi.fn()} onSessionLost={onSessionLost} /></MemoryRouter>);
+  await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
 });

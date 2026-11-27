@@ -554,6 +554,25 @@ export function isDynamicAddressAlias(alias: { kind?: string } | undefined): boo
   return alias?.kind === 'url' || alias?.kind === 'hostnames';
 }
 
+export interface DynamicAliasNameStatus {
+  name: string;
+  addresses?: string[] | null;
+  error?: string;
+  resolvedAt: string | null;
+}
+
+export interface DynamicAliasStatus {
+  id: string;
+  name: string;
+  kind: 'url' | 'hostnames';
+  lastSuccess: string | null;
+  lastAttempt: string | null;
+  entries: number;
+  lastError?: string;
+  failures: number;
+  names?: DynamicAliasNameStatus[] | null;
+}
+
 // A port alias: TCP or UDP ports, ICMP or ICMPv6 types, or a group of other port aliases.
 export interface PortAlias {
   id: string;
