@@ -268,7 +268,7 @@ describe('VirtualIpsScreen helpers', () => {
       name: 'WAN',
       link: 'lnk_wan',
       zone: 'zon_wan',
-      addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'static', addresses: ['2001:db8:1::2/64'] } },
+      addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'static', addresses: ['2001:db8:1::2/64'], gateway: '2001:db8:1::1' } },
     };
     const wanSlaac = {
       id: 'seg_slaac',
@@ -299,19 +299,25 @@ describe('VirtualIpsScreen helpers', () => {
     expect(checkVirtualIp('Same seg', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_wan6', segments }).errors.get('hostSegment'))
       .toMatch(/must differ/);
 
-    // Invalid addresses (IPv4, prefixes, ULA, link-local, loopback, unspecified, multicast, 4in6).
-    for (const bad of ['203.0.113.50', '2001:db8:1::50/128', '2001:db8:1::/64', 'fd00::50', 'fc00::50', 'fe80::50', '::1', '::', 'ff02::1', '::ffff:1.2.3.4', '::ffff:102:304']) {
+    // Invalid addresses (IPv4, prefixes, ULA fc00::/7, link-local fe80::/10, loopback, unspecified, multicast, 4in6).
+    for (const bad of ['203.0.113.50', '2001:db8:1::50/128', '2001:db8:1::/64', 'fc00::1', 'fd00::50', 'fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe80::50', 'febf::1', '::1', '::', 'ff02::1', '::ffff:1.2.3.4', '::ffff:102:304']) {
       expect(checkVirtualIp('Bad ndp', bad, [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
         .toBe('Expected one global unicast IPv6 address, without a length.');
+    }
+    // Exact outside-range boundaries just outside fc00::/7, fe80::/10, and ::/::1 are accepted on a non-static uplink.
+    for (const boundary of ['fbff::1', 'fe00::1', 'fec0::1', '::2']) {
+      expect(checkVirtualIp('Boundary ok', boundary, [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments }).errors.size).toBe(0);
     }
     expect(checkVirtualIp('Zone', '2001:db8:1::50%eth0', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
       .toMatch(/interface zone/);
 
-    // Static uplink subnet membership, own static address, and host segment subnet collision.
+    // Static uplink subnet membership, own static address, static IPv6 gateway, and host segment subnet collision.
     expect(checkVirtualIp('Off static uplink', '2001:db8:9::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
       .toMatch(/static IPv6 subnets/);
     expect(checkVirtualIp('Own static addr', '2001:db8:1::2', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
       .toMatch(/static address held by a segment/);
+    expect(checkVirtualIp('Hits v6 gateway', '2001:db8:1::1', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+      .toMatch(/gateway/);
     expect(checkVirtualIp('On host subnet', '2001:db8:2::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments }).errors.get('address'))
       .toMatch(/host segment's subnet/);
 
@@ -932,32 +938,45 @@ describe('VirtualIpsScreen', () => {
     expect(within(row).getByText('IPv6')).toBeInTheDocument();
     expect(within(row).getByText('Uplink → LAN')).toBeInTheDocument();
 
-    // Filter by "proxy ndp" and by host segment name.
+    // Filter by "proxy ndp" and by host segment name ("lan").
     const filter = screen.getByLabelText('Filter virtual IPs');
     await user.type(filter, 'proxy ndp');
     expect(screen.getByText('Web server v6')).toBeInTheDocument();
     expect(screen.queryByText('DNS v4')).not.toBeInTheDocument();
     await user.clear(filter);
+    await user.type(filter, 'lan');
+    expect(screen.getByText('Web server v6')).toBeInTheDocument();
+    expect(screen.queryByText('DNS v4')).not.toBeInTheDocument();
+    await user.clear(filter);
 
-    // Add a new Proxy NDP entry: verifies uplink/host pickers, /128 note, /hostSegment 422 mapping, and payload.
+    // Add a new Proxy NDP entry: verifies uplink/host pickers, /128 note (role="note"), /hostSegment 422 mapping, and payload.
     await user.click(screen.getByRole('button', { name: 'Add virtual IP' }));
     const drawer = await screen.findByRole('dialog', { name: 'Add virtual IP' });
     await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'proxyNdp');
-    expect(within(drawer).getByText('Host configuration')).toBeInTheDocument();
-    expect(within(drawer).getByText(/Configure this address on the inside host/)).toHaveTextContent('/128');
+    const hostNote = within(drawer).getByRole('note');
+    expect(hostNote).toHaveTextContent('Host configuration');
+    expect(hostNote).toHaveTextContent('/128');
 
     const uplinkSelect = within(drawer).getByLabelText(/^Uplink segment/);
     const hostSelect = within(drawer).getByLabelText(/^Host segment/);
     await user.type(within(drawer).getByLabelText(/^Name/), 'Mail v6');
     await user.selectOptions(uplinkSelect, 'seg_wan');
     await user.selectOptions(hostSelect, 'seg_lan');
+
+    // Switching from proxyNdp (with an IPv6-only uplink) to proxyArp resets ineligible segment to placeholder, then switching back works.
+    await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'proxyArp');
+    expect(within(drawer).getByLabelText(/^Segment/)).toHaveValue('');
+    await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'proxyNdp');
+    await user.selectOptions(within(drawer).getByLabelText(/^Uplink segment/), 'seg_wan');
+    await user.selectOptions(within(drawer).getByLabelText(/^Host segment/), 'seg_lan');
+
     await user.type(within(drawer).getByRole('textbox', { name: /^Address/ }), '2001:db8:1::60');
 
     rejectHostSegment = true;
     await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
     expect(await within(drawer).findByText('Host segment must differ.')).toBeInTheDocument();
-    expect(hostSelect).toHaveAttribute('aria-invalid', 'true');
-    expect(hostSelect).toHaveFocus();
+    expect(within(drawer).getByLabelText(/^Host segment/)).toHaveAttribute('aria-invalid', 'true');
+    expect(within(drawer).getByLabelText(/^Host segment/)).toHaveFocus();
 
     rejectHostSegment = false;
     await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
@@ -969,6 +988,22 @@ describe('VirtualIpsScreen', () => {
       address: '2001:db8:1::60',
     }));
     expect(onSaved).toHaveBeenCalledTimes(1);
+
+    // Edit existing proxyNdp entry in-place preserving kind, segment, and hostSegment.
+    await user.click(screen.getByRole('button', { name: 'Edit virtual IP Web server v6' }));
+    const inPlaceDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: Web server v6' });
+    expect(within(inPlaceDrawer).getByLabelText(/^Uplink segment/)).toHaveValue('seg_wan');
+    expect(within(inPlaceDrawer).getByLabelText(/^Host segment/)).toHaveValue('seg_lan');
+    await user.type(within(inPlaceDrawer).getByLabelText('Description'), 'DMZ web');
+    await user.click(within(inPlaceDrawer).getByRole('button', { name: 'Save virtual IP' }));
+    await waitFor(() => expect(putBody).toEqual({
+      name: 'Web server v6',
+      kind: 'proxyNdp',
+      segment: 'seg_wan',
+      hostSegment: 'seg_lan',
+      address: '2001:db8:1::50',
+      description: 'DMZ web',
+    }));
 
     // Edit existing proxyNdp entry and switch back to held address without sending segment/hostSegment.
     await user.click(screen.getByRole('button', { name: 'Edit virtual IP Web server v6' }));
@@ -983,5 +1018,12 @@ describe('VirtualIpsScreen', () => {
       name: 'Web server v6',
       address: '2001:db8:53::1',
     }));
+
+    // Switching a DNS-referenced VIP to Proxy NDP displays the DNS service warning.
+    await user.click(screen.getByRole('button', { name: 'Edit virtual IP DNS v4' }));
+    const dnsDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: DNS v4' });
+    await user.selectOptions(within(dnsDrawer).getByLabelText(/^Kind/), 'proxyNdp');
+    expect(within(dnsDrawer).getByText('Address in use by DNS service')).toBeInTheDocument();
+    expect(within(dnsDrawer).getByText(/before switching it to Proxy NDP/)).toBeInTheDocument();
   });
 });

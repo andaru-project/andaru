@@ -1267,5 +1267,54 @@ describe('simulateTrafficFlow', () => {
       withProxyNdp,
     );
     expect(linkLocalBlocked.verdict).toBe('no_route');
+
+    // When uplink (seg_wan) is disabled but hostSegment (seg_lan) is enabled, traffic from DMZ still hits the /128 route on LAN.
+    const disabledUplink: Snapshot['value'] = {
+      ...withProxyNdp,
+      links: withProxyNdp.links.map((l) => (l.id === 'lnk_wan' ? { ...l, enabled: false } : l)),
+      rules: [
+        {
+          id: 'rul_dmz_lan',
+          name: 'Allow DMZ to LAN',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['zon_dmz'], addresses: [] },
+          to: { zones: ['zon_lan'], addresses: [] },
+          ports: [],
+          log: false,
+        },
+        ...(withProxyNdp.rules ?? []),
+      ],
+    };
+    const dmzToProxyHost = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: 'fd00:2::10', dstIp: '2001:db8:1::50', dstPort: 443 },
+      disabledUplink,
+    );
+    expect(dmzToProxyHost.verdict).toBe('accept');
+    expect(dmzToProxyHost.chain).toBe('forward');
+    expect(dmzToProxyHost.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Inside v6 host', to: '/network/virtual-ips' });
+
+    // Proxy NDP /128 beats an overlapping unreachable static DHCPv6 PD pool prefix.
+    const withOverlappingPool: Snapshot['value'] = {
+      ...withProxyNdp,
+      dhcp6: [
+        ...(withProxyNdp.dhcp6 ?? []),
+        { id: 'dh6_pd', name: 'PD pool', segment: 'seg_dmz', ranges: [], prefixDelegation: { prefix: '2001:db8:1::/64', delegatedLength: 64 } },
+      ],
+    };
+    const beatsUnreachable = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:99::1', dstIp: '2001:db8:1::50', dstPort: 443 },
+      withOverlappingPool,
+    );
+    expect(beatsUnreachable.verdict).toBe('accept');
+    expect(beatsUnreachable.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Inside v6 host', to: '/network/virtual-ips' });
+
+    // Same-segment ingress (LAN -> proxyNdp host on LAN) routes via the /128 on LAN (forward chain).
+    const sameSegment = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: 'fd00:1::20', dstIp: '2001:db8:1::50', dstPort: 443 },
+      withProxyNdp,
+    );
+    expect(sameSegment.chain).toBe('forward');
+    expect(sameSegment.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Inside v6 host', to: '/network/virtual-ips' });
   });
 });

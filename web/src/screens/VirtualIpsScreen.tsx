@@ -137,6 +137,14 @@ function VirtualIpEditor({
 
   function changeKind(next: VirtualAddressKind) {
     setKind(next);
+    if (
+      next === 'proxyArp'
+      && segment
+      && !eligibleSegments.some((s) => s.id === segment)
+      && !(saved && virtualAddressKind(saved.value) === 'proxyArp' && saved.value.segment === segment)
+    ) {
+      setSegment('');
+    }
     setFailure('');
     setErrors((prev) => {
       if (!prev.has('kind') && !prev.has('segment') && !prev.has('hostSegment') && !prev.has('address')) return prev;
@@ -292,7 +300,7 @@ function VirtualIpEditor({
                 onChange={(event) => setAddress(event.currentTarget.value)}
               />
               {isProxyNdp && (
-                <Alert color="blue" title="Host configuration">
+                <Alert color="blue" role="note" title="Host configuration">
                   Configure this address on the inside host as a <Text span ff="monospace" inherit>/128</Text> with its default route via the firewall (router advertisements on the host segment provide that route). Using a <Text span ff="monospace" inherit>/64</Text> would make the host look for uplink neighbours on its own link.
                 </Alert>
               )}
@@ -348,7 +356,7 @@ function VirtualIpEditor({
   );
 }
 
-// Held firewall virtual IP addresses (on andaru-vip) and IPv4 proxy ARP entries on static segments.
+// Held firewall virtual IP addresses/blocks (on andaru-vip), IPv4 proxy ARP entries, and IPv6 proxy NDP entries.
 export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: VirtualIpsScreenProps) {
   const canWrite = session.capabilities.includes('configuration.write');
   // Retry up to twice when a save lands between the two reads so virtual IPs and snapshot match versions.
@@ -515,8 +523,8 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                     <Table.Tbody>
                       {shown.map(({ item, kind, segmentName, hostSegmentName, family, uses }) => {
                         const v = item.value;
-                        const segmentLabel = kind === 'proxyNdp' && segmentName && hostSegmentName
-                          ? `${segmentName} → ${hostSegmentName}`
+                        const segmentLabel = kind === 'proxyNdp'
+                          ? (segmentName || hostSegmentName ? `${segmentName ?? '—'} → ${hostSegmentName ?? '—'}` : undefined)
                           : segmentName;
                         return (
                           <Table.Tr key={v.id}>

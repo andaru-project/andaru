@@ -61,43 +61,30 @@ export function isSingleVirtualAddress(vip: Pick<VirtualAddress, 'address' | 'ki
   return parsed !== null && isSinglePrefix(parsed);
 }
 
-export function staticIpv4Subnets(segment: Segment): StaticSubnet[] {
-  if (segment.addressing.ipv4.mode !== 'static') return [];
+function parseSubnets(addresses: string[] | undefined, family: 4 | 6): StaticSubnet[] {
   const out: StaticSubnet[] = [];
-  for (const raw of segment.addressing.ipv4.addresses ?? []) {
+  for (const raw of addresses ?? []) {
     if (!raw.includes('/')) continue;
     const prefix = parsePrefix(raw);
-    if (!prefix || prefix.family !== 4) continue;
-    out.push({ cidr: raw, prefix });
+    if (prefix && prefix.family === family) out.push({ cidr: raw, prefix });
   }
   return out;
+}
+
+export function staticIpv4Subnets(segment: Segment): StaticSubnet[] {
+  return segment.addressing.ipv4.mode === 'static' ? parseSubnets(segment.addressing.ipv4.addresses, 4) : [];
 }
 
 export function staticIpv6Subnets(segment: Segment): StaticSubnet[] {
-  if (segment.addressing.ipv6.mode !== 'static') return [];
-  const out: StaticSubnet[] = [];
-  for (const raw of segment.addressing.ipv6.addresses ?? []) {
-    if (!raw.includes('/')) continue;
-    const prefix = parsePrefix(raw);
-    if (!prefix || prefix.family !== 6) continue;
-    out.push({ cidr: raw, prefix });
-  }
-  return out;
+  return segment.addressing.ipv6.mode === 'static' ? parseSubnets(segment.addressing.ipv6.addresses, 6) : [];
 }
 
 function staticSegmentPrefixes(segment: Segment): ParsedPrefix[] {
-  const out = [
-    ...staticIpv4Subnets(segment).map((sub) => sub.prefix),
-    ...staticIpv6Subnets(segment).map((sub) => sub.prefix),
-  ];
-  if (segment.addressing.ipv6.mode === 'delegated') {
-    for (const raw of segment.addressing.ipv6.addresses ?? []) {
-      if (!raw.includes('/')) continue;
-      const prefix = parsePrefix(raw);
-      if (prefix && prefix.family === 6) out.push(prefix);
-    }
-  }
-  return out;
+  return [
+    ...staticIpv4Subnets(segment),
+    ...staticIpv6Subnets(segment),
+    ...(segment.addressing.ipv6.mode === 'delegated' ? parseSubnets(segment.addressing.ipv6.addresses, 6) : []),
+  ].map((sub) => sub.prefix);
 }
 
 // A /32 static address leaves no room for another address on the subnet (the only IP is the segment's own).
@@ -238,6 +225,17 @@ export function checkVirtualIp(
             stale = true;
           }
         }
+        if (!errors.has('address') && segments) {
+          const hitsGateway = segments.some((seg) => {
+            if (seg.addressing.ipv6.mode !== 'static') return false;
+            const gw = seg.addressing.ipv6.gateway ? parseIp(seg.addressing.ipv6.gateway) : null;
+            return gw !== null && gw.family === 6 && gw.value === parsed.value;
+          });
+          if (hitsGateway) {
+            errors.set('address', "This address is a segment's gateway.");
+            stale = true;
+          }
+        }
         if (!errors.has('address') && chosenHostSegment) {
           const hostSubnets = staticSegmentPrefixes(chosenHostSegment).filter((sub) => sub.family === 6);
           if (hostSubnets.some((sub) => prefixContains(sub, parsed))) {
@@ -246,21 +244,18 @@ export function checkVirtualIp(
           }
         }
         if (!errors.has('address')) {
-          const singlePrefix = parsePrefix(trimmedAddress);
-          if (singlePrefix) {
-            for (const other of others) {
-              const otherPrefix = parsePrefix(other.value.address);
-              if (!otherPrefix || !prefixesOverlap(singlePrefix, otherPrefix)) continue;
-              const otherKind = virtualAddressKind(other.value);
-              if (otherKind === 'proxyNdp') {
-                errors.set('address', 'Another proxy NDP entry already has this address.');
-              } else {
-                errors.set('address', 'This address overlaps an existing virtual IP.');
-              }
-              duplicate = true;
-              stale = true;
-              break;
+          for (const other of others) {
+            const otherPrefix = parsePrefix(other.value.address);
+            if (!otherPrefix || !prefixContains(otherPrefix, parsed)) continue;
+            const otherKind = virtualAddressKind(other.value);
+            if (otherKind === 'proxyNdp') {
+              errors.set('address', 'Another proxy NDP entry already has this address.');
+            } else {
+              errors.set('address', 'This address overlaps an existing virtual IP.');
             }
+            duplicate = true;
+            stale = true;
+            break;
           }
         }
       }

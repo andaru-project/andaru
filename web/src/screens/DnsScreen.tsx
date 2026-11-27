@@ -8,7 +8,7 @@ import {
 } from '../dnsEdit';
 import type { DnsMode, DnsService, DnsUpstreamProtocol, SavedObject, Session, Snapshot } from '../types';
 import { useConnected, useResource } from '../useResource';
-import { isSingleVirtualAddress, virtualAddressKind } from '../virtualIps';
+import { isSingleVirtualAddress, virtualAddressKind, virtualAddressKindLabel } from '../virtualIps';
 import { zoneColorMap } from '../zones';
 import { ZoneBadge } from './ZoneBadge';
 
@@ -497,23 +497,24 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                         </Group>
                         <Text size="xs" c="dimmed">Optional firewall virtual addresses that the DNS service also listens on.</Text>
                         {errors.get('virtualAddresses') && <Text size="xs" className="error-text">{errors.get('virtualAddresses')}</Text>}
-                        {virtualAddresses.map((vip) => (
-                          <Group key={vip.id} justify="space-between" align="center" wrap="wrap" className="dhcp-repeat-row">
-                            <Checkbox
-                              checked={activeDraft.virtualAddresses.includes(vip.id)}
-                              onChange={(e) => toggleVirtualAddress(vip.id, e.currentTarget.checked)}
-                              label={<Text fw={600} size="sm">{vip.name}</Text>}
-                            />
-                            <Group gap="xs" wrap="wrap">
-                              <Text size="xs" c="dimmed" ff="monospace">{vip.address}</Text>
-                              {virtualAddressKind(vip) === 'proxyArp'
-                                ? <Text size="xs" className="warning-text">Proxy ARP (cannot listen)</Text>
-                                : virtualAddressKind(vip) === 'proxyNdp'
-                                  ? <Text size="xs" className="warning-text">Proxy NDP (cannot listen)</Text>
+                        {virtualAddresses.map((vip) => {
+                          const kind = virtualAddressKind(vip);
+                          return (
+                            <Group key={vip.id} justify="space-between" align="center" wrap="wrap" className="dhcp-repeat-row">
+                              <Checkbox
+                                checked={activeDraft.virtualAddresses.includes(vip.id)}
+                                onChange={(e) => toggleVirtualAddress(vip.id, e.currentTarget.checked)}
+                                label={<Text fw={600} size="sm">{vip.name}</Text>}
+                              />
+                              <Group gap="xs" wrap="wrap">
+                                <Text size="xs" c="dimmed" ff="monospace">{vip.address}</Text>
+                                {kind !== 'address'
+                                  ? <Text size="xs" className="warning-text">{`${virtualAddressKindLabel[kind]} (cannot listen)`}</Text>
                                   : !isSingleVirtualAddress(vip) && <Text size="xs" className="warning-text">Block (cannot listen)</Text>}
+                              </Group>
                             </Group>
-                          </Group>
-                        ))}
+                          );
+                        })}
                         {danglingVipIds.map((id) => (
                           <Group key={id} justify="space-between" align="center" wrap="wrap" className="dhcp-repeat-row">
                             <Checkbox
