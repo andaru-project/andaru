@@ -954,3 +954,50 @@ it('keeps the event stream open while hidden when browser notifications are enab
   act(() => { setNotificationPrefs({ browser: false }); });
   expect(openStreams()).toHaveLength(0);
 });
+
+it('retries failed notification reads while hidden when browser notifications are active', async () => {
+  const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  const shown: string[] = [];
+  class FakeNotification {
+    close = vi.fn();
+    onclick: (() => void) | null = null;
+    constructor(title: string) { shown.push(title); }
+    static get permission(): NotificationPermission { return 'granted'; }
+    static requestPermission = vi.fn(async () => 'granted' as NotificationPermission);
+  }
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+  Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: FakeNotification });
+  setNotificationPrefs({ browser: true });
+
+  let fail = false;
+  let list = [notification(1, 'info', 'Initial alert')];
+  fetchRoutes({
+    '/api/v1/notifications': () => (fail
+      ? jsonResponse(503, { error: { code: 'NOTIFICATIONS_UNAVAILABLE', message: 'Unavailable.' } })
+      : jsonResponse(200, { items: list })),
+  });
+
+  render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={session(['notifications.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  await answered();
+
+  visibility = 'hidden';
+  act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+
+  // A notification read triggered while hidden fails transiently.
+  fail = true;
+  list = [notification(2, 'critical', 'Recovered alert'), notification(1, 'info', 'Initial alert')];
+  act(() => { openStreams()[0].message({ type: 'notifications.changed' }); });
+  await answered();
+  expect(shown).toEqual([]);
+
+  // The 15s retry runs while still hidden and delivers the native alert once the backend recovers.
+  fail = false;
+  act(() => { vi.advanceTimersByTime(15_000); });
+  await answered();
+  expect(shown).toEqual(['Recovered alert']);
+});

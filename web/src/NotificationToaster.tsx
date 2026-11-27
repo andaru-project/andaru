@@ -141,6 +141,7 @@ export function NotificationToaster({ notifications, hostname }: NotificationToa
           notice.onclose = () => {
             if (nativeRef.current.get(item.id) === notice) nativeRef.current.delete(item.id);
           };
+          dismissNotificationToast(item.id);
           continue;
         }
       }

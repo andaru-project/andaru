@@ -214,32 +214,37 @@ it('routes background/idle alerts to native notifications, caps bursts at 3, syn
   view.update({ items: [sample({ id: 1, subject: 'Active tab alert' })] });
   expect(stub.instances).toHaveLength(0);
   expect(screen.getByRole('region', { name: 'Live notifications' })).toHaveTextContent('Active tab alert');
-  act(() => { clearNotificationToasts(); });
 
-  // Hidden tab routes to a native browser notification; clicking it focuses and navigates.
+  // Updating alert 1 while hidden delivers a native notification and dismisses its earlier stale in-page toast.
   visibility = 'hidden';
-  view.update({ items: [sample({ id: 2, subject: 'Background alert', link: '/changes' }), sample({ id: 1, subject: 'Active tab alert' })] });
+  view.update({ items: [sample({ id: 1, subject: 'Active tab alert escalated', updated: '2026-11-27T08:02:00Z' })] });
   expect(stub.instances).toHaveLength(1);
-  expect(stub.instances[0].title).toBe('Background alert — edge-gw');
+  expect(stub.instances[0].title).toBe('Active tab alert escalated — edge-gw');
   expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 
-  act(() => { stub.instances[0].onclick?.call(stub.instances[0] as unknown as globalThis.Notification, new Event('click')); });
+  // Another hidden-tab alert routes to a native browser notification; clicking it focuses and navigates.
+  view.update({ items: [sample({ id: 2, subject: 'Background alert', link: '/changes' }), sample({ id: 1, subject: 'Active tab alert escalated', updated: '2026-11-27T08:02:00Z' })] });
+  expect(stub.instances).toHaveLength(2);
+  expect(stub.instances[1].title).toBe('Background alert — edge-gw');
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
+
+  act(() => { stub.instances[1].onclick?.call(stub.instances[1] as unknown as globalThis.Notification, new Event('click')); });
   expect(focusSpy).toHaveBeenCalledTimes(1);
   expect(screen.getByTestId('location')).toHaveTextContent('/changes');
 
   // Updating alert 2 once back in the active tab closes its old native handle before popping a toast.
   visibility = 'visible';
   act(() => { document.dispatchEvent(new Event('visibilitychange')); });
-  view.update({ items: [sample({ id: 2, subject: 'Background alert updated', updated: '2026-11-27T08:05:00Z' }), sample({ id: 1, subject: 'Active tab alert' })] });
-  expect(stub.instances[0].close).toHaveBeenCalledTimes(2);
+  view.update({ items: [sample({ id: 2, subject: 'Background alert updated', updated: '2026-11-27T08:05:00Z' }), sample({ id: 1, subject: 'Active tab alert escalated', updated: '2026-11-27T08:02:00Z' })] });
+  expect(stub.instances[1].close).toHaveBeenCalledTimes(2);
   expect(screen.getByRole('region', { name: 'Live notifications' })).toHaveTextContent('Background alert updated');
   act(() => { clearNotificationToasts(); });
 
   // Visible but idle (> 3 min without interaction) caps native bursts at 3.
   act(() => { vi.advanceTimersByTime(3 * 60_000 + 1_000); });
   const idleBurst = [10, 11, 12, 13].map((id) => sample({ id, subject: `Idle ${id}` }));
-  view.update({ items: [...idleBurst, sample({ id: 2, subject: 'Background alert updated', updated: '2026-11-27T08:05:00Z' }), sample({ id: 1, subject: 'Active tab alert' })] });
-  expect(stub.instances).toHaveLength(4); // 1 earlier + 3 capped
+  view.update({ items: [...idleBurst, sample({ id: 2, subject: 'Background alert updated', updated: '2026-11-27T08:05:00Z' }), sample({ id: 1, subject: 'Active tab alert escalated', updated: '2026-11-27T08:02:00Z' })] });
+  expect(stub.instances).toHaveLength(5); // 2 earlier + 3 capped
 
   // Revoking permission while hidden immediately syncs useBrowserNotificationsActive() to false and queues a fallback toast.
   visibility = 'hidden';
@@ -256,9 +261,9 @@ it('routes background/idle alerts to native notifications, caps bursts at 3, syn
 
   // Unmounting closes remaining open native handles.
   view.unmount();
-  expect(stub.instances[1].close).toHaveBeenCalledTimes(1);
   expect(stub.instances[2].close).toHaveBeenCalledTimes(1);
   expect(stub.instances[3].close).toHaveBeenCalledTimes(1);
+  expect(stub.instances[4].close).toHaveBeenCalledTimes(1);
 
   focusSpy.mockRestore();
 });

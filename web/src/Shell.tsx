@@ -172,7 +172,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
   const latestState = changes.data?.applies.items[0]?.state;
   const applying = latestState === 'activating' || latestState === 'awaiting_confirmation';
   useVisiblePoll(changes.refresh, retryMilliseconds, canReadChanges && (changes.error !== '' || applying));
-  useVisiblePoll(notifications.refresh, retryMilliseconds, canReadNotifications && notifications.error !== '');
+  useVisiblePoll(notifications.refresh, retryMilliseconds, canReadNotifications && notifications.error !== '', browserAlertsActive);
 
   // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with a new
   // saved head (an upgrade, a restore, the answers), so it is read again when the head moves, never on a timer:
