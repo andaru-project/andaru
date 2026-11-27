@@ -374,6 +374,48 @@ describe('DnsScreen', () => {
     expect(putBody).not.toHaveProperty('virtualAddresses');
   });
 
+  it('excludes proxyNdp virtual addresses from DNS listener choices and retains an already-referenced one with a warning', async () => {
+    const withNdpSnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        virtualAddresses: [
+          { id: 'vip_dns', name: 'dns-vip', address: '172.16.53.53' },
+          { id: 'vip_ndp', name: 'lan-host-v6', kind: 'proxyNdp', segment: 'seg_wan', hostSegment: 'seg_lan', address: '2001:db8:1::50' },
+        ],
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config': withNdpSnapshot,
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: existingDns },
+    });
+    const firstRender = renderDns();
+
+    expect(await screen.findByRole('checkbox', { name: 'dns-vip' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'lan-host-v6' })).not.toBeInTheDocument();
+    firstRender.unmount();
+
+    const dnsWithNdp: DnsService = { ...existingDns, virtualAddresses: ['vip_ndp'] };
+    let putBody: Record<string, unknown> | undefined;
+    fetchRoutes({
+      '/api/v1/config': { ...withNdpSnapshot, value: { ...withNdpSnapshot.value, dns: dnsWithNdp } },
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: dnsWithNdp },
+      'PUT /api/v1/config/dns': (init) => {
+        putBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { state: 'saved', savedVersion: '9', version: '5', value: putBody });
+      },
+    });
+    renderDns();
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'lan-host-v6' });
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText('Proxy NDP (cannot listen)')).toBeInTheDocument();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(putBody).toBeDefined());
+    expect(putBody).not.toHaveProperty('virtualAddresses');
+  });
+
   it('renders dangling segment and virtual address IDs for removal and warns when management segment is missing', async () => {
     const dnsWithDangling: DnsService = {
       mode: 'recursive',

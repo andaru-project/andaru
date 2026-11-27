@@ -8,7 +8,7 @@ export interface VirtualIpUse {
   locksAddress: boolean;
 }
 
-export interface StaticIpv4Subnet {
+export interface StaticSubnet {
   cidr: string;
   prefix: ParsedPrefix;
 }
@@ -18,10 +18,13 @@ export const maxVirtualAddresses = 64;
 export const virtualAddressKindLabel: Record<VirtualAddressKind, string> = {
   address: 'Held address',
   proxyArp: 'Proxy ARP',
+  proxyNdp: 'Proxy NDP',
 };
 
 export function virtualAddressKind(vip: Pick<VirtualAddress, 'kind'>): VirtualAddressKind {
-  return vip.kind === 'proxyArp' ? 'proxyArp' : 'address';
+  if (vip.kind === 'proxyArp') return 'proxyArp';
+  if (vip.kind === 'proxyNdp') return 'proxyNdp';
+  return 'address';
 }
 
 function prefixesOverlap(a: ParsedPrefix, b: ParsedPrefix): boolean {
@@ -39,9 +42,13 @@ function isSinglePrefix(prefix: ParsedPrefix): boolean {
 }
 
 export function virtualAddressFamily(vip: Pick<VirtualAddress, 'address' | 'kind'>): 'IPv4' | 'IPv6' | undefined {
+  const kind = virtualAddressKind(vip);
+  if (kind === 'proxyNdp') {
+    return parseIp(vip.address)?.family === 6 ? 'IPv6' : undefined;
+  }
   const parsed = parsePrefix(vip.address);
   if (!parsed) return undefined;
-  if (virtualAddressKind(vip) === 'proxyArp') {
+  if (kind === 'proxyArp') {
     return parsed.family === 4 ? 'IPv4' : undefined;
   }
   return parsed.family === 4 ? 'IPv4' : 'IPv6';
@@ -54,9 +61,9 @@ export function isSingleVirtualAddress(vip: Pick<VirtualAddress, 'address' | 'ki
   return parsed !== null && isSinglePrefix(parsed);
 }
 
-export function staticIpv4Subnets(segment: Segment): StaticIpv4Subnet[] {
+export function staticIpv4Subnets(segment: Segment): StaticSubnet[] {
   if (segment.addressing.ipv4.mode !== 'static') return [];
-  const out: StaticIpv4Subnet[] = [];
+  const out: StaticSubnet[] = [];
   for (const raw of segment.addressing.ipv4.addresses ?? []) {
     if (!raw.includes('/')) continue;
     const prefix = parsePrefix(raw);
@@ -66,9 +73,24 @@ export function staticIpv4Subnets(segment: Segment): StaticIpv4Subnet[] {
   return out;
 }
 
+export function staticIpv6Subnets(segment: Segment): StaticSubnet[] {
+  if (segment.addressing.ipv6.mode !== 'static') return [];
+  const out: StaticSubnet[] = [];
+  for (const raw of segment.addressing.ipv6.addresses ?? []) {
+    if (!raw.includes('/')) continue;
+    const prefix = parsePrefix(raw);
+    if (!prefix || prefix.family !== 6) continue;
+    out.push({ cidr: raw, prefix });
+  }
+  return out;
+}
+
 function staticSegmentPrefixes(segment: Segment): ParsedPrefix[] {
-  const out = staticIpv4Subnets(segment).map((sub) => sub.prefix);
-  if (segment.addressing.ipv6.mode === 'static' || segment.addressing.ipv6.mode === 'delegated') {
+  const out = [
+    ...staticIpv4Subnets(segment).map((sub) => sub.prefix),
+    ...staticIpv6Subnets(segment).map((sub) => sub.prefix),
+  ];
+  if (segment.addressing.ipv6.mode === 'delegated') {
     for (const raw of segment.addressing.ipv6.addresses ?? []) {
       if (!raw.includes('/')) continue;
       const prefix = parsePrefix(raw);
@@ -101,6 +123,11 @@ function isAllowedIpv6Value(val: bigint): boolean {
   if (((val >> 118n) & 0x3ffn) === 0x3fan) return false; // fe80::/10 link-local unicast
   if (((val >> 120n) & 0xffn) === 0xffn) return false; // ff00::/8 multicast
   return true;
+}
+
+// Global unicast IPv6: matches Go netip.Addr.IsGlobalUnicast() && !IsPrivate() && !Is4In6() (rejects fc00::/7 ULA too).
+function isGlobalUnicastIpv6(val: bigint): boolean {
+  return isAllowedIpv6Value(val) && ((val >> 121n) & 0x7fn) !== 0x7en;
 }
 
 // Matches internal/config/virtual.go: validUnicast(a) && !a.IsLinkLocalUnicast() && !a.Is4In6() across the prefix.
@@ -146,10 +173,11 @@ export function checkVirtualIp(
   options?: {
     kind?: VirtualAddressKind;
     segment?: string;
+    hostSegment?: string;
     segments?: Segment[];
   },
 ): { errors: Map<string, string>; duplicate: boolean; stale: boolean } {
-  const kind: VirtualAddressKind = options?.kind === 'proxyArp' ? 'proxyArp' : 'address';
+  const kind: VirtualAddressKind = virtualAddressKind({ kind: options?.kind });
   const trimmedName = name.trim();
   const trimmedAddress = address.trim();
   const errors = new Map<string, string>();
@@ -166,6 +194,80 @@ export function checkVirtualIp(
 
   const others = existingVips.filter((v) => v.value.id !== editingId);
   const segments = options?.segments;
+
+  if (kind === 'proxyNdp') {
+    const segmentId = (options?.segment ?? '').trim();
+    const hostSegmentId = (options?.hostSegment ?? '').trim();
+    const chosenSegment = segments?.find((s) => s.id === segmentId);
+    const chosenHostSegment = segments?.find((s) => s.id === hostSegmentId);
+
+    if (!segmentId) {
+      errors.set('segment', 'Choose the uplink segment that answers neighbour discovery.');
+    } else if (segments && !chosenSegment) {
+      errors.set('segment', 'Choose an existing uplink segment.');
+      stale = true;
+    }
+
+    if (!hostSegmentId) {
+      errors.set('hostSegment', 'Choose the segment where the host lives.');
+    } else if (segments && !chosenHostSegment) {
+      errors.set('hostSegment', 'Choose an existing host segment.');
+      stale = true;
+    } else if (segmentId && hostSegmentId === segmentId) {
+      errors.set('hostSegment', 'Host segment must differ from the uplink segment.');
+    }
+
+    if (!trimmedAddress) {
+      errors.set('address', 'A proxy NDP entry needs a global unicast IPv6 address.');
+    } else if (trimmedAddress.includes('%')) {
+      errors.set('address', 'Enter an address without an interface zone.');
+    } else {
+      const parsed = parseIp(trimmedAddress);
+      if (!parsed || parsed.family !== 6 || !isGlobalUnicastIpv6(parsed.value)) {
+        errors.set('address', 'Expected one global unicast IPv6 address, without a length.');
+      } else {
+        const uplinkSubnets = chosenSegment ? staticIpv6Subnets(chosenSegment) : [];
+        if (uplinkSubnets.length > 0 && !uplinkSubnets.some((sub) => prefixContains(sub.prefix, parsed))) {
+          errors.set('address', "Expected an address on one of the segment's static IPv6 subnets.");
+          stale = true;
+        }
+        if (!errors.has('address') && segments) {
+          const hitsStatic = segments.some((seg) => staticSegmentPrefixes(seg).some((sub) => sub.family === 6 && sub.ip.value === parsed.value));
+          if (hitsStatic) {
+            errors.set('address', 'Proxy NDP cannot use a static address held by a segment.');
+            stale = true;
+          }
+        }
+        if (!errors.has('address') && chosenHostSegment) {
+          const hostSubnets = staticSegmentPrefixes(chosenHostSegment).filter((sub) => sub.family === 6);
+          if (hostSubnets.some((sub) => prefixContains(sub, parsed))) {
+            errors.set('address', "This address is already on the host segment's subnet.");
+            stale = true;
+          }
+        }
+        if (!errors.has('address')) {
+          const singlePrefix = parsePrefix(trimmedAddress);
+          if (singlePrefix) {
+            for (const other of others) {
+              const otherPrefix = parsePrefix(other.value.address);
+              if (!otherPrefix || !prefixesOverlap(singlePrefix, otherPrefix)) continue;
+              const otherKind = virtualAddressKind(other.value);
+              if (otherKind === 'proxyNdp') {
+                errors.set('address', 'Another proxy NDP entry already has this address.');
+              } else {
+                errors.set('address', 'This address overlaps an existing virtual IP.');
+              }
+              duplicate = true;
+              stale = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    return { errors, duplicate, stale };
+  }
 
   if (kind === 'proxyArp') {
     const segmentId = (options?.segment ?? '').trim();
@@ -186,7 +288,7 @@ export function checkVirtualIp(
     } else {
       const parsed = parsePrefix(trimmedAddress);
       if (parsed && parsed.family === 6) {
-        errors.set('address', 'Proxy NDP is not offered yet (#43).');
+        errors.set('address', 'Proxy ARP is IPv4 only; use Proxy NDP for IPv6.');
       } else if (!parsed || parsed.family !== 4 || !isAllowedVirtualPrefix(parsed)) {
         errors.set('address', 'Enter a unicast IPv4 address or a /24–/32 prefix (not loopback, link-local, multicast, or unspecified).');
       } else if (parsed.bits < 24) {
@@ -261,8 +363,11 @@ export function checkVirtualIp(
         for (const other of others) {
           const otherPrefix = parsePrefix(other.value.address);
           if (!otherPrefix || !prefixesOverlap(parsed, otherPrefix)) continue;
-          if (virtualAddressKind(other.value) === 'proxyArp') {
+          const otherKind = virtualAddressKind(other.value);
+          if (otherKind === 'proxyArp') {
             errors.set('address', 'This address or prefix overlaps a proxy ARP virtual IP.');
+          } else if (otherKind === 'proxyNdp') {
+            errors.set('address', 'This address or prefix overlaps a proxy NDP virtual IP.');
           } else if (parsedSingle && isSinglePrefix(otherPrefix)) {
             errors.set('address', 'Another virtual IP already has this address.');
           } else {

@@ -10,6 +10,7 @@ import {
   isSingleVirtualAddress,
   maxVirtualAddresses,
   staticIpv4Subnets,
+  staticIpv6Subnets,
   virtualAddressFamily,
   virtualAddressKind,
   virtualAddressKindLabel,
@@ -27,12 +28,26 @@ interface VirtualIpsScreenProps {
 }
 
 const mono = { input: 'mono-input' };
-const vipFieldPattern = /^(?:\/virtualAddresses\/\d+)?\/(name|kind|segment|address|description)(?:\/|$)/;
+const vipFieldPattern = /^(?:\/virtualAddresses\/\d+)?\/(name|kind|segment|hostSegment|address|description)(?:\/|$)/;
 
 const kindOptions: Array<{ value: VirtualAddressKind; label: string }> = [
   { value: 'address', label: 'Held address or block (andaru-vip)' },
   { value: 'proxyArp', label: 'Proxy ARP (IPv4)' },
+  { value: 'proxyNdp', label: 'Proxy NDP (IPv6)' },
 ];
+
+const ipv6ModeLabels: Record<string, string> = {
+  slaac: 'SLAAC',
+  dhcp6: 'DHCPv6',
+  delegated: 'delegated',
+};
+
+function ndpSegmentLabel(s: Segment): string {
+  const subnets = staticIpv6Subnets(s);
+  if (subnets.length > 0) return `${s.name} (${subnets.map((sub) => sub.cidr).join(', ')})`;
+  const mode = ipv6ModeLabels[s.addressing.ipv6.mode];
+  return mode ? `${s.name} (${mode})` : s.name;
+}
 
 function VirtualIpEditor({
   saved,
@@ -56,6 +71,7 @@ function VirtualIpEditor({
   const [name, setName] = useState(saved?.value.name ?? '');
   const [kind, setKind] = useState<VirtualAddressKind>(saved ? virtualAddressKind(saved.value) : 'address');
   const [segment, setSegment] = useState(saved?.value.segment ?? '');
+  const [hostSegment, setHostSegment] = useState(saved?.value.hostSegment ?? '');
   const [address, setAddress] = useState(saved?.value.address ?? '');
   const [description, setDescription] = useState(saved?.value.description ?? '');
   const [errors, setErrors] = useState(new Map<string, string>());
@@ -83,9 +99,9 @@ function VirtualIpEditor({
     }
   }, [errorFocusTick]);
 
-  const eligibleSegments = segments
-    .filter(isProxyArpEligibleSegment)
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const sortedSegments = [...segments].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
+  const eligibleSegments = sortedSegments.filter(isProxyArpEligibleSegment);
 
   const segmentOptions = (() => {
     const items = eligibleSegments.map((s) => ({
@@ -108,14 +124,26 @@ function VirtualIpEditor({
     return items;
   })();
 
+  const ndpSegmentOptions = (selectedId: string, emptyLabel: string) => {
+    const items = sortedSegments.map((s) => ({ value: s.id, label: ndpSegmentLabel(s) }));
+    if (selectedId && !sortedSegments.some((s) => s.id === selectedId)) {
+      items.unshift({ value: selectedId, label: `${selectedId} (missing segment)` });
+    }
+    if (!selectedId) {
+      items.unshift({ value: '', label: sortedSegments.length === 0 ? 'No segments available' : emptyLabel });
+    }
+    return items;
+  };
+
   function changeKind(next: VirtualAddressKind) {
     setKind(next);
     setFailure('');
     setErrors((prev) => {
-      if (!prev.has('kind') && !prev.has('segment') && !prev.has('address')) return prev;
+      if (!prev.has('kind') && !prev.has('segment') && !prev.has('hostSegment') && !prev.has('address')) return prev;
       const copy = new Map(prev);
       copy.delete('kind');
       copy.delete('segment');
+      copy.delete('hostSegment');
       copy.delete('address');
       return copy;
     });
@@ -128,6 +156,7 @@ function VirtualIpEditor({
     const { errors: localErrors, stale } = checkVirtualIp(name, address, existingVips, saved?.value.id, {
       kind,
       segment,
+      hostSegment,
       segments,
     });
     if (localErrors.size > 0) {
@@ -142,6 +171,7 @@ function VirtualIpEditor({
     const body: Omit<VirtualAddress, 'id'> = {
       name: name.trim(),
       ...(kind === 'proxyArp' ? { kind: 'proxyArp', segment: segment.trim() } : {}),
+      ...(kind === 'proxyNdp' ? { kind: 'proxyNdp', segment: segment.trim(), hostSegment: hostSegment.trim() } : {}),
       address: address.trim(),
       ...(description.trim() ? { description: description.trim() } : {}),
     };
@@ -153,7 +183,9 @@ function VirtualIpEditor({
       if (!open.current) return;
       const fields = fieldErrors(error, (path) => {
         const field = vipFieldPattern.exec(path)?.[1] ?? '';
-        return field === 'segment' && kind !== 'proxyArp' ? '' : field;
+        if (field === 'segment' && kind === 'address') return '';
+        if (field === 'hostSegment' && kind !== 'proxyNdp') return '';
+        return field;
       });
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'virtual IP'));
@@ -167,7 +199,8 @@ function VirtualIpEditor({
   const usedByDns = uses.some((u) => u.key === 'dns');
   const singleLock = addressLocks.length === 1;
   const isProxyArp = kind === 'proxyArp';
-  const isHeldBlockDraft = !isProxyArp
+  const isProxyNdp = kind === 'proxyNdp';
+  const isHeldBlockDraft = kind === 'address'
     && virtualAddressFamily({ kind: 'address', address }) !== undefined
     && !isSingleVirtualAddress({ kind: 'address', address });
 
@@ -201,8 +234,10 @@ function VirtualIpEditor({
               <NativeSelect
                 label="Kind"
                 description={isProxyArp
-                  ? 'Answered by ARP on a segment without being held on the firewall, for 1:1 NAT and port forwards. Proxy NDP (IPv6) is not offered yet.'
-                  : 'Held by the firewall on andaru-vip for services such as DNS (single address) and port forwards (single address or routed block).'}
+                  ? 'Answered by ARP on a segment without being held on the firewall, for 1:1 NAT and port forwards.'
+                  : isProxyNdp
+                    ? 'Answered by neighbour discovery on the uplink and routed as a /128 to an inside host segment without translation.'
+                    : 'Held by the firewall on andaru-vip for services such as DNS (single address) and port forwards (single address or routed block).'}
                 data={kindOptions}
                 value={kind}
                 error={errors.get('kind')}
@@ -219,30 +254,59 @@ function VirtualIpEditor({
                   onChange={(event) => setSegment(event.currentTarget.value)}
                 />
               )}
+              {isProxyNdp && (
+                <>
+                  <NativeSelect
+                    label="Uplink segment"
+                    description="Segment on whose link the firewall answers IPv6 neighbour discovery for this address."
+                    required
+                    data={ndpSegmentOptions(segment, 'Choose an uplink segment…')}
+                    value={segment}
+                    error={errors.get('segment')}
+                    onChange={(event) => setSegment(event.currentTarget.value)}
+                  />
+                  <NativeSelect
+                    label="Host segment"
+                    description="Inside segment where the host lives. The firewall adds a /128 on-link route there."
+                    required
+                    data={ndpSegmentOptions(hostSegment, 'Choose a host segment…')}
+                    value={hostSegment}
+                    error={errors.get('hostSegment')}
+                    onChange={(event) => setHostSegment(event.currentTarget.value)}
+                  />
+                </>
+              )}
               <TextInput
                 classNames={mono}
-                label="Address or prefix"
+                label={isProxyNdp ? 'Address' : 'Address or prefix'}
                 description={isProxyArp
                   ? "IPv4 address or /24–/32 prefix inside the selected segment's static IPv4 subnet (host bits zero)."
-                  : 'Unicast IPv4 (/24–/32) or IPv6 (/48–/128) address or routed block outside any configured interface subnet (host bits zero). A /32 or /128 is stored bare.'}
-                placeholder={isProxyArp ? '203.0.113.50 or 203.0.113.56/29' : '172.16.53.53, 198.51.100.0/29, or 2001:db8:53::/64'}
+                  : isProxyNdp
+                    ? "Single global unicast IPv6 address from the uplink's prefix, without a length."
+                    : 'Unicast IPv4 (/24–/32) or IPv6 (/48–/128) address or routed block outside any configured interface subnet (host bits zero). A /32 or /128 is stored bare.'}
+                placeholder={isProxyArp ? '203.0.113.50 or 203.0.113.56/29' : isProxyNdp ? '2001:db8:1::50' : '172.16.53.53, 198.51.100.0/29, or 2001:db8:53::/64'}
                 maxLength={64}
                 required
                 value={address}
                 error={errors.get('address')}
                 onChange={(event) => setAddress(event.currentTarget.value)}
               />
-              {saved && usedByDns && (isProxyArp || isHeldBlockDraft) && (
+              {isProxyNdp && (
+                <Alert color="blue" title="Host configuration">
+                  Configure this address on the inside host as a <Text span ff="monospace" inherit>/128</Text> with its default route via the firewall (router advertisements on the host segment provide that route). Using a <Text span ff="monospace" inherit>/64</Text> would make the host look for uplink neighbours on its own link.
+                </Alert>
+              )}
+              {saved && usedByDns && (isProxyArp || isProxyNdp || isHeldBlockDraft) && (
                 <Alert
                   color="yellow"
                   role="status"
                   title="Address in use by DNS service"
                 >
-                  {isProxyArp ? (
+                  {isProxyArp || isProxyNdp ? (
                     <>
                       The DNS service listens on this virtual IP. Remove it from{' '}
                       <Anchor component={Link} to="/network/dns" size="sm" onClick={onClose}>DNS service</Anchor>{' '}
-                      before switching it to Proxy ARP.
+                      before switching it to {isProxyArp ? 'Proxy ARP' : 'Proxy NDP'}.
                     </>
                   ) : (
                     <>
@@ -352,7 +416,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
         <div>
           <Title order={2}>Virtual IPs</Title>
           <Text c="dimmed">
-            Held addresses and routed blocks on <Text span ff="monospace" inherit>andaru-vip</Text> for services such as DNS and port forwards, and IPv4 proxy ARP entries answered on a segment without being held by the firewall.
+            Held addresses and routed blocks on <Text span ff="monospace" inherit>andaru-vip</Text> for firewall services, IPv4 proxy ARP entries, and IPv6 proxy NDP entries routed to inside hosts.
           </Text>
         </div>
         <Group gap="xs">
@@ -372,24 +436,29 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
           const words = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
           const rows = sorted.map((item) => {
             const kind = virtualAddressKind(item.value);
-            const segmentName = kind === 'proxyArp' && item.value.segment
+            const segmentName = kind !== 'address' && item.value.segment
               ? (segmentById.get(item.value.segment)?.name ?? item.value.segment)
+              : undefined;
+            const hostSegmentName = kind === 'proxyNdp' && item.value.hostSegment
+              ? (segmentById.get(item.value.hostSegment)?.name ?? item.value.hostSegment)
               : undefined;
             return {
               item,
               kind,
               segmentName,
+              hostSegmentName,
               family: virtualAddressFamily(item.value),
               uses: virtualAddressUses(item.value, snapshot),
             };
           });
-          const shown = words.length === 0 ? rows : rows.filter(({ item, kind, segmentName, family, uses }) => {
+          const shown = words.length === 0 ? rows : rows.filter(({ item, kind, segmentName, hostSegmentName, family, uses }) => {
             const v = item.value;
             const haystack = [
               v.name,
               virtualAddressKindLabel[kind],
               kind,
               segmentName ?? '',
+              hostSegmentName ?? '',
               v.address,
               family ?? '',
               v.description ?? '',
@@ -426,7 +495,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                 <Alert role="status" title="No virtual IPs">
                   {sorted.length === 0
                     ? (canWrite
-                      ? 'No virtual IP is saved yet. Add a held address or block for services such as DNS and port forwards, or a proxy ARP entry for extra addresses on a static IPv4 segment.'
+                      ? 'No virtual IP is saved yet. Add a held address or block for firewall services, a proxy ARP entry for IPv4, or a proxy NDP entry to route an uplink IPv6 address to an inside host.'
                       : 'No virtual IP is saved yet.')
                     : 'No virtual IP matches the filter.'}
                 </Alert>
@@ -444,8 +513,11 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
-                      {shown.map(({ item, kind, segmentName, family, uses }) => {
+                      {shown.map(({ item, kind, segmentName, hostSegmentName, family, uses }) => {
                         const v = item.value;
+                        const segmentLabel = kind === 'proxyNdp' && segmentName && hostSegmentName
+                          ? `${segmentName} → ${hostSegmentName}`
+                          : segmentName;
                         return (
                           <Table.Tr key={v.id}>
                             <Table.Td data-label="Name">
@@ -455,7 +527,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                               </Stack>
                             </Table.Td>
                             <Table.Td data-label="Kind">
-                              <Badge size="xs" variant="light" color={kind === 'proxyArp' ? 'teal' : 'gray'}>
+                              <Badge size="xs" variant="light" color={kind === 'proxyArp' ? 'teal' : kind === 'proxyNdp' ? 'indigo' : 'gray'}>
                                 {virtualAddressKindLabel[kind]}
                               </Badge>
                             </Table.Td>
@@ -466,8 +538,8 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                               </Group>
                             </Table.Td>
                             <Table.Td data-label="Segment">
-                              {segmentName ? (
-                                <Text size="sm">{segmentName}</Text>
+                              {segmentLabel ? (
+                                <Text size="sm">{segmentLabel}</Text>
                               ) : (
                                 <Text size="sm" c="dimmed">—</Text>
                               )}

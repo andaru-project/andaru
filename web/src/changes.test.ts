@@ -73,5 +73,12 @@ describe('referenceNames and resolveReferences', () => {
     expect(resolveReferences({ id: 'vip_1', name: 'Proxy', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' }, new Map([['seg_wan', 'WAN']]), 'virtualAddresses')).toEqual({
       id: 'vip_1', name: 'Proxy', kind: 'proxyArp', segment: 'WAN', address: '203.0.113.50',
     });
+    expect(resolveReferences(
+      { id: 'vip_2', name: 'Host v6', kind: 'proxyNdp', segment: 'seg_wan', hostSegment: 'seg_lan', address: '2001:db8:1::50' },
+      new Map([['seg_wan', 'WAN'], ['seg_lan', 'LAN']]),
+      'virtualAddresses',
+    )).toEqual({
+      id: 'vip_2', name: 'Host v6', kind: 'proxyNdp', segment: 'WAN', hostSegment: 'LAN', address: '2001:db8:1::50',
+    });
   });
 });

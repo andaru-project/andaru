@@ -219,10 +219,10 @@ describe('VirtualIpsScreen helpers', () => {
     expect(dhcpRefusal.stale).toBe(true);
     expect(checkVirtualIp('Proxy 1', '198.51.100.10', [], undefined, { kind: 'proxyArp', segment: 'seg_host32', segments }).errors.get('segment')).toMatch(/static IPv4/);
 
-    // Pure IPv6 refused with exact Proxy NDP message; 4in6, internal whitespace, and non-unicast IPv4 rejected as invalid IPv4.
+    // Pure IPv6 refused pointing at Proxy NDP; 4in6, internal whitespace, and non-unicast IPv4 rejected as invalid IPv4.
     for (const v6 of ['2001:db8::50', '2001:DB8::/64']) {
       expect(checkVirtualIp('Proxy v6', v6, [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address'))
-        .toBe('Proxy NDP is not offered yet (#43).');
+        .toBe('Proxy ARP is IPv4 only; use Proxy NDP for IPv6.');
     }
     for (const badV4 of ['::ffff:203.0.113.50', '::ffff:203.0.113.50/128', '::ffff:cb00:7132/128', '203.0.113.56 /29', '203.0.113.56/029', '127.0.0.1', '169.254.1.1', '224.0.0.1']) {
       expect(checkVirtualIp('Bad v4', badV4, [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address'))
@@ -260,6 +260,77 @@ describe('VirtualIpsScreen helpers', () => {
     const heldInsideProxy = checkVirtualIp('Held inside', '203.0.113.58', existing, undefined, { kind: 'address' });
     expect(heldInsideProxy.errors.get('address')).toMatch(/proxy ARP/);
     expect(heldInsideProxy.duplicate).toBe(true);
+  });
+
+  it('validates proxyNdp entries, global unicast IPv6, segment rules, and cross-kind overlaps', () => {
+    const wanStatic6 = {
+      id: 'seg_wan6',
+      name: 'WAN',
+      link: 'lnk_wan',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'static', addresses: ['2001:db8:1::2/64'] } },
+    };
+    const wanSlaac = {
+      id: 'seg_slaac',
+      name: 'WAN SLAAC',
+      link: 'lnk_slaac',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'slaac' } },
+    };
+    const lan6 = {
+      id: 'seg_lan',
+      name: 'LAN',
+      link: 'lnk_lan',
+      zone: 'zon_lan',
+      addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'static', addresses: ['2001:db8:2::1/64'] } },
+    };
+    const segments = [wanStatic6, wanSlaac, lan6];
+
+    expect(virtualAddressKind({ kind: 'proxyNdp' })).toBe('proxyNdp');
+    expect(virtualAddressFamily({ kind: 'proxyNdp', address: '2001:db8:1::50' })).toBe('IPv6');
+    expect(virtualAddressFamily({ kind: 'proxyNdp', address: '2001:db8:1::50/128' })).toBeUndefined();
+    expect(virtualAddressFamily({ kind: 'proxyNdp', address: '203.0.113.50' })).toBeUndefined();
+    expect(isSingleVirtualAddress({ kind: 'proxyNdp', address: '2001:db8:1::50' })).toBe(false);
+
+    // Missing or identical segments.
+    const missingSegs = checkVirtualIp('Host 1', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: '', hostSegment: '', segments });
+    expect(missingSegs.errors.get('segment')).toMatch(/uplink segment/);
+    expect(missingSegs.errors.get('hostSegment')).toMatch(/host lives/);
+    expect(checkVirtualIp('Same seg', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_wan6', segments }).errors.get('hostSegment'))
+      .toMatch(/must differ/);
+
+    // Invalid addresses (IPv4, prefixes, ULA, link-local, loopback, unspecified, multicast, 4in6).
+    for (const bad of ['203.0.113.50', '2001:db8:1::50/128', '2001:db8:1::/64', 'fd00::50', 'fc00::50', 'fe80::50', '::1', '::', 'ff02::1', '::ffff:1.2.3.4', '::ffff:102:304']) {
+      expect(checkVirtualIp('Bad ndp', bad, [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+        .toBe('Expected one global unicast IPv6 address, without a length.');
+    }
+    expect(checkVirtualIp('Zone', '2001:db8:1::50%eth0', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+      .toMatch(/interface zone/);
+
+    // Static uplink subnet membership, own static address, and host segment subnet collision.
+    expect(checkVirtualIp('Off static uplink', '2001:db8:9::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+      .toMatch(/static IPv6 subnets/);
+    expect(checkVirtualIp('Own static addr', '2001:db8:1::2', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+      .toMatch(/static address held by a segment/);
+    expect(checkVirtualIp('On host subnet', '2001:db8:2::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments }).errors.get('address'))
+      .toMatch(/host segment's subnet/);
+
+    // Valid on static uplink and on SLAAC uplink.
+    expect(checkVirtualIp('Valid static', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.size).toBe(0);
+    expect(checkVirtualIp('Valid slaac', '2001:db8:9::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments }).errors.size).toBe(0);
+
+    // Overlap checks (both directions) and self-exclusion when editing.
+    const existing: Array<SavedObject<VirtualAddress>> = [
+      { value: { id: 'vip_n1', name: 'NDP 1', kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', address: '2001:db8:1::50' }, version: '1' },
+      { value: { id: 'vip_h6', name: 'Held block', address: '2001:db8:9::/64' }, version: '1' },
+    ];
+    expect(checkVirtualIp('NDP 1', '2001:db8:1::50', existing, 'vip_n1', { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.size).toBe(0);
+    expect(checkVirtualIp('Dup NDP', '2001:0db8:0001::0050', existing, undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_lan', segments }).errors.get('address'))
+      .toMatch(/Another proxy NDP entry/);
+    expect(checkVirtualIp('Hits held block', '2001:db8:9::50', existing, undefined, { kind: 'proxyNdp', segment: 'seg_slaac', hostSegment: 'seg_lan', segments }).errors.get('address'))
+      .toMatch(/overlaps an existing virtual IP/);
+    expect(checkVirtualIp('Held over NDP', '2001:db8:1::/64', existing, undefined, { kind: 'address' }).errors.get('address'))
+      .toMatch(/proxy NDP/);
   });
 });
 
@@ -615,13 +686,13 @@ describe('VirtualIpsScreen', () => {
     expect(optionTexts).toContain('WAN (203.0.113.2/24)');
     expect(optionTexts.some((t) => t?.includes('Cable DHCP'))).toBe(false);
 
-    // IPv6 input shows exact Proxy NDP refusal locally.
+    // IPv6 input points to Proxy NDP locally.
     await user.type(within(drawer).getByLabelText(/^Name/), 'WAN NAT block');
     await user.selectOptions(segmentSelect, 'seg_wan');
     const addrInput = within(drawer).getByRole('textbox', { name: /^Address or prefix/ });
     await user.type(addrInput, '2001:db8::50');
     await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
-    expect(await within(drawer).findByText('Proxy NDP is not offered yet (#43).')).toBeInTheDocument();
+    expect(await within(drawer).findByText('Proxy ARP is IPv4 only; use Proxy NDP for IPv6.')).toBeInTheDocument();
 
     // Server /segment 422 maps directly to the Segment field and focuses it.
     await user.clear(addrInput);
@@ -802,5 +873,115 @@ describe('VirtualIpsScreen', () => {
     const deleteModal = await screen.findByRole('dialog', { name: 'Delete virtual IP' });
     expect(deleteModal).toHaveTextContent('Port forward 2 (Routed HTTPS)');
     expect(within(deleteModal).queryByRole('button', { name: 'Delete virtual IP' })).not.toBeInTheDocument();
+  });
+
+  it('displays, creates, edits, and filters proxyNdp entries with hostSegment and /128 host note', async () => {
+    const user = userEvent.setup();
+    let postedBody: Record<string, unknown> | undefined;
+    let putBody: Record<string, unknown> | undefined;
+    let rejectHostSegment = false;
+    const ndpVip: SavedObject<VirtualAddress> = {
+      value: {
+        id: 'vip_ndp',
+        name: 'Web server v6',
+        kind: 'proxyNdp',
+        segment: 'seg_wan',
+        hostSegment: 'seg_lan',
+        address: '2001:db8:1::50',
+      },
+      version: '4',
+    };
+    const multiSnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        segments: [
+          ...sampleSnapshot.value.segments,
+          { id: 'seg_wan', name: 'Uplink', link: 'lnk_1', zone: 'zon_wan', addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'static', addresses: ['2001:db8:1::2/64'] } } },
+        ],
+        virtualAddresses: [...sampleSnapshot.value.virtualAddresses!, ndpVip.value],
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '9', items: [...fixtureVips, ndpVip] },
+      '/api/v1/config': multiSnapshot,
+      'POST /api/v1/config/virtualAddresses': (init) => {
+        if (rejectHostSegment) {
+          return jsonResponse(422, {
+            error: {
+              code: 'VALIDATION_FAILED',
+              message: 'Validation failed.',
+              details: [{ path: '/virtualAddresses/4/hostSegment', message: 'Host segment must differ.' }],
+            },
+          });
+        }
+        postedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(201, { value: { id: 'vip_ndp_new', ...postedBody }, version: '10' });
+      },
+      'PUT /api/v1/config/virtualAddresses/vip_ndp': (init) => {
+        putBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { value: { id: 'vip_ndp', ...putBody }, version: '5' });
+      },
+    });
+    const { onSaved } = renderVirtualIps();
+
+    expect(await screen.findByText('Web server v6')).toBeInTheDocument();
+    const row = screen.getByText('Web server v6').closest('tr')!;
+    expect(within(row).getByText('Proxy NDP')).toBeInTheDocument();
+    expect(within(row).getByText('2001:db8:1::50')).toBeInTheDocument();
+    expect(within(row).getByText('IPv6')).toBeInTheDocument();
+    expect(within(row).getByText('Uplink → LAN')).toBeInTheDocument();
+
+    // Filter by "proxy ndp" and by host segment name.
+    const filter = screen.getByLabelText('Filter virtual IPs');
+    await user.type(filter, 'proxy ndp');
+    expect(screen.getByText('Web server v6')).toBeInTheDocument();
+    expect(screen.queryByText('DNS v4')).not.toBeInTheDocument();
+    await user.clear(filter);
+
+    // Add a new Proxy NDP entry: verifies uplink/host pickers, /128 note, /hostSegment 422 mapping, and payload.
+    await user.click(screen.getByRole('button', { name: 'Add virtual IP' }));
+    const drawer = await screen.findByRole('dialog', { name: 'Add virtual IP' });
+    await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'proxyNdp');
+    expect(within(drawer).getByText('Host configuration')).toBeInTheDocument();
+    expect(within(drawer).getByText(/Configure this address on the inside host/)).toHaveTextContent('/128');
+
+    const uplinkSelect = within(drawer).getByLabelText(/^Uplink segment/);
+    const hostSelect = within(drawer).getByLabelText(/^Host segment/);
+    await user.type(within(drawer).getByLabelText(/^Name/), 'Mail v6');
+    await user.selectOptions(uplinkSelect, 'seg_wan');
+    await user.selectOptions(hostSelect, 'seg_lan');
+    await user.type(within(drawer).getByRole('textbox', { name: /^Address/ }), '2001:db8:1::60');
+
+    rejectHostSegment = true;
+    await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
+    expect(await within(drawer).findByText('Host segment must differ.')).toBeInTheDocument();
+    expect(hostSelect).toHaveAttribute('aria-invalid', 'true');
+    expect(hostSelect).toHaveFocus();
+
+    rejectHostSegment = false;
+    await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
+    await waitFor(() => expect(postedBody).toEqual({
+      name: 'Mail v6',
+      kind: 'proxyNdp',
+      segment: 'seg_wan',
+      hostSegment: 'seg_lan',
+      address: '2001:db8:1::60',
+    }));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+
+    // Edit existing proxyNdp entry and switch back to held address without sending segment/hostSegment.
+    await user.click(screen.getByRole('button', { name: 'Edit virtual IP Web server v6' }));
+    const editDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: Web server v6' });
+    await user.selectOptions(within(editDrawer).getByLabelText(/^Kind/), 'address');
+    expect(within(editDrawer).queryByLabelText(/^Host segment/)).not.toBeInTheDocument();
+    const editAddr = within(editDrawer).getByRole('textbox', { name: /^Address or prefix/ });
+    await user.clear(editAddr);
+    await user.type(editAddr, '2001:db8:53::1');
+    await user.click(within(editDrawer).getByRole('button', { name: 'Save virtual IP' }));
+    await waitFor(() => expect(putBody).toEqual({
+      name: 'Web server v6',
+      address: '2001:db8:53::1',
+    }));
   });
 });

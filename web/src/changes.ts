@@ -184,7 +184,7 @@ const referencePaths: Record<string, Set<string>> = {
   'aliases.ports': new Set(['members']),
   rules: new Set(['', 'from.zones', 'from.addresses', 'to.zones', 'to.addresses', 'ports']),
   management: new Set(['segment', 'allowedSources']),
-  virtualAddresses: new Set(['segment']),
+  virtualAddresses: new Set(['segment', 'hostSegment']),
   'nat.portForwards': new Set(['', 'ingressZones', 'from', 'to.address', 'ports']),
   'nat.oneToOne': new Set(['', 'zone', 'destination']),
 };

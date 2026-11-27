@@ -346,7 +346,7 @@ export interface DnsService {
   virtualAddresses?: string[];
 }
 
-export type VirtualAddressKind = 'address' | 'proxyArp';
+export type VirtualAddressKind = 'address' | 'proxyArp' | 'proxyNdp';
 
 export interface VirtualAddress {
   id: string;
@@ -355,6 +355,7 @@ export interface VirtualAddress {
   kind?: VirtualAddressKind;
   address: string;
   segment?: string;
+  hostSegment?: string;
 }
 
 export type DhcpOptionType = 'string' | 'ip' | 'uint8' | 'uint16' | 'uint32' | 'boolean' | 'hex';

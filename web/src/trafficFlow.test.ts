@@ -1191,4 +1191,81 @@ describe('simulateTrafficFlow', () => {
     expect(forwardedV6ToBlock.finalTuple).toBe('TCP 2001:db8:99::1 → [2001:db8:53::99]:443');
     expect(forwardedV6ToBlock.steps.find((s) => s.stage === 'filter')?.decidedBy).toEqual({ label: 'Port forward #2 auto rule (Forward v6 into held block)', to: '/firewall/nat' });
   });
+
+  it('routes proxyNdp IPv6 traffic to hostSegment on forward chain rather than treating it as firewall input', () => {
+    const withProxyNdp: Snapshot['value'] = {
+      ...baseConfig,
+      virtualAddresses: [
+        ...(baseConfig.virtualAddresses ?? []),
+        { id: 'vip_ndp', name: 'Inside v6 host', kind: 'proxyNdp', segment: 'seg_wan', hostSegment: 'seg_lan', address: '2001:db8:1::50' },
+      ],
+      nat: {
+        ...baseConfig.nat,
+        portForwards: [
+          {
+            id: 'pfw_v6_self',
+            name: 'Self v6 forward',
+            enabled: true,
+            family: 'ipv6',
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: [],
+            to: { self: true },
+            ports: '443',
+            target: { self: true },
+            filterRule: 'auto',
+          },
+        ],
+      },
+      rules: [
+        {
+          id: 'rul_wan_lan_v6',
+          name: 'Allow WAN to LAN HTTPS',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['zon_wan'], addresses: [] },
+          to: { zones: ['zon_lan'], addresses: [] },
+          ports: [],
+          log: false,
+        },
+        ...(baseConfig.rules ?? []),
+      ],
+    };
+
+    // Traffic from WAN to the proxyNdp address (on WAN's /64) is NOT matched by to.self and routes via /128 to LAN (forward chain).
+    const forwarded = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:99::1', dstIp: '2001:db8:1::50', dstPort: 443 },
+      withProxyNdp,
+    );
+    expect(forwarded.verdict).toBe('accept');
+    expect(forwarded.chain).toBe('forward');
+    expect(forwarded.finalTuple).toBe('TCP 2001:db8:99::1 → [2001:db8:1::50]:443');
+    expect(forwarded.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Inside v6 host', to: '/network/virtual-ips' });
+
+    // Without a forward allow rule, WAN->LAN traffic to the proxyNdp host is dropped on forward chain.
+    const blocked = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:99::1', dstIp: '2001:db8:1::50', dstPort: 443 },
+      { ...withProxyNdp, rules: baseConfig.rules ?? [] },
+    );
+    expect(blocked.verdict).toBe('drop');
+    expect(blocked.chain).toBe('forward');
+
+    // When hostSegment's link is disabled, the /128 route on hostSegment is inactive (falls back to WAN's /64 connected route).
+    const disabledHostLink: Snapshot['value'] = {
+      ...withProxyNdp,
+      links: withProxyNdp.links.map((l) => (l.id === 'lnk_lan' ? { ...l, enabled: false } : l)),
+    };
+    const hostDown = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:99::1', dstIp: '2001:db8:1::50', dstPort: 443 },
+      disabledHostLink,
+    );
+    expect(hostDown.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Interface WAN', to: '/network/interfaces' });
+
+    // Link-local source on WAN cannot forward to the proxyNdp host on LAN (RFC 4291).
+    const linkLocalBlocked = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'icmpv6', srcIp: 'fe80::1', dstIp: '2001:db8:1::50' },
+      withProxyNdp,
+    );
+    expect(linkLocalBlocked.verdict).toBe('no_route');
+  });
 });

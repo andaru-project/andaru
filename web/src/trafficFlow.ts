@@ -705,7 +705,17 @@ export function simulateTrafficFlow(
 
   const localVirtualOwners: Array<{ prefix: ParsedPrefix; owner: LocalOwner }> = [];
   const proxyArpRoutes: Array<{ vip: NonNullable<Snapshot['value']['virtualAddresses']>[number]; prefix: ParsedPrefix }> = [];
+  const proxyNdpRoutes: Array<{ vip: NonNullable<Snapshot['value']['virtualAddresses']>[number]; ip: ParsedIp; hostSegment: Segment }> = [];
   for (const vip of snapshot.virtualAddresses ?? []) {
+    if (vip.kind === 'proxyNdp') {
+      // Matches internal/render/networkd.go: each proxyNdp entry installs a /128 on-link route on hostSegment's link.
+      const ip = parseIp(vip.address);
+      const hostSeg = vip.hostSegment ? segmentsById.get(vip.hostSegment) : undefined;
+      if (ip && ip.family === 6 && hostSeg && isLinkUsable(hostSeg.link, linksById)) {
+        proxyNdpRoutes.push({ vip, ip, hostSegment: hostSeg });
+      }
+      continue;
+    }
     const prefix = parsePrefix(vip.address);
     if (!prefix) continue;
     if (vip.kind === 'proxyArp') {
@@ -1109,7 +1119,31 @@ export function simulateTrafficFlow(
       && (!bestConnected || bestUnreachable.prefix.bits > bestConnected.prefix.bits)
       && (!bestDelegated || bestUnreachable.prefix.bits > bestDelegated.prefix.bits),
     );
-    if (unreachableWins && bestUnreachable) {
+    // Proxy NDP installs a /128 on-link route on hostSegment, beating any shorter connected/delegated/unreachable prefix.
+    const matchedProxyNdp = effectiveDstIp.family === 6
+      ? proxyNdpRoutes.find((r) => r.ip.value === effectiveDstIp.value)
+      : undefined;
+    if (matchedProxyNdp) {
+      if ((isLinkLocalIpv6(srcIp) || isLinkLocalIpv6(effectiveDstIp)) && matchedProxyNdp.hostSegment.id !== ingressSegment.id) {
+        return stopUnroutable(
+          `IPv6 link-local traffic cannot be forwarded from ${ingressSegment.name} to ${matchedProxyNdp.hostSegment.name} (RFC 4291).`,
+          'Packet cannot be forwarded across links (link-local scope).',
+        );
+      }
+      chain = 'forward';
+      egressSegment = matchedProxyNdp.hostSegment;
+      egressZoneId = egressSegment.zone;
+      const ez = zonesById.get(egressZoneId);
+      steps.push({
+        stage: 'routing',
+        title: 'Routing',
+        summary: `Proxy NDP route ${effectiveDstIp.canonical}/128 via ${egressSegment.name} (zone ${ez?.name ?? egressZoneId}).`,
+        outcome: 'pass',
+        decidedBy: { label: `Virtual IP ${matchedProxyNdp.vip.name}`, to: '/network/virtual-ips' },
+        zone: ez ? { name: ez.name, color: ez.color } : undefined,
+        detail: 'Chain: forward',
+      });
+    } else if (unreachableWins && bestUnreachable) {
       if (options.liveLeases6 === undefined && bestUnreachable.to === '/network/dhcp') {
         warnings.push(`Active DHCPv6 prefix-delegation leases were unavailable; assuming ${effectiveDstIp.canonical} inside ${bestUnreachable.prefix.raw} is unleased.`);
       }
@@ -1118,8 +1152,7 @@ export function simulateTrafficFlow(
         `Destination falls in unallocated IPv6 prefix ${bestUnreachable.prefix.raw} (unreachable route).`,
         { label: bestUnreachable.label, to: bestUnreachable.to },
       );
-    }
-    if (delegatedBeatsConnected && bestDelegated) {
+    } else if (delegatedBeatsConnected && bestDelegated) {
       if ((isLinkLocalIpv6(srcIp) || isLinkLocalIpv6(effectiveDstIp)) && bestDelegated.segment.id !== ingressSegment.id) {
         return stopUnroutable(
           `IPv6 link-local traffic cannot be forwarded from ${ingressSegment.name} to ${bestDelegated.segment.name} (RFC 4291).`,

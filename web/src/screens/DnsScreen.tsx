@@ -508,7 +508,9 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                               <Text size="xs" c="dimmed" ff="monospace">{vip.address}</Text>
                               {virtualAddressKind(vip) === 'proxyArp'
                                 ? <Text size="xs" className="warning-text">Proxy ARP (cannot listen)</Text>
-                                : !isSingleVirtualAddress(vip) && <Text size="xs" className="warning-text">Block (cannot listen)</Text>}
+                                : virtualAddressKind(vip) === 'proxyNdp'
+                                  ? <Text size="xs" className="warning-text">Proxy NDP (cannot listen)</Text>
+                                  : !isSingleVirtualAddress(vip) && <Text size="xs" className="warning-text">Block (cannot listen)</Text>}
                             </Group>
                           </Group>
                         ))}
