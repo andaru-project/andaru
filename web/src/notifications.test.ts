@@ -249,4 +249,30 @@ describe('notifications helpers', () => {
     act(() => { dismissNotificationToast(3); });
     expect(screen.getByTestId('queue')).toHaveTextContent('2:N2,4:N4,5:N5');
   });
+
+  it('clears an earlier visible timer when a toast is updated while the tab is hidden', () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = 'visible';
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      function QueueProbe() {
+        const toasts = useNotificationToasts();
+        return createElement('span', { 'data-testid': 'queue' }, toasts.map((t) => `${t.id}:${t.subject}`).join(','));
+      }
+      render(createElement(QueueProbe));
+
+      act(() => { pushNotificationToast({ id: 7, severity: 'info', subject: 'Initial' }); });
+      visibility = 'hidden';
+      act(() => {
+        pushNotificationToast({ id: 7, severity: 'info', subject: 'Updated while hidden' });
+        vi.advanceTimersByTime(10_000);
+      });
+      // Old visible timer was cleared so the updated toast waits until the tab returns.
+      expect(screen.getByTestId('queue')).toHaveTextContent('7:Updated while hidden');
+    } finally {
+      if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility);
+      else Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    }
+  });
 });

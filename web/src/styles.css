@@ -732,12 +732,6 @@ path.traffic-sent {
   border-left-color: var(--mantine-color-red-filled);
 }
 
-.notification-toast-content {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
 .notification-toast-body {
   background: transparent;
   border: 0;

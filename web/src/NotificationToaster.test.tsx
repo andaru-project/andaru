@@ -7,8 +7,9 @@ import {
   defaultNotificationPrefs,
   pushNotificationToast,
   setNotificationPrefs,
+  useBrowserNotificationsActive,
 } from './notifications';
-import { act, fireEvent, render, screen } from './test/render';
+import { act, fireEvent, render, screen, within } from './test/render';
 import type { Notification, NotificationList } from './types';
 
 const originalNotification = window.Notification;
@@ -35,12 +36,17 @@ function LocationProbe() {
   return <div data-testid="location">{pathname}</div>;
 }
 
+function BrowserActiveProbe() {
+  return <div data-testid="browser-active">{String(useBrowserNotificationsActive())}</div>;
+}
+
 function mountToaster(notifications: NotificationList | undefined, hostname = 'fw01') {
   const ui = (list: NotificationList | undefined) => (
     <MemoryRouter initialEntries={['/']}>
       <Routes>
         <Route path="*" element={<LocationProbe />} />
       </Routes>
+      <BrowserActiveProbe />
       <NotificationToaster notifications={list} hostname={hostname} />
     </MemoryRouter>
   );
@@ -59,7 +65,7 @@ function stubNotification(options: { permission?: NotificationPermission; throws
     onclick: ((this: globalThis.Notification, ev: Event) => unknown) | null;
     onclose: ((this: globalThis.Notification, ev: Event) => unknown) | null;
   }> = [];
-  const permission: NotificationPermission = options.permission ?? 'granted';
+  let permission: NotificationPermission = options.permission ?? 'granted';
 
   class FakeNotification {
     title: string;
@@ -84,7 +90,7 @@ function stubNotification(options: { permission?: NotificationPermission; throws
 
   Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
   Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: FakeNotification });
-  return { instances };
+  return { instances, setPermission: (next: NotificationPermission) => { permission = next; } };
 }
 
 afterEach(() => {
@@ -97,37 +103,39 @@ afterEach(() => {
   Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: originalNotification });
 });
 
-it('seeds existing notifications silently on first load, renders valid button HTML, and keeps CloseButton outside the live region', async () => {
+it('seeds existing notifications silently, keeps pre-mounted live regions outside CloseButton, and renders valid button HTML', async () => {
   const user = userEvent.setup();
   const initial = sample({ id: 1, subject: 'Existing alert' });
   const view = mountToaster(undefined);
-  // Stack container stays mounted so screen readers observe dynamically inserted live content.
-  expect(screen.getByRole('region', { name: 'Live notifications' })).toBeInTheDocument();
+
+  // Persistent polite and assertive live regions are mounted before any toast arrives; no empty region landmark exists.
+  expect(document.querySelector('[aria-live="polite"]')).not.toBeNull();
+  expect(document.querySelector('[aria-live="assertive"]')).not.toBeNull();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 
   view.update({ items: [initial] });
-  expect(screen.queryByRole('status')).not.toBeInTheDocument();
-  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 
-  // New critical notification pops an assertive alert toast.
+  // New critical notification announces in the assertive live region and renders in the visible stack.
   const critical = sample({ id: 2, severity: 'critical', subject: 'Apply 9 rolled back', link: '/changes' });
   view.update({ items: [critical, initial] });
-  const alertToast = screen.getByRole('alert');
-  expect(alertToast).toHaveTextContent('Apply 9 rolled back');
-  expect(alertToast).toHaveTextContent('critical');
-  // CloseButton lives outside the role="alert" node so its label is not read as alert content.
-  expect(alertToast.querySelector('.notification-toast-close')).toBeNull();
+  const region = screen.getByRole('region', { name: 'Live notifications' });
+  expect(region).toHaveTextContent('Apply 9 rolled back');
+  expect(document.querySelector('[aria-live="assertive"]')).toHaveTextContent('critical: Apply 9 rolled back');
+  expect(document.querySelector('[aria-live="assertive"]')?.querySelector('.notification-toast-close')).toBeNull();
+
   // Toast body button contains only phrasing elements (no <div> or <p> inside <button>).
-  const bodyButton = screen.getByRole('button', { name: /^critical Apply 9 rolled back/ });
+  const bodyButton = within(region).getByRole('button', { name: /^critical Apply 9 rolled back/ });
   expect(bodyButton.querySelector('div, p')).toBeNull();
 
   // Clicking the toast navigates to its safe in-app link and dismisses it.
   await user.click(bodyButton);
   expect(screen.getByTestId('location')).toHaveTextContent('/changes');
-  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 
-  // Updating an existing notification's timestamp raises a fresh toast; unsafe links fall back to /system/notifications.
+  // Updating an existing notification's timestamp announces politely; unsafe links fall back to /system/notifications.
   view.update({ items: [critical, sample({ id: 1, subject: 'Existing alert escalated', link: '//evil.example', updated: '2026-11-27T08:05:00Z' })] });
-  expect(screen.getByRole('status')).toHaveTextContent('Existing alert escalated');
+  expect(document.querySelector('[aria-live="polite"]')).toHaveTextContent('warning: Existing alert escalated');
   await user.click(screen.getByRole('button', { name: /^warning Existing alert escalated/ }));
   expect(screen.getByTestId('location')).toHaveTextContent('/system/notifications');
 });
@@ -137,36 +145,37 @@ it('dismisses toasts via close button, auto-dismiss timeout (pausing on hover/fo
   const view = mountToaster({ items: [] });
 
   view.update({ items: [sample({ id: 10, severity: 'info', subject: 'Update ready' })] });
-  const toastCard = screen.getByRole('status').closest('.notification-toast') as HTMLElement;
+  const region = screen.getByRole('region', { name: 'Live notifications' });
+  const toastCard = region.querySelector('.notification-toast') as HTMLElement;
   expect(toastCard).toHaveTextContent('Update ready');
 
   // Hover pauses auto-dismiss past the 6s timeout.
   fireEvent.mouseEnter(toastCard);
   act(() => { vi.advanceTimersByTime(10_000); });
-  expect(screen.getByRole('status')).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Live notifications' })).toBeInTheDocument();
 
   // Focus inside toast prevents mouseLeave from resuming the timer prematurely.
   const bodyButton = screen.getByRole('button', { name: /^info Update ready/ });
   bodyButton.focus();
   fireEvent.mouseLeave(toastCard);
   act(() => { vi.advanceTimersByTime(10_000); });
-  expect(screen.getByRole('status')).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Live notifications' })).toBeInTheDocument();
 
   // Blurring outside resumes timeout and removes the toast after 6s.
   fireEvent.blur(bodyButton, { relatedTarget: document.body });
   act(() => { vi.advanceTimersByTime(6_000); });
-  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 
   // A notification cleared from the backend list immediately closes its open toast.
   view.update({ items: [sample({ id: 11, severity: 'warning', subject: 'Link down' })] });
-  expect(screen.getByRole('status')).toHaveTextContent('Link down');
+  expect(screen.getByRole('region', { name: 'Live notifications' })).toHaveTextContent('Link down');
   view.update({ items: [] });
-  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 
   // Close button dismisses without navigating.
   act(() => { pushNotificationToast({ id: 'test-1', severity: 'info', subject: 'Manual close test', link: '/changes' }); });
   fireEvent.click(screen.getByRole('button', { name: 'Close notification: Manual close test' }));
-  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
   expect(screen.getByTestId('location')).toHaveTextContent('/');
 });
 
@@ -174,9 +183,10 @@ it('caps bursts to 4 visible toasts and stays silent when in-page toasts are dis
   const view = mountToaster({ items: [] });
   const burst = [6, 5, 4, 3, 2, 1].map((id) => sample({ id, subject: `Burst ${id}` }));
   view.update({ items: burst });
-  const statuses = screen.getAllByRole('status');
-  expect(statuses).toHaveLength(4);
-  expect(statuses.map((el) => el.textContent)).toEqual(expect.arrayContaining([
+  const region = screen.getByRole('region', { name: 'Live notifications' });
+  const cards = region.querySelectorAll('.notification-toast');
+  expect(cards).toHaveLength(4);
+  expect(Array.from(cards).map((el) => el.textContent)).toEqual(expect.arrayContaining([
     expect.stringContaining('Burst 6'),
     expect.stringContaining('Burst 5'),
     expect.stringContaining('Burst 4'),
@@ -188,21 +198,22 @@ it('caps bursts to 4 visible toasts and stays silent when in-page toasts are dis
     setNotificationPrefs({ toasts: false });
   });
   view.update({ items: [sample({ id: 99, subject: 'Muted alert' }), ...burst] });
-  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 });
 
-it('routes background/idle alerts to native notifications, caps bursts at 3, closes stale handles on update/unmount, and holds hidden fallback toasts until visible', () => {
+it('routes background/idle alerts to native notifications, caps bursts at 3, syncs revoked permission while hidden, and holds hidden fallback toasts until visible', () => {
   vi.useFakeTimers();
   const focusSpy = vi.spyOn(window, 'focus').mockImplementation(() => {});
   const stub = stubNotification({ permission: 'granted' });
   setNotificationPrefs({ toasts: true, browser: true });
 
   const view = mountToaster({ items: [] }, 'edge-gw');
+  expect(screen.getByTestId('browser-active')).toHaveTextContent('true');
 
   // Active visible tab still gets an in-page toast instead of an OS notification.
   view.update({ items: [sample({ id: 1, subject: 'Active tab alert' })] });
   expect(stub.instances).toHaveLength(0);
-  expect(screen.getByRole('status')).toHaveTextContent('Active tab alert');
+  expect(screen.getByRole('region', { name: 'Live notifications' })).toHaveTextContent('Active tab alert');
   act(() => { clearNotificationToasts(); });
 
   // Hidden tab routes to a native browser notification; clicking it focuses and navigates.
@@ -210,7 +221,7 @@ it('routes background/idle alerts to native notifications, caps bursts at 3, clo
   view.update({ items: [sample({ id: 2, subject: 'Background alert', link: '/changes' }), sample({ id: 1, subject: 'Active tab alert' })] });
   expect(stub.instances).toHaveLength(1);
   expect(stub.instances[0].title).toBe('Background alert — edge-gw');
-  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 
   act(() => { stub.instances[0].onclick?.call(stub.instances[0] as unknown as globalThis.Notification, new Event('click')); });
   expect(focusSpy).toHaveBeenCalledTimes(1);
@@ -221,7 +232,7 @@ it('routes background/idle alerts to native notifications, caps bursts at 3, clo
   act(() => { document.dispatchEvent(new Event('visibilitychange')); });
   view.update({ items: [sample({ id: 2, subject: 'Background alert updated', updated: '2026-11-27T08:05:00Z' }), sample({ id: 1, subject: 'Active tab alert' })] });
   expect(stub.instances[0].close).toHaveBeenCalledTimes(2);
-  expect(screen.getByRole('status')).toHaveTextContent('Background alert updated');
+  expect(screen.getByRole('region', { name: 'Live notifications' })).toHaveTextContent('Background alert updated');
   act(() => { clearNotificationToasts(); });
 
   // Visible but idle (> 3 min without interaction) caps native bursts at 3.
@@ -230,17 +241,18 @@ it('routes background/idle alerts to native notifications, caps bursts at 3, clo
   view.update({ items: [...idleBurst, sample({ id: 2, subject: 'Background alert updated', updated: '2026-11-27T08:05:00Z' }), sample({ id: 1, subject: 'Active tab alert' })] });
   expect(stub.instances).toHaveLength(4); // 1 earlier + 3 capped
 
-  // If `new Notification()` throws while hidden, fallback toast waits until the tab becomes visible to start expiring.
-  stubNotification({ permission: 'granted', throws: true });
+  // Revoking permission while hidden immediately syncs useBrowserNotificationsActive() to false and queues a fallback toast.
   visibility = 'hidden';
+  stub.setPermission('denied');
   view.update({ items: [sample({ id: 20, severity: 'info', subject: 'Hidden fallback alert' }), ...idleBurst] });
+  expect(screen.getByTestId('browser-active')).toHaveTextContent('false');
   act(() => { vi.advanceTimersByTime(20_000); });
-  expect(screen.getByRole('status')).toHaveTextContent('Hidden fallback alert');
+  expect(screen.getByRole('region', { name: 'Live notifications' })).toHaveTextContent('Hidden fallback alert');
 
   visibility = 'visible';
   act(() => { document.dispatchEvent(new Event('visibilitychange')); });
   act(() => { vi.advanceTimersByTime(6_000); });
-  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Live notifications' })).not.toBeInTheDocument();
 
   // Unmounting closes remaining open native handles.
   view.unmount();

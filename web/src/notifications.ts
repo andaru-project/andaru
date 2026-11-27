@@ -151,6 +151,10 @@ function notifySupport() {
   for (const listener of supportListeners) listener();
 }
 
+export function syncBrowserNotificationSupport() {
+  notifySupport();
+}
+
 function subscribeSupport(listener: () => void) {
   if (supportListeners.size === 0 && typeof window !== 'undefined') {
     window.addEventListener('focus', notifySupport);
@@ -289,7 +293,8 @@ export function pushNotificationToast(message: ToastMessage) {
   } else {
     currentToasts = combined;
   }
-  // Keep timers paused while the toast is hovered/focused or while the tab is hidden (so fallback toasts wait to be seen).
+  // Always clear any prior timer for this id so a hidden-tab update cannot expire under an earlier visible timer.
+  clearToastTimer(message.id);
   const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
   if (!pausedToasts.has(message.id) && !hidden) {
     scheduleToastDismiss(message.id, message.severity);
@@ -313,6 +318,7 @@ export function pauseNotificationToast(id: number | string) {
 
 export function resumeNotificationToast(id: number | string) {
   pausedToasts.delete(id);
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
   const toast = currentToasts.find((item) => item.id === id);
   if (!toast) return;
   scheduleToastDismiss(toast.id, toast.severity);

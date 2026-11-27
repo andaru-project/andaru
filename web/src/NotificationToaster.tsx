@@ -1,4 +1,4 @@
-import { Badge, CloseButton, Group, Text } from '@mantine/core';
+import { Badge, CloseButton, Group, Text, VisuallyHidden } from '@mantine/core';
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import {
@@ -15,6 +15,7 @@ import {
   resumeNotificationToast,
   severityColor,
   showBrowserNotification,
+  syncBrowserNotificationSupport,
   useNotificationToasts,
   type ToastMessage,
 } from './notifications';
@@ -34,6 +35,10 @@ function isHovered(element: HTMLElement): boolean {
   } catch {
     return false;
   }
+}
+
+function toastAnnouncement(toast: ToastMessage): string {
+  return [toast.severity, toast.subject, toast.detail].filter(Boolean).join(': ');
 }
 
 export function NotificationToaster({ notifications, hostname }: NotificationToasterProps) {
@@ -110,8 +115,13 @@ export function NotificationToaster({ notifications, hostname }: NotificationToa
     if (changed.length === 0) return;
 
     const prefs = getNotificationPrefs();
+    const browserGranted = getBrowserNotificationSupport() === 'granted';
+    if (prefs.browser && !browserGranted) {
+      // Sync subscribers immediately when permission was revoked while the tab stayed hidden or focused.
+      syncBrowserNotificationSupport();
+    }
     const activeInTab = document.visibilityState === 'visible' && Date.now() - lastActivityRef.current < activeIdleMs;
-    const useBrowser = prefs.browser && getBrowserNotificationSupport() === 'granted' && !activeInTab;
+    const useBrowser = prefs.browser && browserGranted && !activeInTab;
 
     if (!useBrowser && !prefs.toasts) return;
 
@@ -142,67 +152,78 @@ export function NotificationToaster({ notifications, hostname }: NotificationToa
     void navigate(isSafeAppLink(toast.link) ? toast.link : '/system/notifications');
   }
 
-  // Keep the stack container mounted so live-region insertions inside it are announced reliably by screen readers.
+  const politeToasts = toasts.filter((toast) => toast.severity !== 'critical');
+  const assertiveToasts = toasts.filter((toast) => toast.severity === 'critical');
+
   return (
-    <section className="notification-toast-stack" aria-label="Live notifications">
-      {toasts.map((toast) => (
-        <div
-          key={toast.id}
-          className="notification-toast"
-          data-severity={toast.severity}
-          onMouseEnter={() => pauseNotificationToast(toast.id)}
-          onMouseLeave={(event) => {
-            if (!event.currentTarget.contains(document.activeElement)) {
-              resumeNotificationToast(toast.id);
-            }
-          }}
-          onFocus={() => pauseNotificationToast(toast.id)}
-          onBlur={(event) => {
-            if (
-              !event.currentTarget.contains(event.relatedTarget as Node | null) &&
-              !isHovered(event.currentTarget)
-            ) {
-              resumeNotificationToast(toast.id);
-            }
-          }}
-        >
-          <div className="notification-toast-content" role={toast.severity === 'critical' ? 'alert' : 'status'}>
-            <button type="button" className="notification-toast-body" onClick={() => openToast(toast)}>
-              <Group component="span" gap="xs" wrap="nowrap" align="center">
-                <Badge
-                  component="span"
-                  size="xs"
-                  className="plain-badge"
-                  color={severityColor[toast.severity]}
-                  variant={toast.severity === 'critical' ? 'filled' : 'light'}
-                >
-                  {toast.severity}
-                </Badge>
-                {' '}
-                <Text component="span" size="sm" fw={600} className="notification-toast-subject">{toast.subject}</Text>
-              </Group>
-              {toast.detail && (
-                <>
+    <>
+      {/* Persistent visually-hidden live regions ensure AT announces every new toast without reading CloseButton labels. */}
+      <VisuallyHidden aria-live="polite" aria-atomic="false">
+        {politeToasts.map((toast) => <span key={toast.id}>{toastAnnouncement(toast)}</span>)}
+      </VisuallyHidden>
+      <VisuallyHidden aria-live="assertive" aria-atomic="false">
+        {assertiveToasts.map((toast) => <span key={toast.id}>{toastAnnouncement(toast)}</span>)}
+      </VisuallyHidden>
+      {toasts.length > 0 && (
+        <section className="notification-toast-stack" aria-label="Live notifications">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className="notification-toast"
+              data-severity={toast.severity}
+              onMouseEnter={() => pauseNotificationToast(toast.id)}
+              onMouseLeave={(event) => {
+                if (!event.currentTarget.contains(document.activeElement)) {
+                  resumeNotificationToast(toast.id);
+                }
+              }}
+              onFocus={() => pauseNotificationToast(toast.id)}
+              onBlur={(event) => {
+                if (
+                  !event.currentTarget.contains(event.relatedTarget as Node | null) &&
+                  !isHovered(event.currentTarget)
+                ) {
+                  resumeNotificationToast(toast.id);
+                }
+              }}
+            >
+              <button type="button" className="notification-toast-body" onClick={() => openToast(toast)}>
+                <Group component="span" gap="xs" wrap="nowrap" align="center">
+                  <Badge
+                    component="span"
+                    size="xs"
+                    className="plain-badge"
+                    color={severityColor[toast.severity]}
+                    variant={toast.severity === 'critical' ? 'filled' : 'light'}
+                  >
+                    {toast.severity}
+                  </Badge>
                   {' '}
-                  <Text component="span" size="xs" c="dimmed" className="notification-toast-detail">{toast.detail}</Text>
-                </>
-              )}
-              {toast.source && (
-                <>
-                  {' '}
-                  <Text component="span" size="xs" c="dimmed" className="notification-toast-source">{toast.source}</Text>
-                </>
-              )}
-            </button>
-          </div>
-          <CloseButton
-            size="sm"
-            className="notification-toast-close"
-            aria-label={`Close notification: ${toast.subject}`}
-            onClick={() => dismissNotificationToast(toast.id)}
-          />
-        </div>
-      ))}
-    </section>
+                  <Text component="span" size="sm" fw={600} className="notification-toast-subject">{toast.subject}</Text>
+                </Group>
+                {toast.detail && (
+                  <>
+                    {' '}
+                    <Text component="span" size="xs" c="dimmed" className="notification-toast-detail">{toast.detail}</Text>
+                  </>
+                )}
+                {toast.source && (
+                  <>
+                    {' '}
+                    <Text component="span" size="xs" c="dimmed" className="notification-toast-source">{toast.source}</Text>
+                  </>
+                )}
+              </button>
+              <CloseButton
+                size="sm"
+                className="notification-toast-close"
+                aria-label={`Close notification: ${toast.subject}`}
+                onClick={() => dismissNotificationToast(toast.id)}
+              />
+            </div>
+          ))}
+        </section>
+      )}
+    </>
   );
 }
