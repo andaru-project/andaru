@@ -25,9 +25,6 @@ Added layers:     14    Size: 48.2 MB
 	if est.TotalLayers != 320 || est.TotalBytes != 1_100_000_000 {
 		t.Fatalf("unexpected total: %+v", est)
 	}
-	if est.RemovedLayers != 12 || est.RemovedBytes != 44_300_000 {
-		t.Fatalf("unexpected removed: %+v", est)
-	}
 	if est.DownloadLayers != 14 || est.DownloadBytes != 48_200_000 {
 		t.Fatalf("unexpected download: %+v", est)
 	}
@@ -39,18 +36,44 @@ Added layers:     14    Size: 48.2 MB
 		t.Fatalf("unexpected metadata-only estimate: %+v", est)
 	}
 
+	// Malformed Added layers must return nil rather than fabricating 0 B.
+	badAdded := "Total new layers: 320  Size: 1.1 GB\nAdded layers: 14  Size: 48.2 bogus\n"
+	if est := ParseCheckEstimate([]byte(badAdded)); est != nil {
+		t.Fatalf("expected nil when Added layers fails to parse, got %+v", est)
+	}
+
+	// Hostile inputs: Unicode case expansion before Size:, 2^64 overflow, comma thousands separator.
+	if est := ParseCheckEstimate([]byte("Added layers: \u0130\u0130\u0130 Size: 10 MB\n")); est != nil {
+		t.Fatalf("expected nil for non-integer count with Unicode İ, got %+v", est)
+	}
+	if est := ParseCheckEstimate([]byte("Added layers: 1  Size: 16384 PiB\n")); est != nil {
+		t.Fatalf("expected nil for 2^64 overflow size, got %+v", est)
+	}
+	if est := ParseCheckEstimate([]byte("Added layers: 1  Size: 1,024 bytes\n")); est != nil {
+		t.Fatalf("expected nil for comma-formatted size, got %+v", est)
+	}
+
 	// No changes output returns nil.
 	if est := ParseCheckEstimate([]byte("No changes in: docker://ghcr.io/andaru-project/andaru:stable\n")); est != nil {
 		t.Fatalf("expected nil for no-changes output, got %+v", est)
 	}
 }
 
-func TestApplyProgressLine(t *testing.T) {
+func TestApplyProgressLineAndJSONOmitZero(t *testing.T) {
 	t0 := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
 	t1 := t0.Add(2 * time.Second)
 	t2 := t0.Add(5 * time.Second)
 
-	cur := Progress{Phase: "starting", StartedAt: t0, UpdatedAt: t0}
+	// Zero timestamps must omit from JSON rather than emitting 0001-01-01.
+	raw, err := json.Marshal(Progress{Phase: "pulling"})
+	if err != nil {
+		t.Fatalf("Marshal zero timestamps: %v", err)
+	}
+	if strings.Contains(string(raw), "startedAt") || strings.Contains(string(raw), "updatedAt") {
+		t.Fatalf("zero timestamps should be omitted, got %s", raw)
+	}
+
+	cur := StartingProgress(t0)
 
 	// Start handshake and malformed JSON are ignored.
 	if next, ok := ApplyProgressLine(cur, []byte(`{"type":"Start","version":"0.1.0"}`), t1); ok || next != cur {
@@ -60,13 +83,13 @@ func TestApplyProgressLine(t *testing.T) {
 		t.Fatalf("malformed line should be ignored, got ok=%v next=%+v", ok, next)
 	}
 
-	// ProgressBytes populates byte + layer metrics.
+	// ProgressBytes populates byte + layer metrics and preserves StartedAt.
 	pullLine := `{"type":"ProgressBytes","task":"pulling","description":"Pulling Image: sha256:2222","id":"sha256:2222","bytesCached":1000000000,"bytes":24000000,"bytesTotal":48000000,"stepsCached":306,"steps":7,"stepsTotal":14,"subtasks":[]}`
 	cur, ok := ApplyProgressLine(cur, []byte(pullLine), t1)
 	if !ok {
 		t.Fatal("expected ProgressBytes to apply")
 	}
-	if cur.Phase != "pulling" || cur.Bytes != 24_000_000 || cur.BytesTotal != 48_000_000 || cur.BytesCached != 1_000_000_000 || cur.Steps != 7 || cur.StepsTotal != 14 || cur.StepsCached != 306 || !cur.UpdatedAt.Equal(t1) {
+	if cur.Phase != "pulling" || cur.Bytes != 24_000_000 || cur.BytesTotal != 48_000_000 || cur.Steps != 7 || cur.StepsTotal != 14 || cur.StepsCached != 306 || !cur.StartedAt.Equal(t0) || !cur.UpdatedAt.Equal(t1) {
 		t.Fatalf("unexpected ProgressBytes state: %+v", cur)
 	}
 
@@ -76,13 +99,24 @@ func TestApplyProgressLine(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ProgressSteps to apply")
 	}
-	if cur.Phase != "importing" || cur.Bytes != 0 || cur.BytesTotal != 0 || cur.StepsTotal != 1 || !cur.UpdatedAt.Equal(t2) {
+	if cur.Phase != "importing" || cur.Bytes != 0 || cur.BytesTotal != 0 || cur.StepsTotal != 1 || !cur.StartedAt.Equal(t0) || !cur.UpdatedAt.Equal(t2) {
 		t.Fatalf("unexpected ProgressSteps state: %+v", cur)
 	}
 }
 
+func TestReadProgressLinesDiscardsOversizedWithoutClosing(t *testing.T) {
+	input := "short-1\n" + strings.Repeat("x", 200) + "\nshort-2\n"
+	var got []string
+	readProgressLines(strings.NewReader(input), 64, func(line []byte) {
+		got = append(got, string(line))
+	})
+	if len(got) != 2 || got[0] != "short-1" || got[1] != "short-2" {
+		t.Fatalf("expected oversized middle line skipped cleanly, got %v", got)
+	}
+}
+
 func TestDefaultProgressRunnerReadsFD3IncludingLargeLines(t *testing.T) {
-	// Emit two JSON lines to fd 3, including one > 100 KiB to exercise the enlarged scanner buffer.
+	// Emit two JSON lines to fd 3, including one > 100 KiB to exercise multi-chunk reading.
 	bigPad := strings.Repeat("a", 120*1024)
 	script := `printf '{"type":"Start","version":"0.1.0"}\n' >&3; ` +
 		`printf '{"type":"ProgressBytes","task":"pulling","description":"%s","id":"x","bytesCached":0,"bytes":100,"bytesTotal":200,"stepsCached":0,"steps":1,"stepsTotal":2,"subtasks":[]}\n' "$BIG_PAD" >&3`
@@ -101,6 +135,46 @@ func TestDefaultProgressRunnerReadsFD3IncludingLargeLines(t *testing.T) {
 	var ev bootcProgressEvent
 	if err := json.Unmarshal([]byte(lines[1]), &ev); err != nil || ev.Bytes != 100 || len(ev.Description) != len(bigPad) {
 		t.Fatalf("large line decode failed: err=%v bytes=%d descLen=%d", err, ev.Bytes, len(ev.Description))
+	}
+}
+
+func TestProgressFDFallbackTriggersOnlyOnUnsupportedFlag(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+
+	// Non-flag early failure (even though err.Error() contains "--progress-fd" in command args) MUST NOT retry.
+	plainCalls := 0
+	mgr := Manager{
+		StateDir: dir,
+		Now:      func() time.Time { return now },
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if len(args) >= 1 && args[0] == "upgrade" {
+				plainCalls++
+			}
+			return []byte(sampleStagedJSON), nil
+		},
+		RunWithProgress: func(_ context.Context, _ func([]byte), name string, args ...string) ([]byte, error) {
+			return []byte("error: registry 503 service unavailable"), errors.New(name + " " + strings.Join(args, " ") + ": exit status 1: registry 503")
+		},
+	}
+	if _, err := mgr.Stage(context.Background()); err == nil {
+		t.Fatal("expected Stage failure on registry 503")
+	}
+	if plainCalls != 0 {
+		t.Fatalf("expected zero fallback retries on non-flag error, got %d", plainCalls)
+	}
+
+	// Unrecognized --progress-fd diagnostic DOES fall back once to `bootc upgrade --quiet`.
+	mgr.RunWithProgress = func(_ context.Context, _ func([]byte), name string, args ...string) ([]byte, error) {
+		out := []byte("error: unexpected argument '--progress-fd' found")
+		return out, errors.New(name + " " + strings.Join(args, " ") + ": exit status 2: " + string(out))
+	}
+	st, err := mgr.Stage(context.Background())
+	if err != nil {
+		t.Fatalf("expected fallback Stage success, got %v", err)
+	}
+	if plainCalls != 1 || st.State != StateStaged {
+		t.Fatalf("expected 1 fallback call and staged status, calls=%d st=%+v", plainCalls, st)
 	}
 }
 

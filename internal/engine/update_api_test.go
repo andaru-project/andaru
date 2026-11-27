@@ -361,8 +361,9 @@ func TestUpdateAPIStageProgressLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteStatus: %v", err)
 	}
-	// Plant a stale progress file from an older crashed run to prove handleStage clears it first.
-	if err := update.WriteProgress(dir, update.Progress{Phase: "importing"}); err != nil {
+	// Plant a stale progress file from an older crashed run to prove handleStatus ignores it without clobbering disk.
+	staleAt := now.Add(-time.Hour)
+	if err := update.WriteProgress(dir, update.Progress{Phase: "importing", StartedAt: staleAt, UpdatedAt: staleAt}); err != nil {
 		t.Fatalf("WriteProgress stale: %v", err)
 	}
 
@@ -377,6 +378,7 @@ func TestUpdateAPIStageProgressLifecycle(t *testing.T) {
 			}
 			close(started)
 			<-release
+			update.ClearProgress(dir)
 			return update.WriteStatus(dir, update.Status{
 				Supported:    true,
 				State:        update.StateStaged,
@@ -401,7 +403,7 @@ func TestUpdateAPIStageProgressLifecycle(t *testing.T) {
 	}
 
 	<-started
-	// Before the worker writes progress.json, GET still serves the synthetic starting progress (stale file was cleared).
+	// Before the worker writes fresh progress.json, GET ignores the stale file and serves synthetic starting progress.
 	rec = httptest.NewRecorder()
 	uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
 	var st update.Status
@@ -427,11 +429,25 @@ func TestUpdateAPIStageProgressLifecycle(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
+	st = update.Status{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
 		t.Fatalf("decode pulling GET: %v", err)
 	}
 	if st.State != update.StateStaging || st.Progress == nil || st.Progress.Phase != "pulling" || st.Progress.Bytes != 25_000_000 || st.Progress.StepsCached != 310 {
 		t.Fatalf("expected live pulling progress, got %+v", st)
+	}
+
+	// If the worker cleans up progress.json right before exiting, GET retains the last observed progress
+	// instead of flashing backwards to "starting".
+	update.ClearProgress(dir)
+	rec = httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
+	st = update.Status{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatalf("decode pre-exit GET: %v", err)
+	}
+	if st.Progress == nil || st.Progress.Phase != "pulling" || st.Progress.Bytes != 25_000_000 {
+		t.Fatalf("expected last observed pulling progress rather than flash-back to starting, got %+v", st.Progress)
 	}
 
 	close(release)
@@ -448,5 +464,8 @@ func TestUpdateAPIStageProgressLifecycle(t *testing.T) {
 	}
 	if st.State != update.StateStaged || st.Progress != nil {
 		t.Fatalf("expected staged with nil progress after completion, got %+v", st)
+	}
+	if p, err := update.ReadProgress(dir); err != nil || p != nil {
+		t.Fatalf("expected progress.json removed on disk after completion, got p=%+v err=%v", p, err)
 	}
 }

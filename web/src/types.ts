@@ -678,8 +678,6 @@ export interface UpdateDownloadEstimate {
   downloadLayers: number;
   totalBytes?: number;
   totalLayers?: number;
-  removedBytes?: number;
-  removedLayers?: number;
 }
 
 export interface UpdateProgress {
@@ -687,7 +685,6 @@ export interface UpdateProgress {
   description?: string;
   bytes?: number;
   bytesTotal?: number;
-  bytesCached?: number;
   steps?: number;
   stepsTotal?: number;
   stepsCached?: number;

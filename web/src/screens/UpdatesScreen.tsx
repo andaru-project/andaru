@@ -98,30 +98,29 @@ function formatDownloadEstimate(estimate: UpdateDownloadEstimate): string {
   return `${bytes(estimate.downloadBytes)} (${layerPart}${fullImagePart})`;
 }
 
-function stagingBadgeLabel(progress?: UpdateProgress): string {
-  if (progress?.phase === 'importing') return 'Importing…';
-  if (progress?.phase === 'staging') return 'Staging…';
-  return 'Downloading…';
+const progressPhases: Record<string, { badge: string; title: string; fallbackDetail: string }> = {
+  starting: { badge: 'Preparing…', title: 'Preparing update…', fallbackDetail: 'Checking manifest and starting download…' },
+  pulling: { badge: 'Downloading…', title: 'Pulling image layers', fallbackDetail: 'Downloading updated image layers…' },
+  importing: { badge: 'Importing…', title: 'Importing into local storage', fallbackDetail: 'Unpacking and verifying layers in local storage…' },
+  staging: { badge: 'Staging…', title: 'Staging deployment for next boot', fallbackDetail: 'Writing the boot deployment and bootloader entry to disk…' },
+};
+
+function clampPercent(done: number, total: number): number {
+  return Math.min(100, Math.max(0, Math.round((done / total) * 100)));
 }
 
-function progressPhaseTitle(progress?: UpdateProgress): string {
-  switch (progress?.phase) {
-    case 'pulling':
-      return 'Pulling image layers';
-    case 'importing':
-      return 'Importing into local storage';
-    case 'staging':
-      return 'Staging deployment for next boot';
-    case 'starting':
-    case undefined:
-      return 'Preparing update…';
-    default:
-      return progress?.description || 'Downloading and staging…';
-  }
+function phaseMeta(progress?: UpdateProgress): { badge: string; title: string; fallbackDetail: string } {
+  const known = progress?.phase ? progressPhases[progress.phase] : progressPhases.starting;
+  if (known) return known;
+  return {
+    badge: 'Downloading…',
+    title: progress?.description || 'Downloading and staging…',
+    fallbackDetail: 'Working…',
+  };
 }
 
 function UpdateProgressPanel({ progress }: { progress?: UpdateProgress }) {
-  const title = progressPhaseTitle(progress);
+  const meta = phaseMeta(progress);
   const bytesTotal = progress?.bytesTotal ?? 0;
   const bytesDone = progress?.bytes ?? 0;
   const stepsTotal = progress?.stepsTotal ?? 0;
@@ -129,33 +128,33 @@ function UpdateProgressPanel({ progress }: { progress?: UpdateProgress }) {
   const stepsCached = progress?.stepsCached ?? 0;
 
   let pct: number | null = null;
-  let detail = '';
+  let detail = meta.fallbackDetail;
 
-  if (progress?.phase === 'pulling' && bytesTotal > 0) {
-    pct = Math.min(100, Math.max(0, Math.round((bytesDone / bytesTotal) * 100)));
+  if (bytesTotal > 0) {
+    pct = clampPercent(bytesDone, bytesTotal);
     const parts = [`${bytes(bytesDone)} of ${bytes(bytesTotal)}`];
     if (stepsTotal > 0) {
       parts.push(`${stepsDone} of ${stepsTotal} layers${stepsCached > 0 ? ` (${stepsCached} cached)` : ''}`);
     }
     detail = parts.join(' · ');
   } else if (stepsTotal > 1) {
-    pct = Math.min(100, Math.max(0, Math.round((stepsDone / stepsTotal) * 100)));
+    pct = clampPercent(stepsDone, stepsTotal);
     detail = `${stepsDone} of ${stepsTotal} steps`;
-  } else if (progress?.phase === 'importing') {
-    detail = 'Unpacking and verifying layers in local storage…';
-  } else if (progress?.phase === 'staging') {
-    detail = 'Writing the boot deployment and bootloader entry to disk…';
-  } else {
-    detail = 'Checking manifest and starting download…';
   }
 
   return (
-    <Stack gap={6} role="status" aria-live="polite">
+    <Stack gap={6}>
       <Group justify="space-between" gap="xs" wrap="nowrap">
-        <Text size="sm" fw={500}>{title}</Text>
+        <Text size="sm" fw={500} role="status">{meta.title}</Text>
         {pct !== null && <Text size="sm" fw={600} className="tabular">{pct}%</Text>}
       </Group>
-      <Progress value={pct ?? 100} size="md" animated={pct === null} aria-label={title} />
+      {pct !== null ? (
+        <Progress value={pct} size="md" aria-label={meta.title} />
+      ) : (
+        <Progress.Root size="md">
+          <Progress.Section value={100} animated withAria={false} role="progressbar" aria-label={meta.title} aria-valuetext="In progress" />
+        </Progress.Root>
+      )}
       <Text size="xs" c="dimmed" className="tabular">{detail}</Text>
     </Stack>
   );
@@ -310,6 +309,8 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
           }
 
           const pendingDeployment = status.staged ?? (status.rollbackQueued ? status.rollback : undefined);
+          const showAvailableCard = Boolean(status.available && !status.staged && !status.rollbackQueued);
+          const stageBadge = phaseMeta(status.progress).badge;
 
           return (
             <Stack>
@@ -360,13 +361,13 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
                 />
               )}
 
-              {status.available && !status.staged && !status.rollbackQueued && (
+              {showAvailableCard && (
                 <DeploymentSection
                   id="updates-available"
                   title="Available update"
                   badgeColor={status.state === 'staging' ? 'blue' : 'orange'}
                   badgeVariant="filled"
-                  badgeLabel={status.state === 'staging' ? stagingBadgeLabel(status.progress) : 'Ready to download'}
+                  badgeLabel={status.state === 'staging' ? stageBadge : 'Ready to download'}
                   deployment={status.available}
                   extraRows={status.download ? (
                     <Row label="Download size">
@@ -389,13 +390,13 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
                 />
               )}
 
-              {status.state === 'staging' && (!status.available || status.staged || status.rollbackQueued) && (
+              {status.state === 'staging' && !showAvailableCard && (
                 <DeploymentSection
                   id="updates-progress"
                   title="Update in progress"
                   badgeColor="blue"
                   badgeVariant="filled"
-                  badgeLabel={stagingBadgeLabel(status.progress)}
+                  badgeLabel={stageBadge}
                   extra={<UpdateProgressPanel progress={status.progress} />}
                 />
               )}

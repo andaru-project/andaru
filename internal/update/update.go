@@ -96,11 +96,11 @@ func ReadStatus(stateDir string) (Status, error) {
 
 // WriteStatus persists status atomically inside stateDir/update/status.json (mode 0600).
 func WriteStatus(stateDir string, st Status) error {
-	return writeAtomicJSON(stateDir, StatusPath(stateDir), "status-*.tmp", st)
+	return writeAtomicJSON(StatusPath(stateDir), st)
 }
 
-func writeAtomicJSON(stateDir, targetPath, tempPattern string, value any) error {
-	dir := filepath.Join(stateDir, "update")
+func writeAtomicJSON(targetPath string, value any) error {
+	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create update state dir: %w", err)
 	}
@@ -109,7 +109,7 @@ func writeAtomicJSON(stateDir, targetPath, tempPattern string, value any) error 
 		return fmt.Errorf("encode update json: %w", err)
 	}
 	raw = append(raw, '\n')
-	tmp, err := os.CreateTemp(dir, tempPattern)
+	tmp, err := os.CreateTemp(dir, filepath.Base(targetPath)+"-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp update file: %w", err)
 	}
@@ -322,7 +322,7 @@ func (m Manager) Check(ctx context.Context) (Status, error) {
 		_ = WriteStatus(m.StateDir, st)
 		return st, checkErr
 	}
-	if st.Available != nil && st.Staged == nil && !st.RollbackQueued {
+	if st.State == StateAvailable {
 		st.Download = ParseCheckEstimate(checkOut)
 	}
 	return st, WriteStatus(m.StateDir, st)
@@ -330,20 +330,24 @@ func (m Manager) Check(ctx context.Context) (Status, error) {
 
 func (m Manager) runStageWithProgress(ctx context.Context, onLine func([]byte)) ([]byte, error) {
 	if m.RunWithProgress != nil {
-		return m.RunWithProgress(ctx, onLine, bootcBinary, "upgrade", "--quiet", "--progress-fd", "3")
+		return m.runProgressWithFallback(ctx, m.RunWithProgress, m.run, onLine)
 	}
 	if m.Run != nil {
 		return m.Run(ctx, bootcBinary, "upgrade", "--quiet")
 	}
+	return m.runProgressWithFallback(ctx, DefaultProgressRunner, DefaultCommandRunner, onLine)
+}
+
+func (m Manager) runProgressWithFallback(ctx context.Context, runProg ProgressRunner, runPlain CommandRunner, onLine func([]byte)) ([]byte, error) {
 	sawLine := false
 	wrapped := func(line []byte) {
 		sawLine = true
 		onLine(line)
 	}
-	out, err := DefaultProgressRunner(ctx, wrapped, bootcBinary, "upgrade", "--quiet", "--progress-fd", "3")
-	// Gracefully fall back if an older bootc binary does not recognize --progress-fd.
-	if err != nil && !sawLine && strings.Contains(err.Error(), "--progress-fd") {
-		return DefaultCommandRunner(ctx, bootcBinary, "upgrade", "--quiet")
+	out, err := runProg(ctx, wrapped, bootcBinary, "upgrade", "--quiet", "--progress-fd", "3")
+	// Fall back only when bootc itself rejected --progress-fd (never on network/auth/cancel/missing errors).
+	if err != nil && !sawLine && ctx.Err() == nil && !isMissing(err) && isUnsupportedProgressFD(out) {
+		return runPlain(ctx, bootcBinary, "upgrade", "--quiet")
 	}
 	return out, err
 }
@@ -363,12 +367,7 @@ func (m Manager) Stage(ctx context.Context) (Status, error) {
 	prev, _ := ReadStatus(m.StateDir)
 
 	startedAt := m.now()
-	cur := Progress{
-		Phase:       "starting",
-		Description: "Preparing update",
-		StartedAt:   startedAt,
-		UpdatedAt:   startedAt,
-	}
+	cur := StartingProgress(startedAt)
 	_ = WriteProgress(m.StateDir, cur)
 	defer ClearProgress(m.StateDir)
 
@@ -379,9 +378,8 @@ func (m Manager) Stage(ctx context.Context) (Status, error) {
 		if !ok {
 			return
 		}
-		important := next.Phase != cur.Phase ||
-			next.Steps != cur.Steps ||
-			(next.BytesTotal > 0 && next.Bytes >= next.BytesTotal)
+		reachedFull := next.BytesTotal > 0 && next.Bytes >= next.BytesTotal && cur.Bytes < cur.BytesTotal
+		important := next.Phase != cur.Phase || next.Steps != cur.Steps || reachedFull
 		cur = next
 		if important || now.Sub(lastWrite) >= progressWriteInterval {
 			lastWrite = now

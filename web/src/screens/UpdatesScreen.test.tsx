@@ -240,7 +240,7 @@ it('shows download size beforehand and renders live pulling, importing, and stag
   const availSection = screen.getByRole('region', { name: 'Available update' });
   expect(within(availSection).getByText('48 MiB (14 of 320 layers; 1.0 GiB full image)')).toBeInTheDocument();
 
-  // Pulling phase shows determinate progress bar, percentage, bytes, layers, and cached count.
+  // Pulling phase shows determinate progress bar, percentage, bytes, layers, and cached count; role="status" wraps only the title.
   rerender(
     <UpdatesScreen
       api={api}
@@ -261,12 +261,13 @@ it('shows download size beforehand and renders live pulling, importing, and stag
     />,
   );
   expect(within(availSection).getByText('Downloading…')).toBeInTheDocument();
-  expect(within(availSection).getByText('Pulling image layers')).toBeInTheDocument();
+  expect(within(availSection).getByRole('status')).toHaveTextContent('Pulling image layers');
+  expect(within(availSection).getByRole('status')).not.toHaveTextContent('24 MiB');
   expect(within(availSection).getByText('50%')).toBeInTheDocument();
   expect(within(availSection).getByText('24 MiB of 48 MiB · 7 of 14 layers (306 cached)')).toBeInTheDocument();
   expect(within(availSection).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
 
-  // Importing phase switches badge and progress copy.
+  // Importing phase switches badge and renders an indeterminate progressbar without aria-valuenow.
   rerender(
     <UpdatesScreen
       api={api}
@@ -280,7 +281,27 @@ it('shows download size beforehand and renders live pulling, importing, and stag
     />,
   );
   expect(within(availSection).getByText('Importing…')).toBeInTheDocument();
-  expect(within(availSection).getByText('Importing into local storage')).toBeInTheDocument();
+  expect(within(availSection).getByRole('status')).toHaveTextContent('Importing into local storage');
+  const importBar = within(availSection).getByRole('progressbar');
+  expect(importBar).not.toHaveAttribute('aria-valuenow');
+  expect(importBar).toHaveAttribute('aria-valuetext', 'In progress');
+
+  // Metadata-only estimate displays 0 B clearly, and bytes > bytesTotal clamps cleanly at 100%.
+  rerender(
+    <UpdatesScreen
+      api={api}
+      session={mgr}
+      update={makeResource({
+        ...availableStatus,
+        state: 'staging',
+        download: { downloadBytes: 0, downloadLayers: 0, totalLayers: 320 },
+        progress: { phase: 'pulling', bytes: 120, bytesTotal: 100 },
+      })}
+      onSessionLost={noopSessionLost}
+    />,
+  );
+  expect(within(availSection).getByText('0 B (metadata only; 320 layers cached)')).toBeInTheDocument();
+  expect(within(availSection).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
 
   // Staging without a cached available card still renders an Update in progress section and keeps Running image Active.
   rerender(
@@ -300,5 +321,6 @@ it('shows download size beforehand and renders live pulling, importing, and stag
   expect(within(screen.getByRole('region', { name: 'Running image' })).getByText('Active')).toBeInTheDocument();
   const progressSection = screen.getByRole('region', { name: 'Update in progress' });
   expect(within(progressSection).getByText('Staging…')).toBeInTheDocument();
-  expect(within(progressSection).getByText('Staging deployment for next boot')).toBeInTheDocument();
+  expect(within(progressSection).getByRole('status')).toHaveTextContent('Staging deployment for next boot');
+  expect(within(progressSection).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
 });
