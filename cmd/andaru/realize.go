@@ -102,7 +102,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	if blocked && verb != "boot" {
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		// The engine keeps owing these: it tries them again after the reset.
-		if verb == "set-hostname" || verb == "aliases" {
+		if verb == "set-hostname" || verb == "aliases" || verb == "addons-release-hold" {
 			return 1
 		}
 		return 0

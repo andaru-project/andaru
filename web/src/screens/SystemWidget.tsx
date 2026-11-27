@@ -78,8 +78,7 @@ const safeModeReasonLabel: Record<SafeModeReason, string> = {
 };
 
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper for SystemWidget and Shell
-export function formatSafeModeReasons(safeMode?: SafeModeStatus): string {
-  if (!safeMode?.active || safeMode.reasons.length === 0) return '';
+export function formatSafeModeReasons(safeMode: SafeModeStatus): string {
   return safeMode.reasons.map((r) => safeModeReasonLabel[r] ?? r).join(', ');
 }
 
@@ -137,7 +136,10 @@ export function SystemFacts({ info, loadedAt }: { info: SystemInfo; loadedAt: nu
       <Card title="Software">
         <Row label="Hostname">{info.hostname || '—'}</Row>
         <Row label="Version">{info.version}</Row>
-        {info.safeMode?.active && <Row label="Safe mode">Active ({formatSafeModeReasons(info.safeMode)})</Row>}
+        {info.safeMode?.active && (() => {
+          const reasons = formatSafeModeReasons(info.safeMode);
+          return <Row label="Safe mode">Active{reasons ? ` (${reasons})` : ''}</Row>;
+        })()}
         <Row label="Kernel">{info.kernel}</Row>
         {running}
       </Card>

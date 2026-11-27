@@ -25,6 +25,9 @@ func TestSafeModeBootConsumesNextFlagAndHoldsAddons(t *testing.T) {
 	if !b.exists(AddonsHeldFile) {
 		t.Fatal("boot did not create /run/andaru/addons-held")
 	}
+	if fi, err := os.Stat(filepath.Dir(b.net.root + AddonsHeldFile)); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("/run/andaru mode = %v, err = %v; want 0700", fi, err)
+	}
 	if _, err := os.Stat(filepath.Join(b.r.StateDir, SafeModeNextFile)); !os.IsNotExist(err) {
 		t.Fatalf("safe-mode-next was not removed after moving to /run: %v", err)
 	}
@@ -88,5 +91,38 @@ func TestSafeModeKernelArgExactTokenOnly(t *testing.T) {
 	}
 	if got := ReadSafeMode(b.net.root, b.r.StateDir); !got.Active || !slices.Equal(got.Reasons, []string{"kernelArg", "settingsHold"}) {
 		t.Fatalf("kernel arg reasons: %+v", got)
+	}
+}
+
+func TestSafeModeFailClosedSimultaneousAndFence(t *testing.T) {
+	b := newBench(t)
+	proc := filepath.Join(b.net.root, "proc")
+	if err := os.MkdirAll(proc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// kernelArg marker on disk without /proc/cmdline still reports Active: true (fail-closed).
+	runDir := filepath.Dir(b.net.root + SafeModeBootFile)
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b.net.root+SafeModeBootFile, []byte("kernelArg\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadSafeMode(b.net.root, b.r.StateDir); !got.Active || !slices.Equal(got.Reasons, []string{"kernelArg"}) {
+		t.Fatalf("kernelArg marker without cmdline: %+v", got)
+	}
+
+	// Simultaneous boot + kernelArg + settingsHold keep deterministic order.
+	if err := ScheduleSafeMode(b.r.StateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "cmdline"), []byte("andaru.safe=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Fence(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadSafeMode(b.net.root, b.r.StateDir); !got.Active || !slices.Equal(got.Reasons, []string{"boot", "kernelArg", "settingsHold"}) {
+		t.Fatalf("simultaneous reasons after Fence: %+v", got)
 	}
 }

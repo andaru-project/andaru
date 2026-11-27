@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -30,23 +31,26 @@ type SafeModeStatus struct {
 // Reasons are returned in deterministic order: "boot", "kernelArg", "settingsHold".
 func ReadSafeMode(root, stateDir string) SafeModeStatus {
 	reasons := []string{}
-	karg := kernelArgPresent(root+"/proc/cmdline", SafeModeKernelArg)
-	bootFlag := false
+	karg := kernelArgPresent(root)
+	bootFlag := stateDir != "" && pathPresentFailClosed(filepath.Join(stateDir, SafeModeNextFile))
 	if raw, err := os.ReadFile(root + SafeModeBootFile); err == nil {
-		// An empty or unrecognized file defaults to "boot" (fail closed), while a kernelArg-only marker does not
-		// duplicate "boot" when only the kernel command line armed safe mode.
-		content := strings.TrimSpace(string(raw))
-		if content != "kernelArg" {
+		// A kernelArg-only marker records kernel-arg safe mode without duplicating "boot"; any other content
+		// (including empty) reports "boot". Either way an existing boot marker always reports Active: true.
+		if strings.TrimSpace(string(raw)) == "kernelArg" {
+			karg = true
+		} else {
 			bootFlag = true
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		bootFlag = true
 	}
-	if bootFlag || (stateDir != "" && pathExists(filepath.Join(stateDir, SafeModeNextFile))) {
+	if bootFlag {
 		reasons = append(reasons, "boot")
 	}
 	if karg {
 		reasons = append(reasons, "kernelArg")
 	}
-	if pathExists(root + AddonsHeldFile) {
+	if pathPresentFailClosed(root + AddonsHeldFile) {
 		reasons = append(reasons, "settingsHold")
 	}
 	return SafeModeStatus{Active: len(reasons) > 0, Reasons: reasons}
@@ -62,7 +66,8 @@ func ScheduleSafeMode(stateDir string) error {
 
 func (r Realizer) applySafeModeOnBoot() {
 	runDir := filepath.Dir(r.Root + AddonsHeldFile)
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
+	// /run/andaru also holds root sockets (engine.sock, bus.sock) which require mode 0700.
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		slog.Error("create safe-mode runtime directory", "dir", runDir, "error", err)
 		return
 	}
@@ -70,18 +75,14 @@ func (r Realizer) applySafeModeOnBoot() {
 	if err := writeAtomic(r.Root+AddonsHeldFile, []byte("1\n"), 0o644); err != nil {
 		slog.Error("write addons hold flag", "error", err)
 	}
-	nextPath := ""
-	nextPresent := false
-	if r.StateDir != "" {
-		nextPath = filepath.Join(r.StateDir, SafeModeNextFile)
-		nextPresent = pathExists(nextPath)
-	}
-	kargPresent := kernelArgPresent(r.Root+"/proc/cmdline", SafeModeKernelArg)
+	nextPath := filepath.Join(r.StateDir, SafeModeNextFile)
+	nextPresent := r.StateDir != "" && pathPresentFailClosed(nextPath)
+	kargPresent := kernelArgPresent(r.Root)
 	if !nextPresent && !kargPresent {
 		return
 	}
 	marker := "boot\n"
-	if !nextPresent && kargPresent {
+	if !nextPresent {
 		marker = "kernelArg\n"
 	}
 	if err := writeAtomic(r.Root+SafeModeBootFile, []byte(marker), 0o644); err != nil {
@@ -92,6 +93,10 @@ func (r Realizer) applySafeModeOnBoot() {
 	if nextPresent {
 		if err := os.Remove(nextPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			slog.Error("remove consumed safe-mode-next flag", "error", err)
+			return
+		}
+		if err := syncDir(r.StateDir); err != nil {
+			slog.Error("sync state directory after removing safe-mode-next", "error", err)
 		}
 	}
 }
@@ -105,20 +110,12 @@ func (r Realizer) ReleaseAddonsHold(_ context.Context) error {
 	return nil
 }
 
-func pathExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+func pathPresentFailClosed(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil || !errors.Is(err, os.ErrNotExist)
 }
 
-func kernelArgPresent(cmdlinePath, token string) bool {
-	raw, err := os.ReadFile(cmdlinePath)
-	if err != nil {
-		return false
-	}
-	for _, field := range strings.Fields(string(raw)) {
-		if field == token {
-			return true
-		}
-	}
-	return false
+func kernelArgPresent(root string) bool {
+	raw, err := os.ReadFile(root + "/proc/cmdline")
+	return err == nil && slices.Contains(strings.Fields(string(raw)), SafeModeKernelArg)
 }

@@ -261,3 +261,16 @@ it('locks close controls while renaming, prevents double submit, allows normaliz
   resolvePost(jsonResponse(200, { hostname: 'edge' }));
   await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
 });
+
+it('shows the Safe mode badge in SystemWidget and formatted reasons in SystemFacts', () => {
+  const safeInfo: SystemInfo = { ...hardware, safeMode: { active: true, reasons: ['boot', 'settingsHold'] } };
+  render(<MemoryRouter><SystemWidget info={safeInfo} loadedAt={Date.now()} /></MemoryRouter>);
+  expect(screen.getByText('Safe mode')).toBeInTheDocument();
+
+  render(<Both info={safeInfo} loadedAt={Date.now()} />);
+  expect(value('Safe mode')).toBe('Active (one-boot safe mode, pending settings upgrade decisions)');
+
+  // Empty reasons still renders cleanly without empty parentheses.
+  render(<Both info={{ ...hardware, safeMode: { active: true, reasons: [] } }} loadedAt={Date.now()} />);
+  expect(screen.getByText('Active')).toBeInTheDocument();
+});

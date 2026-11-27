@@ -201,6 +201,7 @@ func TestRealizeUsageErrors(t *testing.T) {
 		{"realize"}, {"realize", "unknown"}, {"realize", "activate"}, {"realize", "activate", "0"},
 		{"realize", "activate", "01"}, {"realize", "activate", "abc"}, {"realize", "activate", "1", "extra"},
 		{"realize", "rollback", "3"}, {"realize", "confirm"}, {"realize", "boot", "1"},
+		{"realize", "addons-release-hold", "1"},
 		{"realize", "--state-dir", "relative", "boot"},
 	} {
 		var out, diagnostics bytes.Buffer
@@ -275,6 +276,8 @@ func TestRealizeExitCodes(t *testing.T) {
 		// A failed lease sync shows on its unit; the path unit runs it again at the next lease event.
 		{[]string{"leases"}, errors.New("Kea not answering"), "leases", 1},
 		{[]string{"aliases"}, nil, "aliases", 0},
+		{[]string{"addons-release-hold"}, nil, "addons-release-hold", 0},
+		{[]string{"addons-release-hold"}, errors.New("busy"), "addons-release-hold", 1},
 	} {
 		verbs := &fakeVerbs{err: row.err}
 		var diagnostics bytes.Buffer

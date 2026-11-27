@@ -120,7 +120,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	defer func() { cancel(context.Canceled); <-stopped }()
 	runner := newSystemdRunner(stateDir, busSocket)
 	feeds := newAliasFeeds(lifetime, stateDir, events, savedAndLive(stateDir, store), func(ctx context.Context) error { return runner.Realize(ctx, "aliases", 0) })
-	hold := newAddonsHold(systemRoot, stateDir, upgradePending, func(ctx context.Context) error { return runner.Realize(ctx, "addons-release-hold", 0) })
+	hold := newAddonsHold(systemRoot, upgradePending, func(ctx context.Context) error { return runner.Realize(ctx, "addons-release-hold", 0) })
 	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge(); hold.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
@@ -221,7 +221,19 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	setupCodeAPI := newSetupCodeHandler(identities, setupCodes)
 	hostnameAPI := newHostnameHandler(nil)
 	updateAPI := newUpdateAPI(stateDir, nil)
-	rootAPI := newHandlerWithState(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsHandler, aliasesAPI{feeds: feeds}, stateDir)
+	rootAPI := newHandlerWithDeps(handlerDeps{
+		readLinks:        host.ReadLinks,
+		configuration:    newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups),
+		identityAPI:      identityAPI,
+		auditAPI:         auditAPI,
+		fleetAPI:         fleetAPI,
+		updateAPI:        updateAPI,
+		setupCodeAPI:     setupCodeAPI,
+		hostnameAPI:      hostnameAPI,
+		notificationsAPI: notificationsHandler,
+		aliasesAPI:       aliasesAPI{feeds: feeds},
+		stateDir:         stateDir,
+	})
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {

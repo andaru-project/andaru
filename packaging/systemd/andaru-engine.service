@@ -10,6 +10,7 @@ EnvironmentFile=-/etc/andaru/engine-web.conf
 ExecStart=/usr/bin/andaru engine $ANDARU_ENGINE_WEB_ARGS
 RuntimeDirectory=andaru
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 # andaru-kept is on the root disk, outside the wipeable tree; the engine records last-lan/ and stores recovery/ there.
 StateDirectory=andaru andaru-kept
 StateDirectoryMode=0700
