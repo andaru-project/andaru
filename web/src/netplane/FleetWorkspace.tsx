@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import './styles.css';
 import { Alert, Badge, Button, Group, Stack } from '@mantine/core';
-import { Link, Navigate, Route, Routes } from 'react-router';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router';
 import { consumeUserActivity } from '../api';
 import { configureNetplaneApi } from './api';
 import { setRoutePrefix, vlanFlowPath } from './routing';
@@ -9,6 +9,7 @@ import { ClientsScreen } from './screens/ClientsScreen';
 import { DeviceDetailScreen } from './screens/DeviceDetailScreen';
 import { DevicesScreen } from './screens/DevicesScreen';
 import { DiagnosticsScreen } from './screens/DiagnosticsScreen';
+import { OverviewScreen } from './screens/OverviewScreen';
 import { TopologyScreen } from './screens/TopologyScreen';
 import { VlanFlowScreen } from './screens/VlanFlowScreen';
 import { VlansScreen } from './screens/VlansScreen';
@@ -19,6 +20,22 @@ export interface FleetWorkspaceProps {
   canReadTargets: boolean;
   canWrite: boolean;
   onSessionLost: () => void;
+  /** API prefix relative to the app root: Andaru serves the fleet at `api/v1/fleet`, standalone Netplane at `api/v1`. */
+  apiPrefix?: string;
+  /**
+   * Mounts the workspace at the app's root rather than under `/network`: the Overview at `/`, the fleet screens
+   * under `network/`, and the old root paths sent there, as standalone Netplane does.
+   */
+  overview?: boolean;
+  onConnection?: (connected: boolean) => void;
+}
+
+// Standalone Netplane's paths from before its routes followed Andaru's.
+const oldPaths = ['topology', 'vlans', 'vlans/flow', 'devices', 'devices/:id', 'clients', 'diagnostics'];
+
+function ToNetwork() {
+  const { pathname, search, hash } = useLocation();
+  return <Navigate to={`/network${pathname}${search}${hash}`} replace />;
 }
 
 export function FleetWorkspace({
@@ -26,16 +43,21 @@ export function FleetWorkspace({
   canReadTargets,
   canWrite,
   onSessionLost,
+  apiPrefix = 'api/v1/fleet',
+  overview = false,
+  onConnection,
 }: FleetWorkspaceProps) {
-  // Configure synchronously so child routes render `/network/...` links and hit `/api/v1/fleet/*`
+  // Configure synchronously so child routes render `/network/...` links and hit the API prefix
   // from the very first render and across StrictMode remounts.
   setRoutePrefix('/network');
   configureNetplaneApi({
-    apiPrefix: 'api/v1/fleet',
+    apiPrefix,
     csrfToken,
     onUnauthorized: onSessionLost,
+    onConnection,
     consumeActivity: consumeUserActivity,
   });
+  const base = overview ? 'network/' : '';
 
   const fleet = useFleetData({ canReadTargets, canPoll: canWrite });
   const {
@@ -95,8 +117,24 @@ export function FleetWorkspace({
       )}
 
       <Routes>
+        {overview && oldPaths.map((path) => <Route key={path} path={path} element={<ToNetwork />} />)}
+        {overview && (
+          <Route
+            index
+            element={
+              <OverviewScreen
+                state={fleet.state}
+                topology={fleet.topology}
+                flow={fleet.flow}
+                events={fleet.events}
+                sseConnected={fleet.sseConnected}
+                devicesById={devicesById}
+              />
+            }
+          />
+        )}
         <Route
-          path="topology"
+          path={`${base}topology`}
           element={
             <TopologyScreen
               graph={fleet.topology}
@@ -109,7 +147,7 @@ export function FleetWorkspace({
           }
         />
         <Route
-          path="vlans/flow"
+          path={`${base}vlans/flow`}
           element={
             <VlanFlowScreen
               flow={fleet.flow}
@@ -122,7 +160,7 @@ export function FleetWorkspace({
           }
         />
         <Route
-          path="vlans"
+          path={`${base}vlans`}
           element={
             <VlansScreen
               flow={fleet.flow}
@@ -132,9 +170,9 @@ export function FleetWorkspace({
             />
           }
         />
-        <Route path="devices" element={<DevicesScreen state={fleet.state} flow={fleet.flow} />} />
+        <Route path={`${base}devices`} element={<DevicesScreen state={fleet.state} flow={fleet.flow} />} />
         <Route
-          path="devices/:id"
+          path={`${base}devices/:id`}
           element={
             <DeviceDetailScreen
               devices={devices}
@@ -149,7 +187,7 @@ export function FleetWorkspace({
           }
         />
         <Route
-          path="clients"
+          path={`${base}clients`}
           element={
             <ClientsScreen
               clients={clients}
@@ -161,7 +199,7 @@ export function FleetWorkspace({
           }
         />
         <Route
-          path="diagnostics"
+          path={`${base}diagnostics`}
           element={
             <DiagnosticsScreen
               devices={devices}

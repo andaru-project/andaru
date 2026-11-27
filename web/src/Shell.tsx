@@ -1,15 +1,13 @@
-import { AccordionChevron, ActionIcon, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, Modal, NavLink, Select, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
-import { useDisclosure } from '@mantine/hooks';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Alert, Anchor, Badge, Button, Menu, Stack, Text } from '@mantine/core';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
 import { ApiClient, reportError } from './api';
-import mark from './andaru-icon.svg';
+import { AppFrame } from './AppFrame';
 import { loadChangeState, pendingNotice } from './changes';
 import { plural } from './format';
 import { highestSeverity, severityColor } from './notifications';
 import { PendingNotice } from './PendingNotice';
 import { FleetWorkspace } from './netplane/FleetWorkspace';
-import { formatTimestamp, setTimeZone, timeZoneOptions, useTimeZone } from './timezone';
 import { AliasesScreen } from './screens/AliasesScreen';
 import { AuditScreen } from './screens/AuditScreen';
 import { BackupScreen } from './screens/BackupScreen';
@@ -18,7 +16,7 @@ import { DashboardScreen } from './screens/DashboardScreen';
 import { DhcpScreen } from './screens/DhcpScreen';
 import { DnsScreen } from './screens/DnsScreen';
 import { InterfacesScreen } from './screens/InterfacesScreen';
-import { Bell, UserMark } from './screens/Marks';
+import { Bell } from './screens/Marks';
 import { NatScreen } from './screens/NatScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
 import { PasswordDialog } from './screens/PasswordDialog';
@@ -79,12 +77,6 @@ const pageTitles: Record<string, string> = {
   '/system/session': 'Current session',
 };
 
-const schemes: Array<{ value: MantineColorScheme; label: string }> = [
-  { value: 'auto', label: 'System' },
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
-];
-
 const pendingBadges: Record<NonNullable<ReturnType<typeof pendingNotice>>['kind'], { color: string; variant: 'light' | 'filled'; label: string }> = {
   unapplied: { color: 'yellow', variant: 'light', label: 'Pending' },
   activating: { color: 'blue', variant: 'light', label: 'Applying' },
@@ -133,12 +125,7 @@ export function Shell(props: ShellProps) {
 }
 
 function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
-  const { colorScheme, setColorScheme } = useMantineColorScheme();
-  const timeZone = useTimeZone();
-  const [timeZoneAt, setTimeZoneAt] = useState<number | null>(null);
-  const zoneChoices = useMemo(() => (timeZoneAt !== null ? timeZoneOptions(timeZone) : []), [timeZoneAt, timeZone]);
   const capabilities = useMemo(() => new Set(session.capabilities), [session.capabilities]);
-  const [opened, { toggle, close }] = useDisclosure();
   const { pathname } = useLocation();
   const onChangesPage = useMatch('/changes') !== null;
   const navigate = useNavigate();
@@ -252,25 +239,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     },
   ].map((group) => ({ ...group, items: group.items.filter((item) => item.visible) })).filter((group) => group.items.length > 0);
   const visible = new Set(groups.flatMap((group) => group.items.map((item) => item.to)));
-
-  const normalizedPath = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
-  const isNavItemActive = (to: string) => normalizedPath === to || (to === '/network/devices' && normalizedPath.startsWith('/network/devices/'));
-  // One branch is open at a time, so the tree fits a phone: the one holding the current page, however the page was
-  // reached, until another is opened.
-  const currentBranch = groups.find((group) => group.items.some((item) => isNavItemActive(item.to)))?.label;
-  const [openBranch, setOpenBranch] = useState(currentBranch);
-  const [seenPath, setSeenPath] = useState(pathname);
-  if (seenPath !== pathname) {
-    setSeenPath(pathname);
-    if (currentBranch) setOpenBranch(currentBranch);
-  }
-  const toggleBranch = (label: string) => setOpenBranch(openBranch === label ? undefined : label);
   const hostname = system.data?.info.hostname;
-  useEffect(() => {
-    const title = pageTitles[normalizedPath] ?? (normalizedPath.startsWith('/network/devices/') ? 'Device' : undefined);
-    document.title = [title, hostname, 'Andaru'].filter(Boolean).join(' — ');
-    return () => { document.title = 'Andaru administration'; };
-  }, [normalizedPath, hostname]);
 
   const pending = changes.data ? pendingNotice(changes.data) : null;
   const badge = pending ? pendingBadges[pending.kind] : undefined;
@@ -282,11 +251,6 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
   const navBadges: Record<string, ReactNode> = {
     '/changes': changesBadge,
     '/system/updates': updateBadge,
-  };
-
-  const pageLink = (to: string, label: string, rightSection?: ReactNode) => {
-    const active = isNavItemActive(to);
-    return <NavLink className="nav-item" key={to} component={Link} to={to} label={label} rightSection={rightSection} active={active} aria-current={active ? 'page' : undefined} onClick={close} />;
   };
 
   async function changePassword() {
@@ -320,133 +284,92 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
   ];
 
   return (
-    <AppShell className="app-shell" data-nav-open={opened || undefined} header={{ height: 56 }} navbar={{ width: 240, breakpoint: 900, collapsed: { mobile: !opened } }} padding="md">
-      <AppShell.Header className="app-header">
-        <Group h="100%" px="md" justify="space-between" wrap="nowrap">
-          <Group className="app-brand" gap="sm" wrap="nowrap">
-            <Burger className="nav-burger" color="white" opened={opened} onClick={toggle} size="sm" aria-label={opened ? 'Close navigation' : 'Open navigation'} />
-            <Image src={mark} alt="" w={28} h={28} />
-            <Title className="app-title" order={1} size="h3">Andaru</Title>
-            {/* The host name says which firewall this is, at every width. The version is on the dashboard and the details page. */}
-            {system.data?.info.hostname && <Text className="app-box" size="sm">{system.data.info.hostname}</Text>}
-          </Group>
-          <Group className="app-session" gap="sm" wrap="nowrap">
-            {/* Connected is the usual state and says so quietly; a lost connection is the one that shouts. */}
-            <Badge color={connected ? 'green' : 'red'} variant={connected ? 'dot' : 'filled'} className={connected ? 'quiet-badge' : undefined} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
-            {canReadNotifications && <HeaderNotifications notifications={notifications} />}
-            <Menu position="bottom-end" floatingStrategy="fixed" width={220} middlewares={{ flip: false, shift: true }} transitionProps={{ duration: 0 }}>
-              <Menu.Target>
-                <ActionIcon className="account-button" variant="default" size={30} aria-label={`Account (${session.account.login})`} title={session.account.login}>
-                  <UserMark />
-                </ActionIcon>
-              </Menu.Target>
-              <Menu.Dropdown className="account-menu-dropdown">
-                {(() => {
-                  const display = session.account.displayName?.trim() ?? '';
-                  return (
-                    <div className="account-menu-header" role="presentation">
-                      <Text component="div" size="sm" fw={600} truncate="end" title={session.account.login}>{session.account.login}</Text>
-                      {display && display !== session.account.login && (
-                        <Text component="div" size="xs" c="dimmed" truncate="end" title={display}>{display}</Text>
-                      )}
-                    </div>
-                  );
-                })()}
-                <Menu.Divider />
-                <Menu.Item onClick={() => void navigate('/system/session')}>Session details</Menu.Item>
-                {capabilities.has('users.read') && <Menu.Item onClick={() => void changePassword()}>Change password</Menu.Item>}
-                <Menu.Divider />
-                <Menu.Label>Appearance</Menu.Label>
-                {schemes.map(({ value, label }) => (
-                  <Menu.Item key={value} role="menuitemradio" rightSection={colorScheme === value ? <span aria-hidden="true">✓</span> : undefined} aria-checked={colorScheme === value} onClick={() => setColorScheme(value)}>{label}</Menu.Item>
-                ))}
-                <Menu.Divider />
-                <Menu.Item onClick={() => setTimeZoneAt(Date.now())}>Time zone…</Menu.Item>
-                <Menu.Divider />
-                <Menu.Item onClick={onLogout}>Sign out</Menu.Item>
-              </Menu.Dropdown>
-            </Menu>
-          </Group>
-        </Group>
-      </AppShell.Header>
-      <AppShell.Navbar className="app-navbar" p="xs" component="nav" aria-label="Main navigation">
-        {pageLink('/', 'Dashboard')}
-        {groups.map((group) => {
-          const open = openBranch === group.label;
-          return (
-            <div key={group.label}>
-              {/* A branch label is not a page, so it is a button: an anchor without an address takes no keyboard
-                  focus. It holds no children of its own, or NavLink would toggle on the Space key and the browser
-                  again on the click that key makes. */}
-              {/* A closed branch carries its pages' badges, so pending changes and updates stay in sight. */}
-              <NavLink className="nav-branch" component="button" type="button" label={group.label} aria-expanded={open} rightSection={<Group gap={4} wrap="nowrap">{!open && group.items.map((item) => <Fragment key={item.to}>{navBadges[item.to]}</Fragment>)}<AccordionChevron className="nav-chevron" data-open={open || undefined} /></Group>} onClick={() => toggleBranch(group.label)} />
-              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label, navBadges[item.to]))}</div>}
-            </div>
-          );
-        })}
-      </AppShell.Navbar>
-      <AppShell.Main>
-        <Stack>
-          {accountError && <Alert color="red" role="alert" title="Account request failed">{accountError}</Alert>}
-          {/* Review and apply owns these controls on its own page. */}
-          {/* While disconnected, the header indicator already owns the offline state; only show server read failures while connected. */}
-          {connected && !onChangesPage && changes.error && <Alert color="orange" role="alert" title="Could not check pending changes">{changes.error}</Alert>}
-          {connected && upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Could not check upgrade status">{upgrade.error}</Alert>}
-          {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
-          {capabilities.has('configuration.apply') && changes.data?.head === '0' && pathname !== '/setup' && (
-            <Alert color="blue" role="status" title="Initial setup">
-              This appliance has no saved network configuration yet. <Anchor component={Link} to="/setup">Open setup assistant</Anchor>
-            </Alert>
+    <AppFrame
+      product="Andaru"
+      // The host name says which firewall this is, at every width. The version is on the dashboard and the details page.
+      subtitle={hostname}
+      baseTitle="Andaru administration"
+      pageTitles={pageTitles}
+      connected={connected}
+      headerActions={canReadNotifications && <HeaderNotifications notifications={notifications} />}
+      accountLabel={`Account (${session.account.login})`}
+      accountTitle={session.account.login}
+      accountItems={
+        <>
+          {(() => {
+            const display = session.account.displayName?.trim() ?? '';
+            return (
+              <div className="account-menu-header" role="presentation">
+                <Text component="div" size="sm" fw={600} truncate="end" title={session.account.login}>{session.account.login}</Text>
+                {display && display !== session.account.login && (
+                  <Text component="div" size="xs" c="dimmed" truncate="end" title={display}>{display}</Text>
+                )}
+              </div>
+            );
+          })()}
+          <Menu.Divider />
+          <Menu.Item onClick={() => void navigate('/system/session')}>Session details</Menu.Item>
+          {capabilities.has('users.read') && <Menu.Item onClick={() => void changePassword()}>Change password</Menu.Item>}
+        </>
+      }
+      timeZoneNote="Used to display timestamps across Andaru in this browser. The appliance clock on the dashboard stays in UTC."
+      onSignOut={onLogout}
+      homeLabel="Dashboard"
+      groups={groups}
+      navBadges={navBadges}
+    >
+      <Stack>
+        {accountError && <Alert color="red" role="alert" title="Account request failed">{accountError}</Alert>}
+        {/* Review and apply owns these controls on its own page. */}
+        {/* While disconnected, the header indicator already owns the offline state; only show server read failures while connected. */}
+        {connected && !onChangesPage && changes.error && <Alert color="orange" role="alert" title="Could not check pending changes">{changes.error}</Alert>}
+        {connected && upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Could not check upgrade status">{upgrade.error}</Alert>}
+        {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
+        {capabilities.has('configuration.apply') && changes.data?.head === '0' && pathname !== '/setup' && (
+          <Alert color="blue" role="status" title="Initial setup">
+            This appliance has no saved network configuration yet. <Anchor component={Link} to="/setup">Open setup assistant</Anchor>
+          </Alert>
+        )}
+        {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
+        <Routes>
+          <Route path="/" element={<DashboardScreen api={api} session={session} system={system} notifications={notifications} update={update.data} onSessionLost={onSessionLost} />} />
+          {capabilities.has('configuration.apply') && (
+            <Route
+              path="/setup"
+              element={
+                <SetupWizardScreen
+                  api={api}
+                  session={session}
+                  onSessionLost={onSessionLost}
+                  onComplete={() => {
+                    void reloadChanges();
+                    void system.reload();
+                    void navigate('/');
+                  }}
+                />
+              }
+            />
           )}
-          {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
-          <Routes>
-            <Route path="/" element={<DashboardScreen api={api} session={session} system={system} notifications={notifications} update={update.data} onSessionLost={onSessionLost} />} />
-            {capabilities.has('configuration.apply') && (
-              <Route
-                path="/setup"
-                element={
-                  <SetupWizardScreen
-                    api={api}
-                    session={session}
-                    onSessionLost={onSessionLost}
-                    onComplete={() => {
-                      void reloadChanges();
-                      void system.reload();
-                      void navigate('/');
-                    }}
-                  />
-                }
-              />
-            )}
-            {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
-            {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
-            {canReadStatus && (
-              <Route
-                path="/network/*"
-                element={
-                  <FleetWorkspace
-                    csrfToken={session.csrfToken}
-                    canReadTargets={canReadChanges}
-                    canWrite={capabilities.has('configuration.write')}
-                    onSessionLost={onSessionLost}
-                  />
-                }
-              />
-            )}
-            <Route path="/system/session" element={<SessionScreen api={api} session={session} onSessionLost={onSessionLost} />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Stack>
-      </AppShell.Main>
+          {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
+          {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
+          {canReadStatus && (
+            <Route
+              path="/network/*"
+              element={
+                <FleetWorkspace
+                  csrfToken={session.csrfToken}
+                  canReadTargets={canReadChanges}
+                  canWrite={capabilities.has('configuration.write')}
+                  onSessionLost={onSessionLost}
+                />
+              }
+            />
+          )}
+          <Route path="/system/session" element={<SessionScreen api={api} session={session} onSessionLost={onSessionLost} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Stack>
       {passwordUser && <PasswordDialog user={passwordUser} selfAccountId={session.account.id} onClose={() => setPasswordUser(null)} onSessionLost={onSessionLost} onSave={async (currentPassword, newPassword) => { await api.changePassword(passwordUser.id, { currentPassword, newPassword, expectedRevision: passwordUser.revision }); }} />}
-      <Modal opened={timeZoneAt !== null} onClose={() => setTimeZoneAt(null)} title="Display time zone" centered lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
-        <Stack>
-          <Text size="sm" c="dimmed">Used to display timestamps across Andaru in this browser. The appliance clock on the dashboard stays in UTC.</Text>
-          <Select label="Time zone" data={zoneChoices} value={timeZone} searchable allowDeselect={false} onChange={(value) => { if (value) setTimeZone(value); }} />
-          {timeZoneAt !== null && <Text size="sm" className="tabular">Preview: {formatTimestamp(timeZoneAt, timeZone)}</Text>}
-          <Group justify="flex-end"><Button variant="default" onClick={() => setTimeZoneAt(null)}>Done</Button></Group>
-        </Stack>
-      </Modal>
-    </AppShell>
+    </AppFrame>
   );
 }

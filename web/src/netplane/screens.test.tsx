@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from './api';
-import type { Device, Link, NetworkState, TopologyEdge, VLANFlow, VLANFlowFinding, VLANFlowHop } from './api';
+import type { Device, Link, TopologyEdge, VLANFlow, VLANFlowFinding, VLANFlowHop } from './api';
 import { App } from './App';
 import { PortFaceplate } from './components/PortFaceplate';
 import { TopologyView } from './components/TopologyView';
@@ -16,6 +16,7 @@ import { VlanFlowScreen } from './screens/VlanFlowScreen';
 import { vlanFlowPath } from './routing';
 import { computeAllVlansLayout } from './vlanFlowLayout';
 import { findingKey } from './vlanUtils';
+import { emptyFlow, emptyState, emptyTopology } from '../test/fleet';
 
 const testTheme = createTheme({ primaryColor: 'teal', defaultRadius: 'sm' });
 
@@ -26,21 +27,6 @@ function wrap(ui: ReactNode, path = '/') {
     </MantineProvider>,
   );
 }
-
-const emptyState: NetworkState = {
-  devices: [],
-  links: [],
-  lag_groups: [],
-  segments: [],
-  zones: [],
-  gateways: [],
-  routes: [],
-  vpns: [],
-  firewalls: [],
-  radios: [],
-  wireless_uplinks: [],
-  clients: [],
-};
 
 describe('OverviewScreen', () => {
   it('shows VLAN health as unavailable until a flow report loads', () => {
@@ -57,7 +43,7 @@ describe('OverviewScreen', () => {
       <OverviewScreen
         state={emptyState}
         topology={null}
-        flow={{ generated_at: '2026-01-01T00:00:00Z', vlans: [], findings: [] }}
+        flow={emptyFlow}
         events={[]}
         sseConnected
         devicesById={new Map()}
@@ -495,8 +481,8 @@ describe('App poll all', () => {
   it('names the targets that failed to poll apart from refresh errors', async () => {
     const target = (id: string, name: string) => ({ id, name, driver: 'openwrt', endpoint: 'x', enabled: true, poll_interval: 60 });
     vi.spyOn(api, 'getState').mockResolvedValue(emptyState);
-    vi.spyOn(api, 'getTopology').mockResolvedValue({ generated_at: '2026-01-01T00:00:00Z', root_ids: [], nodes: [], edges: [] });
-    vi.spyOn(api, 'getVLANFlow').mockResolvedValue({ generated_at: '2026-01-01T00:00:00Z', vlans: [], findings: [] });
+    vi.spyOn(api, 'getTopology').mockResolvedValue(emptyTopology);
+    vi.spyOn(api, 'getVLANFlow').mockResolvedValue(emptyFlow);
     vi.spyOn(api, 'listTargets').mockResolvedValue([target('t1', 'Core'), target('t2', 'Attic')]);
     vi.spyOn(api, 'listDiagnostics').mockResolvedValue([]);
     vi.spyOn(api, 'pollTarget').mockImplementation(async (id) => {
@@ -504,9 +490,12 @@ describe('App poll all', () => {
       return {};
     });
 
+    // The access check on start: a server without a token answers it.
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response('{"items":[]}', { status: 200 })));
+
     wrap(<App />);
     fireEvent.click(await screen.findByRole('button', { name: 'Poll all' }));
     await waitFor(() => expect(screen.getByText('Poll failed for: Attic')).toBeInTheDocument());
-    expect(screen.queryByText('API error')).not.toBeInTheDocument();
+    expect(screen.queryByText('Fleet API error')).not.toBeInTheDocument();
   });
 });
