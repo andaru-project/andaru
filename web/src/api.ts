@@ -1,5 +1,11 @@
 import { filenameFromDisposition } from './download';
 import type {
+  AddonDetailResponse,
+  AddonListResponse,
+  AddonLogsResponse,
+  AddonRuntimeView,
+  AddonSavedEntry,
+  AddonStagedView,
   AliasKinds,
   AliasSearchParams,
   AliasSearchResponse,
@@ -747,6 +753,60 @@ export class ApiClient {
 
   dismissNotification(id: number) {
     return this.request<void>(`/api/v1/notifications/${id}/dismiss`, { method: 'POST' }, true);
+  }
+
+  addons() {
+    return this.request<AddonListResponse>('/api/v1/addons');
+  }
+
+  addon(slug: string) {
+    return this.request<AddonDetailResponse>(`/api/v1/addons/${encodeURIComponent(slug)}`);
+  }
+
+  stageAddon(slug: string) {
+    return this.request<AddonStagedView>(`/api/v1/addons/${encodeURIComponent(slug)}/stage`, { method: 'POST' }, true);
+  }
+
+  unstageAddon(slug: string) {
+    return this.request<void>(`/api/v1/addons/${encodeURIComponent(slug)}/stage`, { method: 'DELETE' }, true);
+  }
+
+  controlAddon(slug: string, action: 'start' | 'stop' | 'restart') {
+    return this.request<AddonRuntimeView>(`/api/v1/addons/${encodeURIComponent(slug)}/${action}`, { method: 'POST' }, true);
+  }
+
+  addonLogs(slug: string, name: string, options: { lines?: number; cursor?: string } = {}) {
+    const query = new URLSearchParams();
+    if (options.lines !== undefined) query.set('lines', String(options.lines));
+    if (options.cursor) query.set('cursor', options.cursor);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return this.request<AddonLogsResponse>(`/api/v1/addons/${encodeURIComponent(slug)}/logs/${encodeURIComponent(name)}${suffix}`);
+  }
+
+  addonConfig(id: string) {
+    return this.configObject<AddonSavedEntry>('addons', id);
+  }
+
+  createAddonConfig(entry: AddonSavedEntry) {
+    return this.request<SavedObject<AddonSavedEntry>>('/api/v1/config/addons', {
+      method: 'POST',
+      body: JSON.stringify(entry),
+    }, true);
+  }
+
+  replaceAddonConfig(id: string, entry: AddonSavedEntry, version: string) {
+    return this.request<SavedObject<AddonSavedEntry>>(`/api/v1/config/addons/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'If-Match': `"${id}.${version}"` },
+      body: JSON.stringify(entry),
+    }, true);
+  }
+
+  deleteAddonConfig(id: string, version: string) {
+    return this.request<void>(`/api/v1/config/addons/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
   }
 
   private async requestBlob(

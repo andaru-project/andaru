@@ -35,13 +35,21 @@ type Store struct {
 	closeOnce          sync.Once
 	closeErr           error
 	// saved is told of each new head once it is committed.
-	saved   func(Version)
-	catalog *addon.Catalog
+	saved           func(Version)
+	catalog         *addon.Catalog
+	managementHosts []string
 }
 
 // SetCatalog attaches the validated add-on catalog so add-on writes are checked against their manifests.
 // It must be called before the store is shared across goroutines.
 func (s *Store) SetCatalog(cat *addon.Catalog) { s.catalog = cat }
+
+// SetManagementOrigins records the configured HTTPS management origins so add-on WebUI hostname validation
+// rejects any hostname matching any configured management origin (regardless of port).
+// It must be called before the store is shared across goroutines.
+func (s *Store) SetManagementOrigins(origins []string) {
+	s.managementHosts = extractOriginHosts(origins)
+}
 
 // Catalog returns the attached add-on catalog, or nil if unset.
 func (s *Store) Catalog() *addon.Catalog { return s.catalog }
@@ -395,7 +403,7 @@ func (s *Store) MigrateHead(ctx context.Context) (Version, error) {
 	}
 	// A restore of nothing saves the head as it reads now: in the current form, with the rules and aliases it
 	// renamed recorded as changed.
-	if p.prepared, _, err = prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC(), s.catalog); err != nil {
+	if p.prepared, _, err = prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC(), s.catalog, s.managementHosts); err != nil {
 		return "", err
 	}
 	saved, err := p.publish(ctx)
@@ -421,7 +429,7 @@ func (s *Store) fallBack(ctx context.Context) error {
 		return err
 	}
 	defer p.Close()
-	prepared, _, err := prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC(), s.catalog)
+	prepared, _, err := prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC(), s.catalog, s.managementHosts)
 	if err != nil {
 		return err
 	}
@@ -503,7 +511,7 @@ func (s *Store) prepareSave(ctx context.Context, actor authz.Actor, input Change
 	if len(current.questions) > 0 {
 		return nil, ErrUpgradePending
 	}
-	p.prepared, e = prepareChangesWithCatalog(&current, input, next, time.Now().UTC(), s.catalog)
+	p.prepared, e = prepareChangesWithCatalog(&current, input, next, time.Now().UTC(), s.catalog, s.managementHosts)
 	if e != nil {
 		return nil, e
 	}

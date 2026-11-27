@@ -75,6 +75,9 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		return fmt.Errorf("load add-on catalog: %w", err)
 	}
 	store.SetCatalog(catalog)
+	if web != nil {
+		store.SetManagementOrigins(web.Origins)
+	}
 	if err = initializeAuthorizationState(ctx, stateDir); err != nil {
 		return fmt.Errorf("initialize live authorization state: %w", err)
 	}
@@ -87,6 +90,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			result = err
 		}
 	}()
+	if web != nil {
+		if _, err := reconcileManagementOrigins(ctx, stateDir, identities, web.Origins); err != nil {
+			return fmt.Errorf("reconcile management origins: %w", err)
+		}
+	}
 	audits, err := audit.Open(ctx, stateDir)
 	if err != nil {
 		return err
@@ -247,6 +255,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	setupCodeAPI := newSetupCodeHandler(identities, setupCodes)
 	hostnameAPI := newHostnameHandler(nil)
 	updateAPI := newUpdateAPI(stateDir, nil)
+	var webOrigins []string
+	if web != nil {
+		webOrigins = web.Origins
+	}
+	addonsHandler := newAddonsAPI(catalog, store, stateDir, systemRoot, webOrigins, runner, coordinator)
 	rootAPI := newHandlerWithDeps(handlerDeps{
 		readLinks:        host.ReadLinks,
 		configuration:    newSavedHandler(store, host.ReadLinks, readFacts, applies, backups),
@@ -258,6 +271,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		hostnameAPI:      hostnameAPI,
 		notificationsAPI: notificationsHandler,
 		aliasesAPI:       aliasesAPI{feeds: feeds},
+		addonsAPI:        addonsHandler,
 		stateDir:         stateDir,
 	})
 	if web == nil {

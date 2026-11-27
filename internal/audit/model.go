@@ -13,11 +13,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
 )
 
 const (
-	LayoutVersion        = 1
+	LayoutVersion        = 2
 	generalBudget        = 80_000
 	protectedBudget      = 20_000
 	maxEvents            = generalBudget + protectedBudget
@@ -83,6 +84,11 @@ const (
 	ActionAuditQueried           Action = "audit.queried"
 	ActionAuditHealth            Action = "audit.health"
 	ActionAuditRetentionPruned   Action = "audit.retention_pruned"
+	ActionAddonStaged            Action = "addon.staged"
+	ActionAddonUnstaged          Action = "addon.unstaged"
+	ActionAddonStarted           Action = "addon.started"
+	ActionAddonStopped           Action = "addon.stopped"
+	ActionAddonRestarted         Action = "addon.restarted"
 )
 
 const (
@@ -249,6 +255,11 @@ var actionRules = map[Action]actionRule{
 	ActionAuditQueried:           {category: CategoryGeneral, coalesces: true},
 	ActionAuditHealth:            {category: CategoryProtected},
 	ActionAuditRetentionPruned:   {category: CategoryProtected},
+	ActionAddonStaged:            {category: CategoryGeneral},
+	ActionAddonUnstaged:          {category: CategoryGeneral},
+	ActionAddonStarted:           {category: CategoryGeneral},
+	ActionAddonStopped:           {category: CategoryGeneral},
+	ActionAddonRestarted:         {category: CategoryGeneral},
 }
 
 func validateIntent(intent Intent) error {
@@ -307,6 +318,8 @@ func validTarget(action Action, target string) bool {
 		return len(target) <= 9 && canonicalPositiveUint(target)
 	case ActionBackupRestored:
 		return len(target) == 32 && strings.ToLower(target) == target && isHex(target)
+	case ActionAddonStaged, ActionAddonUnstaged, ActionAddonStarted, ActionAddonStopped, ActionAddonRestarted:
+		return addon.ValidSlug(target)
 	default:
 		return false
 	}

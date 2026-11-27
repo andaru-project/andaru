@@ -3,10 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -114,6 +118,95 @@ func managementOrigins(configured []string) (map[string]struct{}, map[string]str
 		hosts[parsed.Host] = struct{}{}
 	}
 	return origins, hosts, nil
+}
+
+const managementOriginsFile = "management-origins.json"
+
+// reconcileManagementOrigins compares the configured HTTPS management origins against the persisted set
+// from the previous startup. If any previously configured origin was dropped (or the persisted file is unreadable),
+// all active browser sessions are revoked so a retired host's __Host-andaru_session cookie cannot be replayed
+// if that hostname is later reassigned to an add-on WebUI.
+func reconcileManagementOrigins(ctx context.Context, stateDir string, identities identity.Store, configured []string) (revoked bool, err error) {
+	if stateDir == "" || identities == nil {
+		return false, nil
+	}
+	current := slices.Clone(configured)
+	slices.Sort(current)
+	current = slices.Compact(current)
+
+	path := filepath.Join(stateDir, managementOriginsFile)
+	needRevoke := false
+	needWrite := false
+
+	raw, readErr := os.ReadFile(path)
+	if errors.Is(readErr, fs.ErrNotExist) {
+		needWrite = true
+	} else if readErr != nil {
+		needRevoke = true
+		needWrite = true
+	} else {
+		var prev []string
+		if unmarshalErr := json.Unmarshal(raw, &prev); unmarshalErr != nil {
+			needRevoke = true
+			needWrite = true
+		} else {
+			for _, oldOrigin := range prev {
+				if !slices.Contains(current, oldOrigin) {
+					needRevoke = true
+					break
+				}
+			}
+			slices.Sort(prev)
+			prev = slices.Compact(prev)
+			if !slices.Equal(prev, current) {
+				needWrite = true
+			}
+		}
+	}
+
+	if needRevoke {
+		count, revErr := identities.RevokeAllSessions(ctx)
+		if revErr != nil {
+			return false, revErr
+		}
+		revoked = true
+		slog.InfoContext(ctx, "revoked browser sessions after management origin change", "sessions", count)
+	}
+	if needWrite {
+		data, mErr := json.Marshal(current)
+		if mErr != nil {
+			return revoked, mErr
+		}
+		tmp, cErr := os.CreateTemp(stateDir, managementOriginsFile+".tmp-*")
+		if cErr != nil {
+			return revoked, cErr
+		}
+		tmpPath := tmp.Name()
+		if _, wErr := tmp.Write(data); wErr != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+			return revoked, wErr
+		}
+		if cErr := tmp.Chmod(0o600); cErr != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+			return revoked, cErr
+		}
+		if sErr := tmp.Sync(); sErr != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+			return revoked, sErr
+		}
+		if clErr := tmp.Close(); clErr != nil {
+			_ = os.Remove(tmpPath)
+			return revoked, clErr
+		}
+		if rErr := os.Rename(tmpPath, path); rErr != nil {
+			_ = os.Remove(tmpPath)
+			return revoked, rErr
+		}
+	}
+	return revoked, nil
 }
 
 func (h *webAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {

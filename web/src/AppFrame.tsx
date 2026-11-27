@@ -51,7 +51,10 @@ export function AppFrame({ product, subtitle, baseTitle = product, pageTitles, c
   const { pathname } = useLocation();
 
   const normalizedPath = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
-  const isNavItemActive = (to: string) => normalizedPath === to || (to === '/network/devices' && normalizedPath.startsWith('/network/devices/'));
+  const isNavItemActive = (to: string) =>
+    normalizedPath === to
+    || (to === '/network/devices' && normalizedPath.startsWith('/network/devices/'))
+    || (to === '/system/addons' && normalizedPath.startsWith('/system/addons/'));
   // One branch is open at a time, so the tree fits a phone: the one holding the current page, however the page was
   // reached, until another is opened.
   const currentBranch = groups.find((group) => group.items.some((item) => isNavItemActive(item.to)))?.label;
@@ -63,7 +66,12 @@ export function AppFrame({ product, subtitle, baseTitle = product, pageTitles, c
   }
   const toggleBranch = (label: string) => setOpenBranch(openBranch === label ? undefined : label);
   useEffect(() => {
-    const title = pageTitles[normalizedPath] ?? (normalizedPath.startsWith('/network/devices/') ? 'Device' : undefined);
+    const title = pageTitles[normalizedPath]
+      ?? (normalizedPath.startsWith('/network/devices/')
+        ? 'Device'
+        : normalizedPath.startsWith('/system/addons/')
+          ? 'Add-on'
+          : undefined);
     document.title = [title, subtitle, product].filter(Boolean).join(' — ');
     return () => { document.title = baseTitle; };
   }, [normalizedPath, subtitle, product, baseTitle, pageTitles]);

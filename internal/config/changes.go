@@ -257,10 +257,10 @@ func objects(d *declaration) map[objectKey]any {
 }
 
 func prepareChanges(current *savedState, input Changes, next Version, now time.Time) (preparedChange, error) {
-	return prepareChangesWithCatalog(current, input, next, now, nil)
+	return prepareChangesWithCatalog(current, input, next, now, nil, nil)
 }
 
-func prepareChangesWithCatalog(current *savedState, input Changes, next Version, now time.Time, catalog *addon.Catalog) (preparedChange, error) {
+func prepareChangesWithCatalog(current *savedState, input Changes, next Version, now time.Time, catalog *addon.Catalog, managementHosts []string) (preparedChange, error) {
 	var empty preparedChange
 	if len(input.Operations) == 0 || len(input.Operations) > 100 {
 		return empty, fault("VALIDATION_FAILED", "/operations", "Expected 1 to 100 operations.")
@@ -668,7 +668,7 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 	}
 	d = validated
 	if catalog != nil {
-		if catErrs := validateAddonsAgainstCatalog(catalog, &d, writes); len(catErrs) > 0 {
+		if catErrs := validateAddonsAgainstCatalog(catalog, &d, writes, managementHosts); len(catErrs) > 0 {
 			return empty, rebaseValidation(validationError(catErrs), &d, origins, input)
 		}
 		normalizeDeclaration(&d)

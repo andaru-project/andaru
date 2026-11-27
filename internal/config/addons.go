@@ -2,9 +2,11 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -239,7 +241,7 @@ func validateAddons(d *declaration) []FieldError {
 // validateAddonsAgainstCatalog validates every written add-on entry against its catalog manifest,
 // materializes declared setting defaults onto d.Addons, and checks WebUI origin separation across all
 // configured add-ons so later management/DNS changes cannot expose Andaru's session cookie.
-func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written map[objectKey][]byte) []FieldError {
+func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written map[objectKey][]byte, managementHosts []string) []FieldError {
 	if cat == nil || len(d.Addons) == 0 {
 		return nil
 	}
@@ -329,15 +331,16 @@ func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written ma
 			}
 		}
 	}
-	for _, fe := range validateAddonsWebUISeparation(cat, d) {
+	for _, fe := range validateAddonsWebUISeparation(cat, d, managementHosts) {
 		bad(fe.Path, fe.Message)
 	}
 	return out
 }
 
 // validateAddonsWebUISeparation verifies every cataloged add-on's WebUI hostnameSetting does not match
-// Andaru's management hostname, local management FQDN, or management segment IP addresses.
-func validateAddonsWebUISeparation(cat *addon.Catalog, d *declaration) []FieldError {
+// Andaru's configured management origins (regardless of port), appliance hostname, local management FQDN,
+// or management segment IP addresses.
+func validateAddonsWebUISeparation(cat *addon.Catalog, d *declaration, managementHosts []string) []FieldError {
 	if cat == nil || len(d.Addons) == 0 {
 		return nil
 	}
@@ -350,7 +353,7 @@ func validateAddonsWebUISeparation(cat *addon.Catalog, d *declaration) []FieldEr
 		}
 		propName := strings.TrimPrefix(m.WebUI.HostnameSetting, "/")
 		if rawHost, exists := a.Settings[propName].(string); exists && rawHost != "" {
-			if matchesManagementHost(d, rawHost) {
+			if matchesManagementHost(d, managementHosts, rawHost) {
 				if len(out) < 100 {
 					out = append(out, FieldError{
 						Path:    fmt.Sprintf("/addons/%d/settings/%s", i, escapeJSONPointer(propName)),
@@ -374,10 +377,49 @@ func addonSettingSecretKeys(settings map[string]any) []string {
 	return keys
 }
 
-func matchesManagementHost(d *declaration, candidate string) bool {
+func extractOriginHosts(origins []string) []string {
+	var hosts []string
+	for _, raw := range origins {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		h := normalizeHostCandidate(parsed.Hostname())
+		if h != "" && !slices.Contains(hosts, h) {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}
+
+func normalizeHostCandidate(candidate string) string {
 	norm := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(candidate)), ".")
+	norm = strings.TrimPrefix(strings.TrimSuffix(norm, "]"), "[")
+	if addr, err := netip.ParseAddr(norm); err == nil {
+		return addr.Unmap().String()
+	}
+	return norm
+}
+
+// MatchesManagementOrigin reports whether candidate matches any configured management origin hostname
+// (regardless of port), the appliance's local hostname, or (if snapshot is provided) local management FQDN / IPs.
+func MatchesManagementOrigin(origins []string, snapshot []byte, candidate string) bool {
+	var d declaration
+	if len(snapshot) > 0 {
+		_ = json.Unmarshal(snapshot, &d)
+	}
+	return matchesManagementHost(&d, extractOriginHosts(origins), candidate)
+}
+
+func matchesManagementHost(d *declaration, managementHosts []string, candidate string) bool {
+	norm := normalizeHostCandidate(candidate)
 	if norm == "" {
 		return false
+	}
+	for _, mh := range managementHosts {
+		if norm == mh {
+			return true
+		}
 	}
 	if h, err := os.Hostname(); err == nil && h != "" {
 		host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
@@ -385,7 +427,7 @@ func matchesManagementHost(d *declaration, candidate string) bool {
 		if norm == host || norm == short {
 			return true
 		}
-		if d.DNS != nil && d.DNS.LocalDomain != "" {
+		if d != nil && d.DNS != nil && d.DNS.LocalDomain != "" {
 			dom := strings.Trim(strings.ToLower(strings.TrimSpace(d.DNS.LocalDomain)), ".")
 			if dom != "" && (norm == host+"."+dom || norm == short+"."+dom) {
 				return true
@@ -393,7 +435,7 @@ func matchesManagementHost(d *declaration, candidate string) bool {
 		}
 	}
 	candAddr, isIP := parseHostAddr(norm)
-	if !isIP || d.Management == nil || d.Management.Segment == "" {
+	if !isIP || d == nil || d.Management == nil || d.Management.Segment == "" {
 		return false
 	}
 	for _, seg := range d.Segments {

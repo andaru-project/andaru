@@ -537,3 +537,13 @@ func (s *store) RevokeSessionWithIntent(ctx context.Context, accountID, selector
 	}
 	return tx.Commit()
 }
+
+// RevokeAllSessions deletes every active browser session (used when a management origin is removed across restarts
+// so cookies issued to a retired host cannot be replayed if that host is later reassigned to an add-on).
+func (s *store) RevokeAllSessions(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM sessions")
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

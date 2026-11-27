@@ -140,6 +140,13 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.ConfigurationApply, "/api/v1/system/update/rollback", http.MethodPost)
 	add(authz.ConfigurationApply, "/api/v1/system/update/reboot", http.MethodPost)
 	add(authz.ConfigurationApply, "/api/v1/system/hostname", http.MethodPost)
+	add(authz.AddonsRead, "/api/v1/addons", read...)
+	add(authz.AddonsRead, "/api/v1/addons/{slug}", read...)
+	add(authz.AddonsManage, "/api/v1/addons/{slug}/stage", http.MethodPost, http.MethodDelete)
+	add(authz.AddonsManage, "/api/v1/addons/{slug}/start", http.MethodPost)
+	add(authz.AddonsManage, "/api/v1/addons/{slug}/stop", http.MethodPost)
+	add(authz.AddonsManage, "/api/v1/addons/{slug}/restart", http.MethodPost)
+	add(authz.AddonsRead, "/api/v1/addons/{slug}/logs/{name}", read...)
 	return routes
 }
 

@@ -948,3 +948,190 @@ export interface RestoreSavedResponse {
   unresolvedSecrets: string[];
   replayed: boolean;
 }
+
+export type AddonText = string | { i18n: string };
+
+export interface AddonApplication {
+  name: string;
+  version: string;
+}
+
+export interface AddonEnumOption {
+  value: string;
+  title: AddonText;
+  description?: AddonText;
+}
+
+export type AddonPropertyType =
+  | 'string'
+  | 'integer'
+  | 'boolean'
+  | 'enum'
+  | 'string-list'
+  | 'zone-reference'
+  | 'secret-reference';
+
+export interface AddonProperty {
+  name: string;
+  type: AddonPropertyType;
+  format?: string;
+  itemFormat?: string;
+  pattern?: string;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
+  options?: AddonEnumOption[];
+  required?: boolean;
+  default?: unknown;
+  title: AddonText;
+  description?: AddonText;
+}
+
+export interface AddonInterfaceSpec {
+  name: string;
+  title: AddonText;
+  zoneRequired?: boolean;
+}
+
+export interface AddonStorageSpec {
+  name: string;
+  purpose: string;
+  mountPath: string;
+  readOnly?: boolean;
+  backup?: boolean;
+}
+
+export interface AddonEndpointSpec {
+  name: string;
+  protocol: string;
+  port: number;
+  portSetting?: string;
+  exposure: string;
+}
+
+export interface AddonBusTopicSpec {
+  topic: string;
+  title: AddonText;
+  description?: AddonText;
+}
+
+export interface AddonBusSpec {
+  publish?: AddonBusTopicSpec[];
+  subscribe?: AddonBusTopicSpec[];
+}
+
+export interface AddonLogSpec {
+  name: string;
+  title: AddonText;
+  permission: string;
+  source: { type: 'runtime' | 'file'; storage?: string; path?: string };
+  format?: string;
+}
+
+export interface AddonWebUISpec {
+  title: AddonText;
+  permission: string;
+  endpoint: string;
+  hostnameSetting?: string;
+  path: string;
+}
+
+export interface AddonManifest {
+  manifestVersion: number;
+  id: string;
+  slug: string;
+  name: string;
+  description?: AddonText;
+  version: string;
+  application: AddonApplication;
+  properties?: AddonProperty[];
+  interfaces?: AddonInterfaceSpec[];
+  storage?: AddonStorageSpec[];
+  endpoints?: AddonEndpointSpec[];
+  bus?: AddonBusSpec;
+  logs?: AddonLogSpec[];
+  webui?: AddonWebUISpec;
+}
+
+export type AddonBusGrantDecision = 'granted' | 'denied';
+
+export interface AddonSavedInterface {
+  name: string;
+  zone?: string;
+}
+
+export interface AddonSavedBusGrants {
+  publish?: Record<string, AddonBusGrantDecision>;
+  subscribe?: Record<string, AddonBusGrantDecision>;
+}
+
+export interface AddonSavedEntry {
+  id: string;
+  enabled: boolean;
+  settings?: Record<string, unknown>;
+  interfaces?: AddonSavedInterface[];
+  busGrants?: AddonSavedBusGrants;
+}
+
+export interface AddonStagedView {
+  present: boolean;
+  digest: string;
+  stagedAt?: string;
+  error?: string;
+}
+
+export interface AddonRuntimeView {
+  applied: boolean;
+  activeState: string;
+  subState?: string;
+  health: string;
+  appliedImage?: string;
+  updateAvailable: boolean;
+}
+
+export interface AddonWebUIView {
+  title: AddonText;
+  path: string;
+  hostname?: string;
+  url?: string;
+  originConflict: boolean;
+  conflictReason?: string;
+}
+
+export interface AddonSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description?: AddonText;
+  version: string;
+  application: AddonApplication;
+  catalogImage: string;
+  installed: boolean;
+  hasWebUI: boolean;
+  unreviewedBusCount: number;
+  staged: AddonStagedView;
+  runtime: AddonRuntimeView;
+  saved?: AddonSavedEntry;
+}
+
+export interface AddonListResponse {
+  items: AddonSummary[];
+  safeMode: SafeModeStatus;
+}
+
+export interface AddonDetailResponse extends AddonSummary {
+  safeMode: SafeModeStatus;
+  manifest: AddonManifest;
+  webui?: AddonWebUIView;
+}
+
+export interface AddonLogsResponse {
+  name: string;
+  format: string;
+  lines: string[];
+  cursor?: string;
+  truncated: boolean;
+}

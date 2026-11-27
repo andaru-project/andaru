@@ -24,7 +24,7 @@ var layoutObjects = []layoutObject{
 	actor_kind TEXT NOT NULL CHECK(actor_kind IN ('system','account','token')),
 	actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 128),
 	source TEXT NOT NULL CHECK(length(source) BETWEEN 1 AND 128),
-	action TEXT NOT NULL CHECK(action IN ('login.success','login.failure','login.backoff','session.logout','session.revoked','permission.denied','account.created','account.updated','account.disabled','account.deleted','role.changed','password.changed','token.created','token.revoked','secret.exported','configuration.saved','configuration.applied','configuration.confirmed','configuration.rollback','backup.restored','setup.completed','recovery.completed','audit.queried','audit.health','audit.retention_pruned')),
+	action TEXT NOT NULL CHECK(action IN ('login.success','login.failure','login.backoff','session.logout','session.revoked','permission.denied','account.created','account.updated','account.disabled','account.deleted','role.changed','password.changed','token.created','token.revoked','secret.exported','configuration.saved','configuration.applied','configuration.confirmed','configuration.rollback','backup.restored','setup.completed','recovery.completed','audit.queried','audit.health','audit.retention_pruned','addon.staged','addon.unstaged','addon.started','addon.stopped','addon.restarted')),
 	target TEXT NOT NULL CHECK(length(target)<=128),
 	result TEXT NOT NULL CHECK(result IN ('pending','success','failure','denied','committed','not_committed','unavailable','recovered','rolled_back')),
 	operation_id TEXT NOT NULL CHECK(length(operation_id)<=128),
@@ -177,4 +177,70 @@ func databaseURI(path string, readOnly bool) string {
 
 func normalizeDDL(ddl string) string {
 	return strings.Join(strings.Fields(ddl), " ")
+}
+
+// migrateAuditV1 upgrades a v1 audit database to LayoutVersion 2 by expanding the events.action CHECK constraint
+// to include add-on lifecycle actions while preserving all existing events and metadata rows.
+func migrateAuditV1(ctx context.Context, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return err
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON") }()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var oldSeq int64
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0)`).Scan(&oldSeq); err != nil {
+		return fmt.Errorf("migrate audit v1: read sequence: %w", err)
+	}
+
+	stmts := []string{
+		`CREATE TEMP TABLE events_bak AS SELECT id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count FROM events`,
+		`DROP TABLE events`,
+		layoutObjects[0].ddl,
+		`INSERT INTO events(id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count)
+		 SELECT id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count FROM events_bak`,
+		`DROP TABLE events_bak`,
+		`CREATE INDEX events_category_at ON events(category,at,id)`,
+		`CREATE INDEX events_coalesce ON events(action,source,result,at)`,
+		fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion),
+	}
+	for _, stmt := range stmts {
+		if _, err = tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate audit v1: %w", err)
+		}
+	}
+	if oldSeq > 0 {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name='events'`); err != nil {
+			return fmt.Errorf("migrate audit v1: clear sequence: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO sqlite_sequence(name,seq) VALUES('events',?)`, oldSeq); err != nil {
+			return fmt.Errorf("migrate audit v1: restore sequence: %w", err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+		return err
+	}
+	rows, err := conn.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return errors.New("audit v1 migration violated foreign key integrity")
+	}
+	return rows.Err()
 }
