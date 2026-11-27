@@ -9,14 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -888,7 +886,7 @@ func (a *addonsAPI) handleLogs(w http.ResponseWriter, r *http.Request, m *addon.
 			Truncated: truncated,
 		})
 	case "file":
-		entries, truncated, err := readBoundedAddonLogFile(a.stateDir, m.Slug, spec.Source.Storage, spec.Source.Path, lines)
+		entries, truncated, err := a.readFileLog(r.Context(), m.Slug, spec, lines)
 		if err != nil {
 			slog.WarnContext(r.Context(), "addons: read file log", "slug", m.Slug, "log", logName, "error", err)
 			writeError(w, r, http.StatusServiceUnavailable, "LOGS_UNAVAILABLE", "Add-on log file is unavailable.")
@@ -905,78 +903,45 @@ func (a *addonsAPI) handleLogs(w http.ResponseWriter, r *http.Request, m *addon.
 	}
 }
 
-// readBoundedAddonLogFile opens a manifest-declared log file inside the add-on's storage directory using
-// openat2(RESOLVE_IN_ROOT|RESOLVE_NO_SYMLINKS) with O_NOFOLLOW|O_NONBLOCK so symlinks and container-created
-// FIFOs can neither escape the storage directory nor hang the engine.
-func readBoundedAddonLogFile(stateDir, slug, storage, relPath string, maxLines int) ([]string, bool, error) {
-	if stateDir == "" || !addon.ValidSlug(slug) || !filepath.IsLocal(relPath) {
-		return nil, false, errors.New("invalid log file path")
+// readFileLog reads a manifest-declared file log directly when accessible, and falls back to the
+// privileged `andaru realize addon-log` helper on EACCES/EPERM (for containers whose storage directory
+// is owned by a non-root container UID while andaru-engine runs without CAP_DAC_READ_SEARCH).
+func (a *addonsAPI) readFileLog(ctx context.Context, slug string, spec addon.LogSpec, maxLines int) ([]string, bool, error) {
+	entries, truncated, err := addon.ReadBoundedLogFile(a.stateDir, slug, spec.Source.Storage, spec.Source.Path, maxLines, maxAddonLogBytes)
+	if err == nil {
+		return entries, truncated, nil
 	}
-	storageDir := filepath.Join(stateDir, "addons", slug, storage)
-	dirFD, err := unix.Open(storageDir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if errors.Is(err, unix.ENOENT) {
-		return []string{}, false, nil
-	}
-	if err != nil {
+	if (!errors.Is(err, unix.EACCES) && !errors.Is(err, unix.EPERM)) || a.runner == nil || a.stateDir == "" {
 		return nil, false, err
 	}
-	defer unix.Close(dirFD)
+	tmp, tErr := os.CreateTemp(a.stateDir, "addon-log-*.json")
+	if tErr != nil {
+		return nil, false, tErr
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpPath)
 
-	fd, err := unix.Openat2(dirFD, relPath, &unix.OpenHow{
-		Flags:   unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC,
-		Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_SYMLINKS,
-	})
-	if errors.Is(err, unix.ENOENT) {
-		return []string{}, false, nil
+	logCtx, cancel := context.WithTimeout(ctx, addonLogTimeout)
+	defer cancel()
+	if rErr := a.runner.Realize(logCtx, "addon-log", 0, slug, spec.Name, strconv.Itoa(maxLines), tmpPath); rErr != nil {
+		return nil, false, rErr
 	}
-	if err != nil {
-		return nil, false, err
+	raw, rErr := readFileNoFollow(tmpPath, maxAddonLogBytes*2+64<<10)
+	if rErr != nil {
+		return nil, false, rErr
 	}
-	f := os.NewFile(uintptr(fd), relPath)
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return nil, false, err
+	var out struct {
+		Lines     []string `json:"lines"`
+		Truncated bool     `json:"truncated"`
 	}
-	if !info.Mode().IsRegular() {
-		return nil, false, errors.New("log path is not a regular file")
+	if jErr := json.Unmarshal(raw, &out); jErr != nil {
+		return nil, false, jErr
 	}
-	truncated := false
-	size := info.Size()
-	readLimit := int64(maxAddonLogBytes)
-	startsOnLineBoundary := false
-	if size > maxAddonLogBytes {
-		// Seek one byte earlier so we can see whether the retained window begins right after '\n'.
-		if _, err := f.Seek(size-maxAddonLogBytes-1, io.SeekStart); err != nil {
-			return nil, false, err
-		}
-		readLimit = maxAddonLogBytes + 1
-		truncated = true
+	if out.Lines == nil {
+		out.Lines = []string{}
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, readLimit))
-	if err != nil {
-		return nil, false, err
-	}
-	if truncated && len(raw) > 0 {
-		startsOnLineBoundary = raw[0] == '\n'
-		raw = raw[1:]
-		if !startsOnLineBoundary {
-			if nl := bytes.IndexByte(raw, '\n'); nl >= 0 {
-				raw = raw[nl+1:]
-			}
-		}
-	}
-	text := strings.TrimRight(string(raw), "\n")
-	if text == "" {
-		return []string{}, truncated, nil
-	}
-	all := strings.Split(text, "\n")
-	if len(all) > maxLines {
-		all = all[len(all)-maxLines:]
-		truncated = true
-	}
-	return all, truncated, nil
+	return out.Lines, out.Truncated, nil
 }
 
 func defaultReadSystemdUnit(ctx context.Context, unit string) (string, string, error) {

@@ -89,7 +89,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	verb := flags.Arg(0)
 	want := map[string]int{
 		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "aliases": 0, "addons-release-hold": 0, "factory-reset": 0,
-		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1,
+		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1, "addon-log": 4,
 		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0, "set-hostname": 1,
 	}
 	n, known := want[verb]
@@ -127,6 +127,12 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		if !filepath.IsAbs(rest[0]) || filepath.Clean(rest[0]) != rest[0] {
 			return usageError(stderr, realizeUsage, "andaru realize")
 		}
+	case "addon-log":
+		nLines, err := strconv.Atoi(rest[2])
+		if !addon.ValidSlug(rest[0]) || rest[1] == "" || err != nil || nLines < 1 || nLines > 1000 ||
+			!filepath.IsAbs(rest[3]) || filepath.Clean(rest[3]) != rest[3] {
+			return usageError(stderr, realizeUsage, "andaru realize")
+		}
 	}
 	if verb == "factory-reset" {
 		return factoryResetVerb(ctx, stderr)
@@ -137,7 +143,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		// The engine keeps owing these: it tries them again after the reset.
 		switch verb {
-		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens":
+		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens", "addon-log":
 			return 1
 		}
 		return 0
@@ -147,6 +153,9 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return updateVerb(ctx, verb, *stateDir, stderr)
 	case "addon-stage", "addon-unstage":
 		return addonStageVerb(ctx, verb, *stateDir, rest[0], stderr)
+	case "addon-log":
+		nLines, _ := strconv.Atoi(rest[2])
+		return addonLogVerb(*stateDir, rest[0], rest[1], nLines, rest[3], stderr)
 	case "set-hostname":
 		return setHostnameVerb(ctx, rest[0], stderr)
 	}
