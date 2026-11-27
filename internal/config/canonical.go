@@ -51,9 +51,15 @@ func normalizeDeclaration(d *declaration) {
 	slices.SortFunc(d.Aliases.Addresses, func(a, b address) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.Aliases.Ports, func(a, b portAlias) int { return strings.Compare(a.ID, b.ID) })
 	for i := range d.Aliases.Addresses {
+		for j, m := range d.Aliases.Addresses[i].Members {
+			d.Aliases.Addresses[i].Members[j] = canonicalAddressRef(m)
+		}
 		slices.Sort(d.Aliases.Addresses[i].Members)
 	}
 	for i := range d.Aliases.Ports {
+		for j, m := range d.Aliases.Ports[i].Members {
+			d.Aliases.Ports[i].Members[j] = canonicalPortRef(m)
+		}
 		slices.Sort(d.Aliases.Ports[i].Members)
 	}
 	if len(d.Aliases.Addresses)+len(d.Aliases.Ports) == 0 {
@@ -70,6 +76,17 @@ func normalizeDeclaration(d *declaration) {
 		if !d.NAT.PortForwards[i].NoRedirect && d.NAT.PortForwards[i].FilterRule == "" {
 			d.NAT.PortForwards[i].FilterRule = "auto"
 		}
+		for j, from := range d.NAT.PortForwards[i].From {
+			d.NAT.PortForwards[i].From[j] = canonicalAddressRef(from)
+		}
+		if d.NAT.PortForwards[i].To.Address != "" {
+			d.NAT.PortForwards[i].To.Address = canonicalAddressRef(d.NAT.PortForwards[i].To.Address)
+		}
+	}
+	for i := range d.NAT.OneToOne {
+		for j, dst := range d.NAT.OneToOne[i].Destination {
+			d.NAT.OneToOne[i].Destination[j] = canonicalAddressRef(dst)
+		}
 	}
 	if len(d.Rules) == 0 {
 		d.Rules = nil
@@ -78,10 +95,19 @@ func normalizeDeclaration(d *declaration) {
 	for i := range d.Rules {
 		for _, side := range []*ruleSide{&d.Rules[i].From, &d.Rules[i].To} {
 			slices.Sort(side.Zones)
+			for j, addr := range side.Addresses {
+				side.Addresses[j] = canonicalAddressRef(addr)
+			}
 			slices.Sort(side.Addresses)
+		}
+		for j, port := range d.Rules[i].Ports {
+			d.Rules[i].Ports[j] = canonicalPortRef(port)
 		}
 	}
 	if d.Management != nil {
+		for j, src := range d.Management.AllowedSources {
+			d.Management.AllowedSources[j] = canonicalAddressRef(src)
+		}
 		slices.Sort(d.Management.AllowedSources)
 	}
 	if len(d.DHCP) == 0 {

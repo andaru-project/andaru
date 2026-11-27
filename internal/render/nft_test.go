@@ -163,3 +163,70 @@ func TestDynamicAliasRendersBothEmptySets(t *testing.T) {
 		})
 	}
 }
+
+func TestInlineLiteralsRender(t *testing.T) {
+	const (
+		ruleAllow = "rul_00000011-0000-4000-8000-000000000011"
+		ruleRej   = "rul_00000012-0000-4000-8000-000000000012"
+		addrGrp   = "adr_00000013-0000-4000-8000-000000000013"
+		portGrp   = "svc_00000014-0000-4000-8000-000000000014"
+	)
+	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
+		d["management"].(map[string]any)["allowedSources"] = []any{"10.0.0.1", "10.0.0.0/24", "10.0.1.1-10.0.1.5", "2001:db8::1"}
+		aliases := d["aliases"].(map[string]any)
+		aliases["addresses"] = append(aliases["addresses"].([]any), map[string]any{
+			"id": addrGrp, "name": "lit-group", "kind": "group", "members": []any{"192.0.2.5", "2001:db8::/64"},
+		})
+		aliases["ports"] = append(aliases["ports"].([]any), map[string]any{
+			"id": portGrp, "name": "lit-ports", "protocol": "group", "members": []any{"tcp/443", "icmp/echo-request"},
+		})
+		d["rules"] = append(d["rules"].([]any),
+			map[string]any{
+				"id": ruleAllow, "name": "lit-allow", "enabled": true, "action": "accept",
+				"from":  map[string]any{"zones": []any{}, "addresses": []any{"10.0.0.1", "10.0.0.10-10.0.0.20"}},
+				"to":    map[string]any{"zones": []any{}, "addresses": []any{"198.51.100.0/24"}, "not": true},
+				"ports": []any{"udp/53,5353", portGrp},
+				"log":   false,
+			},
+			map[string]any{
+				"id": ruleRej, "name": "lit-reject", "enabled": true, "action": "reject",
+				"from":  map[string]any{"zones": []any{}, "addresses": []any{"2001:db8::1"}},
+				"to":    map[string]any{"zones": []any{}, "addresses": []any{}},
+				"ports": []any{"tcp/8000-8080", "icmpv6"},
+				"log":   false,
+			},
+		)
+		pfs := d["nat"].(map[string]any)["portForwards"].([]any)
+		pf0 := pfs[0].(map[string]any)
+		pf0["from"] = []any{"198.51.100.7"}
+		pf0["to"] = map[string]any{"address": "203.0.113.5"}
+		d["nat"].(map[string]any)["oneToOne"] = []any{
+			map[string]any{
+				"id": "oto_00000015-0000-4000-8000-000000000015", "name": "lit-o2o", "enabled": true,
+				"zone": "zon_00000001-0000-4000-8000-000000000001", "external": "203.0.113.50", "internal": "192.0.2.50",
+				"destination": []any{"198.51.100.9"},
+			},
+		}
+	})
+	f, ok := nftFile(t, render(t, in))
+	if !ok {
+		t.Fatal("no filter rendered")
+	}
+	lines(t, f.Content,
+		"\tset mgmt_4 { type ipv4_addr; flags interval; auto-merge; elements = { 10.0.0.1, 10.0.0.0/24, 10.0.1.1-10.0.1.5 }; }",
+		"\tset mgmt_6 { type ipv6_addr; flags interval; auto-merge; elements = { 2001:db8::1 }; }",
+		"\tset adr_00000013_0000_4000_8000_000000000013_4 { type ipv4_addr; flags interval; auto-merge; elements = { 192.0.2.5 }; }",
+		"\tset adr_00000013_0000_4000_8000_000000000013_6 { type ipv6_addr; flags interval; auto-merge; elements = { 2001:db8::/64 }; }",
+		"\t\tip saddr 10.0.0.1 ip daddr != 198.51.100.0/24 udp dport { 53, 5353 } accept comment \""+ruleAllow+"\"",
+		"\t\tip saddr 10.0.0.10-10.0.0.20 ip daddr != 198.51.100.0/24 tcp dport { 443 } accept comment \""+ruleAllow+"\"",
+		"\t\tip saddr 10.0.0.1 ip daddr != 198.51.100.0/24 icmp type { echo-request } accept comment \""+ruleAllow+"\"",
+		"\t\tip6 saddr 2001:db8::1 tcp dport { 8000-8080 } reject with tcp reset comment \""+ruleRej+"\"",
+		"\t\tip6 saddr 2001:db8::1 meta l4proto ipv6-icmp reject comment \""+ruleRej+"\"",
+	)
+	if !strings.Contains(f.Content, "ip saddr 198.51.100.7 ip daddr 203.0.113.5") {
+		t.Fatalf("port forward literal match missing:\n%s", f.Content)
+	}
+	if !strings.Contains(f.Content, "ip saddr 198.51.100.9 dnat ip to ip daddr map") || !strings.Contains(f.Content, "ip daddr 198.51.100.9 snat ip to ip saddr map") {
+		t.Fatalf("1:1 NAT literal destination match missing:\n%s", f.Content)
+	}
+}

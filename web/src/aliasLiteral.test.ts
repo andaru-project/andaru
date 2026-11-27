@@ -1,24 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { parseAddressLiteral, parseAliasLiterals, parsePortLiteral } from './aliasLiteral';
+import {
+  formatAddressRef,
+  formatPortRef,
+  isAddressLiteral,
+  isPortLiteral,
+  parseAddressLiteral,
+  parseAliasLiterals,
+  parsePortLiteral,
+} from './aliasLiteral';
 
 describe('parseAddressLiteral', () => {
   it('parses canonical IPv4 and IPv6 host addresses and honors family/kind filters', () => {
     expect(parseAddressLiteral('192.168.1.50')).toEqual([{
-      key: 'host:192.168.1.50',
-      label: 'Use 192.168.1.50',
-      hint: 'Creates host address alias "192.168.1.50"',
-      expectedKind: 'host',
-      expectedSummary: '192.168.1.50',
-      payload: { name: '192.168.1.50', kind: 'host', address: '192.168.1.50' },
+      value: '192.168.1.50',
+      label: '192.168.1.50',
+      optionLabel: '192.168.1.50',
+      hint: 'IPv4 address',
     }]);
 
     expect(parseAddressLiteral('2001:0db8:0000:0000::50')).toEqual([{
-      key: 'host:2001:db8::50',
-      label: 'Use 2001:db8::50',
-      hint: 'Creates host address alias "2001:db8::50"',
-      expectedKind: 'host',
-      expectedSummary: '2001:db8::50',
-      payload: { name: '2001:db8::50', kind: 'host', address: '2001:db8::50' },
+      value: '2001:db8::50',
+      label: '2001:db8::50',
+      optionLabel: '2001:db8::50',
+      hint: 'IPv6 address',
     }]);
 
     expect(parseAddressLiteral('192.168.1.50', { family: 'ipv6' })).toEqual([]);
@@ -34,21 +38,20 @@ describe('parseAddressLiteral', () => {
     expect(parseAddressLiteral('::ffff:192.0.2.1')).toEqual([]);
     expect(parseAddressLiteral('::ffff:c000:201')).toEqual([]);
     expect(parseAddressLiteral('web-servers')).toEqual([]);
+    expect(isAddressLiteral('adr_00000001-0000-4000-8000-000000000001')).toBe(false);
   });
 
   it('parses masked CIDR networks including /0, /32, /128 and rejects non-zero host bits', () => {
     expect(parseAddressLiteral('192.168.10.0/24')).toEqual([{
-      key: 'network:192.168.10.0/24',
-      label: 'Use 192.168.10.0/24',
-      hint: 'Creates network alias "192.168.10.0/24"',
-      expectedKind: 'network',
-      expectedSummary: '192.168.10.0/24',
-      payload: { name: '192.168.10.0/24', kind: 'network', prefix: '192.168.10.0/24' },
+      value: '192.168.10.0/24',
+      label: '192.168.10.0/24',
+      optionLabel: '192.168.10.0/24',
+      hint: 'IPv4 network',
     }]);
-    expect(parseAddressLiteral('0.0.0.0/0')[0]?.payload).toEqual({ name: '0.0.0.0/0', kind: 'network', prefix: '0.0.0.0/0' });
-    expect(parseAddressLiteral('192.168.10.5/32')[0]?.payload).toEqual({ name: '192.168.10.5/32', kind: 'network', prefix: '192.168.10.5/32' });
-    expect(parseAddressLiteral('::/0')[0]?.payload).toEqual({ name: '::/0', kind: 'network', prefix: '::/0' });
-    expect(parseAddressLiteral('2001:db8::1/128')[0]?.payload).toEqual({ name: '2001:db8::1/128', kind: 'network', prefix: '2001:db8::1/128' });
+    expect(parseAddressLiteral('0.0.0.0/0')[0]?.value).toBe('0.0.0.0/0');
+    expect(parseAddressLiteral('192.168.10.5/32')[0]?.value).toBe('192.168.10.5/32');
+    expect(parseAddressLiteral('::/0')[0]?.value).toBe('::/0');
+    expect(parseAddressLiteral('2001:db8::1/128')[0]?.value).toBe('2001:db8::1/128');
     expect(parseAddressLiteral('192.168.10.5/24')).toEqual([]);
     expect(parseAddressLiteral('2001:db8::1/64')).toEqual([]);
     expect(parseAddressLiteral('192.168.10.0/08')).toEqual([]);
@@ -57,14 +60,12 @@ describe('parseAddressLiteral', () => {
 
   it('parses same-family IPv4 and IPv6 ranges and rejects backwards or mixed-family ranges', () => {
     expect(parseAddressLiteral('10.20.0.10 - 10.20.0.20')).toEqual([{
-      key: 'range:10.20.0.10-10.20.0.20',
-      label: 'Use 10.20.0.10-10.20.0.20',
-      hint: 'Creates address range alias "10.20.0.10-10.20.0.20"',
-      expectedKind: 'range',
-      expectedSummary: '10.20.0.10–10.20.0.20',
-      payload: { name: '10.20.0.10-10.20.0.20', kind: 'range', first: '10.20.0.10', last: '10.20.0.20' },
+      value: '10.20.0.10-10.20.0.20',
+      label: '10.20.0.10-10.20.0.20',
+      optionLabel: '10.20.0.10-10.20.0.20',
+      hint: 'IPv4 range',
     }]);
-    expect(parseAddressLiteral('2001:db8::10-2001:db8::20')[0]?.expectedSummary).toBe('2001:db8::10–2001:db8::20');
+    expect(parseAddressLiteral('2001:db8::10-2001:db8::20')[0]?.hint).toBe('IPv6 range');
     expect(parseAddressLiteral('10.20.0.20-10.20.0.10')).toEqual([]);
     expect(parseAddressLiteral('10.20.0.10-2001:db8::1')).toEqual([]);
   });
@@ -73,40 +74,64 @@ describe('parseAddressLiteral', () => {
 describe('parsePortLiteral', () => {
   it('offers TCP and UDP for bare ports/ranges, deduplicates and collapses equal bounds', () => {
     const bare = parsePortLiteral('443');
-    expect(bare).toHaveLength(2);
-    expect(bare[0].payload).toEqual({ name: 'tcp/443', protocol: 'tcp', ports: ['443'] });
-    expect(bare[0].expectedSummary).toBe('TCP 443');
-    expect(bare[1].payload).toEqual({ name: 'udp/443', protocol: 'udp', ports: ['443'] });
-    expect(bare[1].expectedSummary).toBe('UDP 443');
+    expect(bare).toEqual([
+      { value: 'tcp/443', label: 'tcp/443', optionLabel: 'TCP 443', hint: 'TCP port' },
+      { value: 'udp/443', label: 'udp/443', optionLabel: 'UDP 443', hint: 'UDP port' },
+    ]);
 
     expect(parsePortLiteral('TCP/80, 443-443, 80, 8000 - 8080')).toEqual([{
-      key: 'tcp:80,443,8000-8080',
-      label: 'Use TCP 80,443,8000-8080',
-      hint: 'Creates TCP port alias "tcp/80,443,8000-8080"',
-      expectedKind: 'tcp',
-      expectedSummary: 'TCP 80, 443, 8000-8080',
-      payload: { name: 'tcp/80,443,8000-8080', protocol: 'tcp', ports: ['80', '443', '8000-8080'] },
+      value: 'tcp/80,443,8000-8080',
+      label: 'tcp/80,443,8000-8080',
+      optionLabel: 'TCP 80,443,8000-8080',
+      hint: 'TCP ports',
     }]);
 
-    expect(parsePortLiteral('udp 53')[0]?.payload).toEqual({ name: 'udp/53', protocol: 'udp', ports: ['53'] });
-    expect(parsePortLiteral('443', { kind: 'udp' })).toHaveLength(1);
-    expect(parsePortLiteral('443', { kind: 'udp' })[0].payload.protocol).toBe('udp');
+    expect(parsePortLiteral('udp 53')[0]?.value).toBe('udp/53');
+    expect(parsePortLiteral('443', { kind: 'udp' })).toEqual([
+      { value: 'udp/443', label: 'udp/443', optionLabel: 'UDP 443', hint: 'UDP port' },
+    ]);
   });
 
-  it('parses known ICMP/ICMPv6 literals with deduplication and rejects invalid ports or unknown types', () => {
-    expect(parseAliasLiterals('ports', 'icmp/echo-request, echo-request')).toEqual([{
-      key: 'icmp:echo-request',
-      label: 'Use ICMP echo-request',
-      hint: 'Creates ICMP alias "icmp/echo-request"',
-      expectedKind: 'icmp',
-      expectedSummary: 'ICMP echo-request',
-      payload: { name: 'icmp/echo-request', protocol: 'icmp', types: ['echo-request'] },
+  it('parses bare and typed ICMP/ICMPv6 literals and rejects invalid ports or unknown types', () => {
+    expect(parseAliasLiterals('ports', 'icmp')).toEqual([{
+      value: 'icmp',
+      label: 'icmp',
+      optionLabel: 'ICMP (any type)',
+      hint: 'ICMP protocol',
     }]);
-    expect(parseAliasLiterals('ports', 'icmpv6/packet-too-big')[0]?.expectedSummary).toBe('ICMPv6 packet-too-big');
+    expect(parseAliasLiterals('ports', 'icmpv6')).toEqual([{
+      value: 'icmpv6',
+      label: 'icmpv6',
+      optionLabel: 'ICMPv6 (any type)',
+      hint: 'ICMPv6 protocol',
+    }]);
+    expect(parseAliasLiterals('ports', 'icmp/echo-request, echo-request')).toEqual([{
+      value: 'icmp/echo-request',
+      label: 'icmp/echo-request',
+      optionLabel: 'ICMP echo-request',
+      hint: 'ICMP type',
+    }]);
+    expect(parseAliasLiterals('ports', 'icmpv6/packet-too-big')[0]?.value).toBe('icmpv6/packet-too-big');
     expect(parsePortLiteral('0')).toEqual([]);
     expect(parsePortLiteral('65536')).toEqual([]);
     expect(parsePortLiteral('90-80')).toEqual([]);
     expect(parsePortLiteral('icmp/router-advertisement')).toEqual([]);
     expect(parsePortLiteral('https')).toEqual([]);
+    expect(isPortLiteral('tcp/443')).toBe(true);
+    expect(isPortLiteral('icmp')).toBe(true);
+    expect(isPortLiteral('443')).toBe(false);
+    expect(isPortLiteral('svc_00000001-0000-4000-8000-000000000001')).toBe(false);
+  });
+
+  it('formats alias names, inline literals, and missing IDs distinctly', () => {
+    const addrs = new Map([['adr_1', 'office']]);
+    expect(formatAddressRef('adr_1', addrs)).toBe('office');
+    expect(formatAddressRef('10.0.0.1', addrs)).toBe('10.0.0.1');
+    expect(formatAddressRef('adr_gone', addrs)).toBe('unknown alias');
+
+    const ports = new Map([['svc_1', 'https']]);
+    expect(formatPortRef('svc_1', ports)).toBe('https');
+    expect(formatPortRef('tcp/443', ports)).toBe('tcp/443');
+    expect(formatPortRef('svc_gone', ports)).toBe('unknown alias');
   });
 });

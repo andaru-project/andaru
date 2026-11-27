@@ -35,12 +35,20 @@ func validateNAT(d *declaration) []FieldError {
 		addresses[a.ID] = a
 	}
 	refFamily := func(path, id string, six bool) {
-		if _, ok := addresses[id]; !ok {
-			bad(path, "Expected an existing address alias.")
-		} else if six && !addressMatchesFamily(addresses, id, true, false) {
-			bad(path, "Expected an address with IPv6 addresses for an IPv6 port forward.")
-		} else if !six && !addressMatchesFamily(addresses, id, false, false) {
-			bad(path, "Expected an address with IPv4 addresses; inbound NAT is IPv4 only.")
+		if _, ok := addresses[id]; ok {
+			if six && !addressMatchesFamily(addresses, id, true, false) {
+				bad(path, "Expected an address with IPv6 addresses for an IPv6 port forward.")
+			} else if !six && !addressMatchesFamily(addresses, id, false, false) {
+				bad(path, "Expected an address with IPv4 addresses; inbound NAT is IPv4 only.")
+			}
+		} else if lit, ok := parseAddressLiteral(id); ok {
+			if six && lit.family != 6 {
+				bad(path, "Expected an IPv6 address, prefix, or range for an IPv6 port forward.")
+			} else if !six && lit.family != 4 {
+				bad(path, "Expected an IPv4 address, prefix, or range; inbound NAT is IPv4 only.")
+			}
+		} else {
+			bad(path, "Expected an existing address alias or a literal IP address, network prefix, or range.")
 		}
 	}
 	ref := func(path, id string) { refFamily(path, id, false) }
@@ -163,14 +171,20 @@ func validateNAT(d *declaration) []FieldError {
 		if !f.Enabled || f.NoRedirect || spans[i].first == 0 {
 			continue
 		}
-		from := strings.Join(slices.Sorted(slices.Values(f.From)), ",")
+		canonicalFrom := make([]string, len(f.From))
+		for k, v := range f.From {
+			canonicalFrom[k] = canonicalAddressRef(v)
+		}
+		slices.Sort(canonicalFrom)
+		from := strings.Join(canonicalFrom, ",")
 		protocols := []string{f.Protocol}
 		if f.Protocol == "tcp-udp" {
 			protocols = []string{"tcp", "udp"}
 		}
+		toAddr := canonicalAddressRef(f.To.Address)
 		for _, zone := range slices.Compact(slices.Sorted(slices.Values(f.IngressZones))) {
 			for _, protocol := range protocols {
-				key := fmt.Sprintf("%s|%t|%s|%t|%t|%s|%s|%s", cmp.Or(f.Family, "ipv4"), f.FromNegated, from, f.ToNegated, f.To.Self, f.To.Address, zone, protocol)
+				key := fmt.Sprintf("%s|%t|%s|%t|%t|%s|%s|%s", cmp.Or(f.Family, "ipv4"), f.FromNegated, from, f.ToNegated, f.To.Self, toAddr, zone, protocol)
 				buckets[key] = append(buckets[key], entry{i, spans[i].first, spans[i].last})
 			}
 		}

@@ -1325,4 +1325,50 @@ describe('simulateTrafficFlow', () => {
     expect(sameSegment.chain).toBe('forward');
     expect(sameSegment.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Inside v6 host', to: '/network/virtual-ips' });
   });
+
+  it('matches inline literal addresses and ports in management SSH sources and firewall rules', () => {
+    const withLiterals: Snapshot['value'] = {
+      ...baseConfig,
+      management: { segment: 'seg_lan', allowedSources: ['192.168.1.99'] },
+      rules: [
+        {
+          id: 'rul_lit',
+          name: 'Allow literal HTTPS',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['zon_lan'], addresses: ['192.168.1.50-192.168.1.60'] },
+          to: { zones: ['zon_wan'], addresses: ['198.51.100.0/24'] },
+          ports: ['tcp/443', 'icmp/echo-request'],
+          log: false,
+        },
+      ],
+    };
+
+    const sshAllowed = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.99', dstIp: '192.168.1.1', dstPort: 22 },
+      withLiterals,
+    );
+    expect(sshAllowed.verdict).toBe('accept');
+    expect(sshAllowed.decidedBy?.label).toBe('Management SSH (LAN)');
+
+    const sshDenied = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.100', dstIp: '192.168.1.1', dstPort: 22 },
+      withLiterals,
+    );
+    expect(sshDenied.verdict).toBe('drop');
+
+    const litRuleHit = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.55', dstIp: '198.51.100.20', dstPort: 443 },
+      withLiterals,
+    );
+    expect(litRuleHit.verdict).toBe('accept');
+    expect(litRuleHit.decidedBy?.label).toBe('Rule #1 (Allow literal HTTPS)');
+
+    const litIcmpHit = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'icmp', srcIp: '192.168.1.55', dstIp: '198.51.100.20', icmpType: 'echo-request' },
+      withLiterals,
+    );
+    expect(litIcmpHit.verdict).toBe('accept');
+    expect(litIcmpHit.decidedBy?.label).toBe('Rule #1 (Allow literal HTTPS)');
+  });
 });

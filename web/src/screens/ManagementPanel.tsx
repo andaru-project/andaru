@@ -1,6 +1,7 @@
 import { Alert, Anchor, Badge, Button, Drawer, Fieldset, Group, Paper, Select, Stack, Text, Title } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useInRouterContext } from 'react-router';
+import { isAddressLiteral } from '../aliasLiteral';
 import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
 import { isDynamicAddressAlias, type ManagementConfig, type SavedLink, type SavedObject, type Segment, type Snapshot } from '../types';
 import { AliasMultiSelect } from './AliasPicker';
@@ -207,8 +208,8 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
                 aliasType="addresses"
                 excludeDynamic
                 label="Allowed SSH sources"
-                description="Restricts the fixed SSH anti-lockout rule on the management segment to these address aliases. Leave empty to allow SSH from any address on the management segment. Web UI access is governed by firewall rules."
-                placeholder="Any address on the management segment"
+                description="Restricts the fixed SSH anti-lockout rule on the management segment to these addresses or address aliases (IPs, CIDRs, ranges, or alias names). Leave empty to allow SSH from any address on the management segment. Web UI access is governed by firewall rules."
+                placeholder="Alias name, 10.0.0.1, or 10.0.0.0/24"
                 initialOptions={addressOptions}
                 value={allowedSources}
                 error={errors.get('allowedSources')}
@@ -218,7 +219,7 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
               />
               {allowedSources.length > 0 && (
                 <Alert color="yellow" role="status" title="Verify SSH access before applying">
-                  Make sure your current client address and IP family are covered by the selected aliases, or SSH anti-lockout access will be dropped on apply.
+                  Make sure your current client address and IP family are covered by the allowed sources, or SSH anti-lockout access will be dropped on apply.
                 </Alert>
               )}
               <Text size="xs" c="dimmed">
@@ -294,7 +295,7 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
             <Group justify="space-between" align="flex-end" wrap="wrap">
               <div>
                 <Title order={3} size="h4">Management access</Title>
-                <Text size="sm" c="dimmed">Which segment administers Andaru, and which address aliases are permitted by the fixed SSH anti-lockout rule.</Text>
+                <Text size="sm" c="dimmed">Which segment administers Andaru, and which addresses or address aliases are permitted by the fixed SSH anti-lockout rule.</Text>
               </div>
               {canConfigure && (
                 <Button size="xs" variant="default" loading={opening} onClick={() => void openEditor()}>
@@ -330,9 +331,17 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
                     <>
                       {sources.map((id, idx) => {
                         const name = aliasesById.get(id);
+                        const literal = !name && isAddressLiteral(id);
                         return (
-                          <Badge key={`${id}-${idx}`} variant={name ? 'default' : 'light'} color={name ? undefined : 'red'} className={name ? 'alias' : 'alias error-text'} tt="none">
-                            {name ?? `${id} (missing)`}
+                          <Badge
+                            key={`${id}-${idx}`}
+                            variant={name || literal ? 'default' : 'light'}
+                            color={name || literal ? undefined : 'red'}
+                            ff={literal ? 'monospace' : undefined}
+                            className={name ? 'alias' : literal ? undefined : 'alias error-text'}
+                            tt="none"
+                          >
+                            {name ?? (literal ? id : `${id} (missing)`)}
                           </Badge>
                         );
                       })}

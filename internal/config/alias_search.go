@@ -162,6 +162,9 @@ func searchAliasesInSet(ctx context.Context, set *aliasSet, savedVersion Version
 func addressMatchesFamily(byID map[string]address, id string, six, nested bool) bool {
 	a, ok := byID[id]
 	if !ok {
+		if lit, lok := parseAddressLiteral(id); lok {
+			return (six && lit.family == 6) || (!six && lit.family == 4)
+		}
 		return false
 	}
 	if a.dynamic() {

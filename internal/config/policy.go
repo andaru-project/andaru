@@ -116,11 +116,14 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 				bad(p+"/members", "A group needs at least one member.")
 			}
 			for j, m := range a.Members {
-				member, ok := addresses[m]
-				if !ok || member.Kind == "group" {
-					bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing address aliases that are not groups.")
-				} else if member.dynamic() {
-					bad(fmt.Sprintf("%s/members/%d", p, j), "An alias fed from a URL or from host names cannot be a group's member yet.")
+				if member, ok := addresses[m]; ok {
+					if member.Kind == "group" {
+						bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing address aliases that are not groups.")
+					} else if member.dynamic() {
+						bad(fmt.Sprintf("%s/members/%d", p, j), "An alias fed from a URL or from host names cannot be a group's member yet.")
+					}
+				} else if _, ok := parseAddressLiteral(m); !ok {
+					bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing non-group address aliases or literal IP addresses, network prefixes, or ranges.")
 				}
 			}
 		case "url":
@@ -159,8 +162,12 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 	for _, a := range d.Aliases.Addresses {
 		if a.Kind == "group" {
 			for _, m := range a.Members {
-				for family := range families[m] {
-					families[a.ID][family] = true
+				if fams, ok := families[m]; ok {
+					for family := range fams {
+						families[a.ID][family] = true
+					}
+				} else if lit, ok := parseAddressLiteral(m); ok {
+					families[a.ID][lit.family] = true
 				}
 			}
 		}
@@ -209,8 +216,12 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 			bad(p+"/members", "A group needs at least one member.")
 		}
 		for j, m := range s.Members {
-			if member, ok := services[m]; !ok || member.Protocol == "group" {
-				bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing port aliases that are not groups.")
+			if member, ok := services[m]; ok {
+				if member.Protocol == "group" {
+					bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing port aliases that are not groups.")
+				}
+			} else if _, ok := parsePortLiteral(m); !ok {
+				bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing non-group port aliases or literal ports (such as tcp/443, udp/53, or icmp/echo-request).")
 			}
 		}
 	}
@@ -242,11 +253,14 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 			}
 			f := map[int]bool{}
 			for j, ref := range s.Addresses {
-				if addresses[ref] == nil {
-					bad(fmt.Sprintf("%s/%s/addresses/%d", p, field, j), "Expected an existing address alias.")
-				}
-				for family := range families[ref] {
-					f[family] = true
+				if addresses[ref] != nil {
+					for family := range families[ref] {
+						f[family] = true
+					}
+				} else if lit, ok := parseAddressLiteral(ref); ok {
+					f[lit.family] = true
+				} else {
+					bad(fmt.Sprintf("%s/%s/addresses/%d", p, field, j), "Expected an existing address alias or a literal IP address, network prefix, or range.")
 				}
 			}
 			if s.Not {
@@ -279,29 +293,41 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		if len(from) > 0 && len(to) > 0 && !(from[4] && to[4]) && !(from[6] && to[6]) {
 			bad(p+"/to/addresses", neverAddresses)
 		}
-		// The families a port alias can match: icmp only IPv4, icmpv6 only IPv6, ports both.
+		// The families a port alias or literal can match: icmp only IPv4, icmpv6 only IPv6, ports both.
 		offered, leaves := map[int]bool{}, 0
-		for j, ref := range r.Ports {
-			s := services[ref]
-			if s == nil {
-				bad(fmt.Sprintf("%s/ports/%d", p, j), "Expected an existing port alias.")
-				continue
+		recordProtocol := func(proto string) {
+			switch proto {
+			case "icmp":
+				offered[4] = true
+				leaves++
+			case "icmpv6":
+				offered[6] = true
+				leaves++
+			case "tcp", "udp":
+				offered[4], offered[6] = true, true
+				leaves++
 			}
-			for _, m := range append([]string{ref}, s.Members...) {
-				if member := services[m]; member != nil {
-					switch member.Protocol {
-					case "icmp":
-						offered[4] = true
-						leaves++
-					case "icmpv6":
-						offered[6] = true
-						leaves++
-					case "tcp", "udp":
-						offered[4], offered[6] = true, true
-						leaves++
+		}
+		for j, ref := range r.Ports {
+			if s := services[ref]; s != nil {
+				if s.Protocol != "group" {
+					recordProtocol(s.Protocol)
+					continue
+				}
+				for _, m := range s.Members {
+					if member := services[m]; member != nil {
+						recordProtocol(member.Protocol)
+					} else if lit, ok := parsePortLiteral(m); ok {
+						recordProtocol(lit.protocol)
 					}
 				}
+				continue
 			}
+			if lit, ok := parsePortLiteral(ref); ok {
+				recordProtocol(lit.protocol)
+				continue
+			}
+			bad(fmt.Sprintf("%s/ports/%d", p, j), "Expected an existing port alias or a literal port (such as tcp/443, udp/53, or icmp/echo-request).")
 		}
 		meets := func(f int) bool { return (len(from) == 0 || from[f]) && (len(to) == 0 || to[f]) && offered[f] }
 		if len(offered) > 0 && !meets(4) && !meets(6) {
@@ -326,10 +352,12 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 			bad("/management/segment", "Expected an existing segment.")
 		}
 		for j, ref := range m.AllowedSources {
-			if addresses[ref] == nil {
-				bad(fmt.Sprintf("/management/allowedSources/%d", j), "Expected an existing address alias.")
-			} else if addresses[ref].dynamic() {
-				bad(fmt.Sprintf("/management/allowedSources/%d", j), "An alias fed from a URL or from host names cannot be a management source yet.")
+			if a := addresses[ref]; a != nil {
+				if a.dynamic() {
+					bad(fmt.Sprintf("/management/allowedSources/%d", j), "An alias fed from a URL or from host names cannot be a management source yet.")
+				}
+			} else if _, ok := parseAddressLiteral(ref); !ok {
+				bad(fmt.Sprintf("/management/allowedSources/%d", j), "Expected an existing address alias or a literal IP address, network prefix, or range.")
 			}
 		}
 	}
@@ -352,4 +380,108 @@ func aliasURL(s string) bool {
 	}
 	port, e := strconv.Atoi(u.Port())
 	return e == nil && port >= 1 && port <= 65535
+}
+
+type addressLiteral struct {
+	kind      string
+	family    int
+	canonical string
+	addr      netip.Addr
+	prefix    netip.Prefix
+	first     netip.Addr
+	last      netip.Addr
+}
+
+// parseAddressLiteral parses an inline literal address (host IP, masked CIDR prefix, or same-family first-last range)
+// using the exact rules applied to address aliases.
+func parseAddressLiteral(s string) (addressLiteral, bool) {
+	if s == "" {
+		return addressLiteral{}, false
+	}
+	famOf := func(a netip.Addr) int {
+		if a.Is4() {
+			return 4
+		}
+		return 6
+	}
+	if strings.Contains(s, "/") {
+		p, e := netip.ParsePrefix(s)
+		if e != nil || p.Addr().Is4In6() || p.Addr().Zone() != "" || p != p.Masked() {
+			return addressLiteral{}, false
+		}
+		return addressLiteral{kind: "network", family: famOf(p.Addr()), canonical: p.String(), prefix: p}, true
+	}
+	if lo, hi, isRange := strings.Cut(s, "-"); isRange {
+		first, e1 := netip.ParseAddr(lo)
+		last, e2 := netip.ParseAddr(hi)
+		if e1 != nil || e2 != nil || first.Zone() != "" || last.Zone() != "" ||
+			first.Is4In6() || last.Is4In6() || first.Is4() != last.Is4() || last.Less(first) {
+			return addressLiteral{}, false
+		}
+		return addressLiteral{kind: "range", family: famOf(first), canonical: first.String() + "-" + last.String(), first: first, last: last}, true
+	}
+	a, e := netip.ParseAddr(s)
+	if e != nil || a.Zone() != "" || a.Is4In6() || !a.IsValid() {
+		return addressLiteral{}, false
+	}
+	return addressLiteral{kind: "host", family: famOf(a), canonical: a.String(), addr: a}, true
+}
+
+type portLiteral struct {
+	protocol  string
+	ports     []string
+	types     []string
+	canonical string
+}
+
+// parsePortLiteral parses an inline literal port or ICMP match:
+// "tcp/<ports>", "udp/<ports>", "icmp", "icmp/<types>", "icmpv6", or "icmpv6/<types>".
+func parsePortLiteral(s string) (portLiteral, bool) {
+	if s == "icmp" || s == "icmpv6" {
+		return portLiteral{protocol: s, canonical: s}, true
+	}
+	proto, rest, ok := strings.Cut(s, "/")
+	if !ok || rest == "" {
+		return portLiteral{}, false
+	}
+	switch proto {
+	case "tcp", "udp":
+		parts := strings.Split(rest, ",")
+		if len(parts) == 0 || len(parts) > 64 {
+			return portLiteral{}, false
+		}
+		for _, part := range parts {
+			if _, _, ok := portSpan(part); !ok {
+				return portLiteral{}, false
+			}
+		}
+		return portLiteral{protocol: proto, ports: parts, canonical: s}, true
+	case "icmp", "icmpv6":
+		parts := strings.Split(rest, ",")
+		if len(parts) == 0 || len(parts) > 32 {
+			return portLiteral{}, false
+		}
+		for _, part := range parts {
+			if !slices.Contains(icmpTypes[proto], part) {
+				return portLiteral{}, false
+			}
+		}
+		return portLiteral{protocol: proto, types: parts, canonical: s}, true
+	default:
+		return portLiteral{}, false
+	}
+}
+
+func canonicalAddressRef(s string) string {
+	if lit, ok := parseAddressLiteral(s); ok {
+		return lit.canonical
+	}
+	return s
+}
+
+func canonicalPortRef(s string) string {
+	if lit, ok := parsePortLiteral(s); ok {
+		return lit.canonical
+	}
+	return s
 }

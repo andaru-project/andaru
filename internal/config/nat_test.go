@@ -293,3 +293,63 @@ func TestNATSurvivesASelfReferencingGroup(t *testing.T) {
 		t.Fatal("validation did not return")
 	}
 }
+
+// NAT port forwards and 1:1 entries accept inline literal addresses matching their family and detect canonical overlaps.
+func TestNATInlineAddressLiterals(t *testing.T) {
+	d := natFixture(t)
+	setNAT(d, "portForwards",
+		forward(d, map[string]any{
+			"from": []any{"198.51.100.1", "198.51.100.0/24", "198.51.100.10-198.51.100.20"},
+			"to":   map[string]any{"address": "203.0.113.5"},
+		}),
+		forward(d, map[string]any{
+			"id":     "pfw_00000002-0000-4000-8000-000000000002",
+			"name":   "v6",
+			"family": "ipv6",
+			"from":   []any{"2001:0db8::0001"},
+			"to":     map[string]any{"address": "2001:db8::/64"},
+			"target": map[string]any{"self": true},
+		}),
+	)
+	setNAT(d, "oneToOne", map[string]any{
+		"id":          "oto_00000001-0000-4000-8000-000000000001",
+		"name":        "srv",
+		"enabled":     true,
+		"zone":        item(d["zones"].([]any), 0)["id"],
+		"external":    "203.0.113.50",
+		"internal":    "192.0.2.50",
+		"destination": []any{"198.51.100.1", "198.51.100.0/24"},
+	})
+	got, err := decodeMap(t, d)
+	if err != nil {
+		t.Fatalf("valid NAT literals refused: %v", err)
+	}
+	if got.NAT.PortForwards[1].From[0] != "2001:db8::1" {
+		t.Fatalf("IPv6 literal not canonicalized: %v", got.NAT.PortForwards[1].From)
+	}
+
+	// IPv6 literal in IPv4 port forward or 1:1 NAT is refused.
+	d = natFixture(t)
+	setNAT(d, "portForwards", forward(d, map[string]any{"from": []any{"2001:db8::1"}}))
+	refusedAt(t, d, "/nat/portForwards/0/from/0")
+
+	d = natFixture(t)
+	setNAT(d, "portForwards", forward(d, map[string]any{"to": map[string]any{"address": "2001:db8::1"}}))
+	refusedAt(t, d, "/nat/portForwards/0/to/address")
+
+	d = natFixture(t)
+	setNAT(d, "portForwards", forward(d, map[string]any{
+		"family": "ipv6",
+		"from":   []any{"10.0.0.1"},
+		"target": map[string]any{"self": true},
+	}))
+	refusedAt(t, d, "/nat/portForwards/0/from/0")
+
+	// Canonical IPv6 overlap detection catches differently-spelled identical literals.
+	d = natFixture(t)
+	setNAT(d, "portForwards",
+		forward(d, map[string]any{"id": "pfw_00000001-0000-4000-8000-000000000001", "name": "a", "family": "ipv6", "from": []any{"2001:0db8::0001"}, "target": map[string]any{"self": true}}),
+		forward(d, map[string]any{"id": "pfw_00000002-0000-4000-8000-000000000002", "name": "b", "family": "ipv6", "from": []any{"2001:db8::1"}, "target": map[string]any{"self": true}}),
+	)
+	refusedAt(t, d, "/nat/portForwards/1/ports")
+}

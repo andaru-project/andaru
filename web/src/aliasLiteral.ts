@@ -1,27 +1,37 @@
 import { parseIpv6Groups } from './dhcpEdit';
 import { parsePortSpan } from './natEdit';
-import type { AddressAlias, AliasKinds, PortAlias } from './types';
+import type { AliasKinds } from './types';
 
-export interface LiteralAliasCandidate<K extends keyof AliasKinds = keyof AliasKinds> {
-  key: string;
+export interface LiteralOption {
+  value: string;
   label: string;
+  optionLabel: string;
   hint: string;
-  expectedKind: string;
-  expectedSummary: string;
-  payload: Omit<AliasKinds[K], 'id'>;
 }
 
-// The types an ICMP or ICMPv6 alias may name, matching internal/config/policy.go.
+export type ParsedAddressLiteral =
+  | { kind: 'host'; family: 4 | 6; value: bigint; canonical: string }
+  | { kind: 'network'; family: 4 | 6; network: bigint; mask: bigint; bits: number; canonical: string }
+  | { kind: 'range'; family: 4 | 6; first: bigint; last: bigint; canonical: string };
+
+export type ParsedPortLiteral =
+  | { protocol: 'tcp' | 'udp'; ports: string[]; canonical: string }
+  | { protocol: 'icmp' | 'icmpv6'; types: string[]; canonical: string };
+
+// The types an ICMP or ICMPv6 alias or literal may name, matching internal/config/policy.go.
 export const icmpTypes: Record<'icmp' | 'icmpv6', readonly string[]> = {
   icmp: ['echo-request', 'echo-reply', 'destination-unreachable', 'time-exceeded', 'parameter-problem', 'timestamp-request', 'timestamp-reply'],
   icmpv6: ['echo-request', 'echo-reply', 'destination-unreachable', 'packet-too-big', 'time-exceeded', 'parameter-problem'],
 };
 
 interface ParsedAddress {
-  family: 'ipv4' | 'ipv6';
+  family: 4 | 6;
   value: bigint;
   canonical: string;
 }
+
+const ipv4Max = (1n << 32n) - 1n;
+const ipv6Max = (1n << 128n) - 1n;
 
 function formatIpv6Groups(groups: string[]): string {
   const nums = groups.map((g) => Number.parseInt(g, 16));
@@ -60,7 +70,7 @@ function parseBareAddress(raw: string): ParsedAddress | null {
       if (n < 0 || n > 255) return null;
       value = (value << 8n) | BigInt(n);
     }
-    return { family: 'ipv4', value, canonical: text };
+    return { family: 4, value, canonical: text };
   }
 
   if (text.includes(':')) {
@@ -69,27 +79,70 @@ function parseBareAddress(raw: string): ParsedAddress | null {
     let value = 0n;
     for (const g of groups) value = (value << 16n) | BigInt(`0x${g}`);
     if ((value >> 32n) === 0xffffn) return null;
-    return { family: 'ipv6', value, canonical: formatIpv6Groups(groups) };
+    return { family: 6, value, canonical: formatIpv6Groups(groups) };
   }
 
   return null;
 }
 
-function parseNetworkLiteral(raw: string): { family: 'ipv4' | 'ipv6'; canonical: string } | null {
-  const slash = raw.indexOf('/');
-  if (slash === -1 || raw.indexOf('/', slash + 1) !== -1) return null;
-  const addrPart = raw.slice(0, slash).trim();
-  const bitsPart = raw.slice(slash + 1).trim();
-  if (!/^(0|[1-9]\d{0,2})$/.test(bitsPart)) return null;
-  const parsed = parseBareAddress(addrPart);
-  if (!parsed) return null;
-  const bits = Number(bitsPart);
-  const maxBits = parsed.family === 'ipv4' ? 32 : 128;
-  if (bits < 0 || bits > maxBits) return null;
-  // Mirrors internal/config/policy.go:90 — network prefixes must have zero host bits.
-  const hostBits = maxBits - bits;
-  if (hostBits > 0 && (parsed.value & ((1n << BigInt(hostBits)) - 1n)) !== 0n) return null;
-  return { family: parsed.family, canonical: `${parsed.canonical}/${bits}` };
+export function parseAddressLiteralValue(raw: string): ParsedAddressLiteral | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 128) return null;
+
+  if (trimmed.includes('/')) {
+    const slash = trimmed.indexOf('/');
+    if (trimmed.indexOf('/', slash + 1) !== -1) return null;
+    const addrPart = trimmed.slice(0, slash).trim();
+    const bitsPart = trimmed.slice(slash + 1).trim();
+    if (!/^(0|[1-9]\d{0,2})$/.test(bitsPart)) return null;
+    const parsed = parseBareAddress(addrPart);
+    if (!parsed) return null;
+    const bits = Number(bitsPart);
+    const maxBits = parsed.family === 4 ? 32 : 128;
+    if (bits < 0 || bits > maxBits) return null;
+    // Mirrors internal/config/policy.go — network prefixes must have zero host bits.
+    const hostBits = maxBits - bits;
+    if (hostBits > 0 && (parsed.value & ((1n << BigInt(hostBits)) - 1n)) !== 0n) return null;
+    const allOnes = parsed.family === 4 ? ipv4Max : ipv6Max;
+    const mask = bits === 0 ? 0n : (allOnes << BigInt(hostBits)) & allOnes;
+    return {
+      kind: 'network',
+      family: parsed.family,
+      network: parsed.value & mask,
+      mask,
+      bits,
+      canonical: `${parsed.canonical}/${bits}`,
+    };
+  }
+
+  const dash = trimmed.indexOf('-');
+  if (dash !== -1 && trimmed.indexOf('-', dash + 1) === -1) {
+    const first = parseBareAddress(trimmed.slice(0, dash));
+    const last = parseBareAddress(trimmed.slice(dash + 1));
+    if (!first || !last || first.family !== last.family || last.value < first.value) return null;
+    const canonical = `${first.canonical}-${last.canonical}`;
+    if (canonical.length > 128) return null;
+    return {
+      kind: 'range',
+      family: first.family,
+      first: first.value,
+      last: last.value,
+      canonical,
+    };
+  }
+
+  const host = parseBareAddress(trimmed);
+  if (!host) return null;
+  return {
+    kind: 'host',
+    family: host.family,
+    value: host.value,
+    canonical: host.canonical,
+  };
+}
+
+export function isAddressLiteral(value: string): boolean {
+  return parseAddressLiteralValue(value) !== null;
 }
 
 function parsePortList(raw: string): string[] | null {
@@ -107,87 +160,111 @@ function parsePortList(raw: string): string[] | null {
   return out;
 }
 
-function buildPortCandidate(
-  protocol: 'tcp' | 'udp',
-  ports: string[],
-): LiteralAliasCandidate<'ports'> | null {
+export function parsePortLiteralValue(raw: string): ParsedPortLiteral | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 256) return null;
+
+  if (trimmed === 'icmp' || trimmed === 'icmpv6') {
+    return { protocol: trimmed, types: [], canonical: trimmed };
+  }
+
+  const slash = trimmed.indexOf('/');
+  if (slash <= 0 || slash === trimmed.length - 1) return null;
+  const proto = trimmed.slice(0, slash);
+  const rest = trimmed.slice(slash + 1);
+
+  if (proto === 'tcp' || proto === 'udp') {
+    const parts = rest.split(',');
+    if (parts.length === 0 || parts.length > 64) return null;
+    for (const part of parts) {
+      const span = parsePortSpan(part);
+      if (!span) return null;
+      const canonical = span.first === span.last ? String(span.first) : `${span.first}-${span.last}`;
+      if (canonical !== part) return null;
+    }
+    return { protocol: proto, ports: parts, canonical: trimmed };
+  }
+
+  if (proto === 'icmp' || proto === 'icmpv6') {
+    const parts = rest.split(',');
+    if (parts.length === 0 || parts.length > 32) return null;
+    const allowed = icmpTypes[proto];
+    for (const part of parts) {
+      if (!allowed.includes(part)) return null;
+    }
+    return { protocol: proto, types: parts, canonical: trimmed };
+  }
+
+  return null;
+}
+
+export function isPortLiteral(value: string): boolean {
+  return parsePortLiteralValue(value) !== null;
+}
+
+export function isAliasLiteral(aliasType: keyof AliasKinds, value: string): boolean {
+  return aliasType === 'addresses' ? isAddressLiteral(value) : isPortLiteral(value);
+}
+
+export function formatAddressRef(ref: string, names: Map<string, string>, fallback = 'unknown alias'): string {
+  return names.get(ref) ?? (isAddressLiteral(ref) ? ref : fallback);
+}
+
+export function formatPortRef(ref: string, names: Map<string, string>, fallback = 'unknown alias'): string {
+  return names.get(ref) ?? (isPortLiteral(ref) ? ref : fallback);
+}
+
+function buildPortOption(protocol: 'tcp' | 'udp', ports: string[]): LiteralOption | null {
   const joined = ports.join(',');
-  const name = `${protocol}/${joined}`;
-  if (name.length > 128) return null;
+  const value = `${protocol}/${joined}`;
+  if (value.length > 256) return null;
   const upper = protocol.toUpperCase();
-  const payload: Omit<PortAlias, 'id'> = { name, protocol, ports };
+  const isPlural = ports.length > 1 || ports[0].includes('-');
   return {
-    key: `${protocol}:${joined}`,
-    label: `Use ${upper} ${joined}`,
-    hint: `Creates ${upper} port alias "${name}"`,
-    expectedKind: protocol,
-    expectedSummary: `${upper} ${ports.join(', ')}`,
-    payload,
+    value,
+    label: value,
+    optionLabel: `${upper} ${joined}`,
+    hint: isPlural ? `${upper} ports` : `${upper} port`,
   };
 }
 
 export function parseAddressLiteral(
   input: string,
   options: { family?: 'ipv4' | 'ipv6'; kind?: string } = {},
-): Array<LiteralAliasCandidate<'addresses'>> {
-  const trimmed = input.trim();
-  if (!trimmed || trimmed.length > 128) return [];
-
-  if (trimmed.includes('/')) {
-    if (options.kind && options.kind !== 'network') return [];
-    const net = parseNetworkLiteral(trimmed);
-    if (!net || (options.family && net.family !== options.family)) return [];
-    const payload: Omit<AddressAlias, 'id'> = { name: net.canonical, kind: 'network', prefix: net.canonical };
-    return [{
-      key: `network:${net.canonical}`,
-      label: `Use ${net.canonical}`,
-      hint: `Creates network alias "${net.canonical}"`,
-      expectedKind: 'network',
-      expectedSummary: net.canonical,
-      payload,
-    }];
-  }
-
-  const dash = trimmed.indexOf('-');
-  if (dash !== -1 && trimmed.indexOf('-', dash + 1) === -1) {
-    if (options.kind && options.kind !== 'range') return [];
-    const first = parseBareAddress(trimmed.slice(0, dash));
-    const last = parseBareAddress(trimmed.slice(dash + 1));
-    if (!first || !last || first.family !== last.family || last.value < first.value) return [];
-    if (options.family && first.family !== options.family) return [];
-    const name = `${first.canonical}-${last.canonical}`;
-    if (name.length > 128) return [];
-    const payload: Omit<AddressAlias, 'id'> = { name, kind: 'range', first: first.canonical, last: last.canonical };
-    return [{
-      key: `range:${name}`,
-      label: `Use ${name}`,
-      hint: `Creates address range alias "${name}"`,
-      expectedKind: 'range',
-      expectedSummary: `${first.canonical}–${last.canonical}`,
-      payload,
-    }];
-  }
-
-  if (options.kind && options.kind !== 'host') return [];
-  const host = parseBareAddress(trimmed);
-  if (!host || (options.family && host.family !== options.family)) return [];
-  const payload: Omit<AddressAlias, 'id'> = { name: host.canonical, kind: 'host', address: host.canonical };
+): LiteralOption[] {
+  const parsed = parseAddressLiteralValue(input);
+  if (!parsed) return [];
+  if (options.kind && parsed.kind !== options.kind) return [];
+  const wantedFamily = options.family === 'ipv4' ? 4 : options.family === 'ipv6' ? 6 : undefined;
+  if (wantedFamily !== undefined && parsed.family !== wantedFamily) return [];
+  const famLabel = parsed.family === 4 ? 'IPv4' : 'IPv6';
+  const kindLabel = parsed.kind === 'host' ? 'address' : parsed.kind === 'network' ? 'network' : 'range';
   return [{
-    key: `host:${host.canonical}`,
-    label: `Use ${host.canonical}`,
-    hint: `Creates host address alias "${host.canonical}"`,
-    expectedKind: 'host',
-    expectedSummary: host.canonical,
-    payload,
+    value: parsed.canonical,
+    label: parsed.canonical,
+    optionLabel: parsed.canonical,
+    hint: `${famLabel} ${kindLabel}`,
   }];
 }
 
 export function parsePortLiteral(
   input: string,
   options: { kind?: string } = {},
-): Array<LiteralAliasCandidate<'ports'>> {
+): LiteralOption[] {
   const trimmed = input.trim();
-  if (!trimmed || trimmed.length > 128) return [];
+  if (!trimmed || trimmed.length > 256) return [];
+
+  const lower = trimmed.toLowerCase();
+  if (lower === 'icmp' || lower === 'icmpv6') {
+    if (options.kind && options.kind !== lower) return [];
+    const label = lower === 'icmp' ? 'ICMP' : 'ICMPv6';
+    return [{
+      value: lower,
+      label: lower,
+      optionLabel: `${label} (any type)`,
+      hint: `${label} protocol`,
+    }];
+  }
 
   const protoMatch = /^(tcp|udp|icmp|icmpv6)(?:[/:]|\s+)(.+)$/i.exec(trimmed);
   if (protoMatch) {
@@ -198,12 +275,12 @@ export function parsePortLiteral(
     if (protocol === 'tcp' || protocol === 'udp') {
       const ports = parsePortList(rest);
       if (!ports) return [];
-      const candidate = buildPortCandidate(protocol, ports);
-      return candidate ? [candidate] : [];
+      const option = buildPortOption(protocol, ports);
+      return option ? [option] : [];
     }
 
     const typeTokens = rest.toLowerCase().split(/[\s,]+/).filter(Boolean);
-    if (typeTokens.length === 0) return [];
+    if (typeTokens.length === 0 || typeTokens.length > 32) return [];
     const allowed = icmpTypes[protocol];
     const uniqueTypes: string[] = [];
     for (const token of typeTokens) {
@@ -211,17 +288,14 @@ export function parsePortLiteral(
       if (!uniqueTypes.includes(token)) uniqueTypes.push(token);
     }
     const joined = uniqueTypes.join(',');
-    const name = `${protocol}/${joined}`;
-    if (name.length > 128) return [];
+    const value = `${protocol}/${joined}`;
+    if (value.length > 256) return [];
     const summaryPrefix = protocol === 'icmp' ? 'ICMP' : 'ICMPv6';
-    const payload: Omit<PortAlias, 'id'> = { name, protocol, types: uniqueTypes };
     return [{
-      key: `${protocol}:${joined}`,
-      label: `Use ${summaryPrefix} ${joined}`,
-      hint: `Creates ${summaryPrefix} alias "${name}"`,
-      expectedKind: protocol,
-      expectedSummary: `${summaryPrefix} ${uniqueTypes.join(', ')}`,
-      payload,
+      value,
+      label: value,
+      optionLabel: `${summaryPrefix} ${joined}`,
+      hint: `${summaryPrefix} ${uniqueTypes.length === 1 ? 'type' : 'types'}`,
     }];
   }
 
@@ -235,18 +309,18 @@ export function parsePortLiteral(
         ? []
         : ['tcp', 'udp'];
   return protocols.flatMap((protocol) => {
-    const candidate = buildPortCandidate(protocol, ports);
-    return candidate ? [candidate] : [];
+    const option = buildPortOption(protocol, ports);
+    return option ? [option] : [];
   });
 }
 
-export function parseAliasLiterals<K extends keyof AliasKinds>(
-  aliasType: K,
+export function parseAliasLiterals(
+  aliasType: keyof AliasKinds,
   input: string,
   options: { family?: 'ipv4' | 'ipv6'; kind?: string } = {},
-): Array<LiteralAliasCandidate<K>> {
+): LiteralOption[] {
   if (aliasType === 'addresses') {
-    return parseAddressLiteral(input, options) as Array<LiteralAliasCandidate<K>>;
+    return parseAddressLiteral(input, options);
   }
-  return parsePortLiteral(input, options) as Array<LiteralAliasCandidate<K>>;
+  return parsePortLiteral(input, options);
 }

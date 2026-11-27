@@ -264,11 +264,15 @@ func claims(d *declaration) []claim {
 			byID[a.ID] = a
 		}
 		seen := map[string]bool{}
+		const message = "This range holds a management source address."
 		for pending := slices.Clone(d.Management.AllowedSources); len(pending) > 0; pending = pending[1:] {
-			if a := byID[pending[0]]; !seen[a.ID] {
+			entry := pending[0]
+			if a, ok := byID[entry]; ok {
+				if seen[a.ID] {
+					continue
+				}
 				seen[a.ID] = true
 				pending = append(pending, a.Members...)
-				const message = "This range holds a management source address."
 				switch a.Kind {
 				case "host":
 					one(a.Address, message)
@@ -283,6 +287,16 @@ func claims(d *declaration) []claim {
 					if e1 == nil && e2 == nil && first.Is4() == last.Is4() {
 						out = append(out, claim{first.Unmap(), last.Unmap(), message, false, true})
 					}
+				}
+			} else if lit, ok := parseAddressLiteral(entry); ok {
+				switch lit.kind {
+				case "host":
+					one(lit.addr.String(), message)
+				case "network":
+					span(lit.prefix, message)
+					out[len(out)-1].whole = true
+				case "range":
+					out = append(out, claim{lit.first.Unmap(), lit.last.Unmap(), message, false, true})
 				}
 			}
 		}
