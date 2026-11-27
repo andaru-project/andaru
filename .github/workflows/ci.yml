@@ -199,3 +199,30 @@ jobs:
           podman build -f image/Containerfile --build-arg VERSION="$VERSION" -t andaru:ci .
           sh scripts/ci/rechunk.sh andaru:ci
           sh scripts/ci/image-smoke.sh andaru:ci "$VERSION"
+
+  netplane-image:
+    name: netplane image ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      # Proves packaging/netplane/Containerfile still builds and serves. Never pushed or signed.
+      - name: Build and check the Netplane image
+        env:
+          VERSION: 0.0.0-pr${{ github.event.pull_request.number || '0' }}
+        run: |
+          set -eu
+          podman build -f packaging/netplane/Containerfile --build-arg VERSION="$VERSION" -t netplane:ci .
+          sh scripts/ci/netplane-smoke.sh netplane:ci "$VERSION"

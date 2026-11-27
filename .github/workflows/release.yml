@@ -2,6 +2,8 @@ name: Release
 
 # A pushed tag builds Andaru's image for both architectures, signs it with the image-release environment's cosign key,
 # and only then gives it its version tag (and stable, for a release). Tags: v1.2.3, v1.2.3-a.N, -b.N or -rc.N (a prerelease).
+# Standalone Netplane's image goes the same way, tagged with the version (and latest, for a release); its binaries go
+# into the release beside the ISOs.
 on:
   push:
     tags: ['v*']
@@ -18,6 +20,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/andaru-project/andaru
+  NETPLANE_IMAGE: ghcr.io/andaru-project/netplane
 
 jobs:
   version:
@@ -147,7 +150,7 @@ jobs:
         run: |
           set -eu
           # cosign 2.6 stores the signature as a .sig attachment, the form containers/image verifies.
-          # The publish job installs the same release: bump both together.
+          # The publish and netplane-sign jobs install the same release: bump all three together.
           curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
           echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
           sudo install -m 0755 cosign /usr/local/bin/cosign
@@ -184,6 +187,126 @@ jobs:
             skopeo copy --all --preserve-digests "docker://$IMAGE@$digest" "docker://$IMAGE:$tag"
           done
           echo "$IMAGE@$digest: $tags" >>"$GITHUB_STEP_SUMMARY"
+
+  netplane-image:
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Build and check
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -eu
+          podman build -f packaging/netplane/Containerfile --build-arg VERSION="$VERSION" -t netplane:build .
+          sh scripts/ci/netplane-smoke.sh netplane:build "$VERSION"
+          # The release's standalone binary is the image's own.
+          podman create --name netplane-bin netplane:build >/dev/null
+          podman cp netplane-bin:/usr/bin/netplane "netplane-$VERSION-linux-$ARCH"
+          podman rm netplane-bin >/dev/null
+
+      - name: Push the unsigned architecture image
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          printf '%s\n' "$TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          podman push --digestfile "netplane-digest-$ARCH" netplane:build "docker://$NETPLANE_IMAGE:$VERSION-$ARCH"
+
+      - name: Keep the digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: netplane-digest-${{ matrix.arch }}
+          path: netplane-digest-${{ matrix.arch }}
+          if-no-files-found: error
+
+      - name: Keep the binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: netplane-bin-${{ matrix.arch }}
+          path: netplane-${{ needs.version.outputs.version }}-linux-${{ matrix.arch }}
+          if-no-files-found: error
+
+  netplane-sign:
+    needs: [version, netplane-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # The cosign key is a secret of this environment, which admits only v* tags.
+    environment: image-release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Collect the digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: netplane-digest-*
+          merge-multiple: true
+
+      - name: Install cosign
+        run: |
+          set -eu
+          # The sign and publish jobs install the same release: bump all three together.
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
+          sudo install -m 0755 cosign /usr/local/bin/cosign
+
+      - name: Assemble, sign, then tag
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          TOKEN: ${{ github.token }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -eu
+          printf '%s\n' "$TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          printf '%s\n' "$TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          podman manifest create netplane:index
+          for arch in amd64 arm64; do
+            podman manifest add netplane:index "docker://$NETPLANE_IMAGE@$(cat "netplane-digest-$arch")"
+          done
+          # The index goes up under a staging tag nothing follows; its digest is what gets signed: a tag can move.
+          podman manifest push --all --digestfile digest netplane:index "docker://$NETPLANE_IMAGE:staging-$VERSION"
+          digest=$(cat digest)
+          # Recursive: a pull of one architecture fetches its own manifest, which needs a signature of its own.
+          cosign sign --yes --recursive --key env://COSIGN_PRIVATE_KEY "$NETPLANE_IMAGE@$digest"
+          # The published key must verify what users pull.
+          cosign verify --key image/cosign.pub "$NETPLANE_IMAGE@$digest" >/dev/null
+          for arch in amd64 arm64; do
+            cosign verify --key image/cosign.pub "$NETPLANE_IMAGE@$(cat "netplane-digest-$arch")" >/dev/null
+          done
+          # Only a signed digest gets the names users pull.
+          tags=$VERSION
+          [ "$PRERELEASE" = true ] || tags="$tags latest"
+          for tag in $tags; do
+            skopeo copy --all --preserve-digests "docker://$NETPLANE_IMAGE@$digest" "docker://$NETPLANE_IMAGE:$tag"
+          done
+          echo "$NETPLANE_IMAGE@$digest: $tags" >>"$GITHUB_STEP_SUMMARY"
 
   # The ISOs come after the signed tags: boxes can update from the release even while a failed ISO job waits for a rerun.
   iso:
@@ -246,7 +369,7 @@ jobs:
           retention-days: 30
 
   publish:
-    needs: [version, iso]
+    needs: [version, iso, netplane-sign]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # The cosign key is a secret of this environment, which admits only v* tags.
@@ -266,10 +389,17 @@ jobs:
           merge-multiple: true
           path: dist
 
+      - name: Collect the Netplane binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: netplane-bin-*
+          merge-multiple: true
+          path: dist
+
       - name: Install cosign
         run: |
           set -eu
-          # The sign job installs the same release: bump both together.
+          # The sign jobs install the same release: bump all three together.
           curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
           echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
           sudo install -m 0755 cosign /usr/local/bin/cosign
@@ -282,7 +412,8 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -eu
-          sha256sum "andaru-$VERSION-x86_64.iso" "andaru-$VERSION-aarch64.iso" >SHA256SUMS
+          sha256sum "andaru-$VERSION-x86_64.iso" "andaru-$VERSION-aarch64.iso" \
+            "netplane-$VERSION-linux-amd64" "netplane-$VERSION-linux-arm64" >SHA256SUMS
           cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle SHA256SUMS.cosign.bundle SHA256SUMS
           # The published key must verify what users download.
           cosign verify-blob --key ../image/cosign.pub --bundle SHA256SUMS.cosign.bundle SHA256SUMS
@@ -306,5 +437,5 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 ||
             gh release create "$TAG" --draft --verify-tag --title "Andaru $VERSION" --notes "Andaru $VERSION."
           gh release upload "$TAG" --clobber "andaru-$VERSION-x86_64.iso" "andaru-$VERSION-aarch64.iso" \
-            SHA256SUMS SHA256SUMS.cosign.bundle
+            "netplane-$VERSION-linux-amd64" "netplane-$VERSION-linux-arm64" SHA256SUMS SHA256SUMS.cosign.bundle
           gh release edit "$TAG" --draft=false --prerelease="$PRERELEASE"
