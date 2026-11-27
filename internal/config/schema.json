@@ -3901,7 +3901,8 @@
             "kind": {
               "enum": [
                 "address",
-                "proxyArp"
+                "proxyArp",
+                "proxyNdp"
               ]
             },
             "address": {
@@ -3909,6 +3910,9 @@
               "maxLength": 64
             },
             "segment": {
+              "$ref": "#/$defs/segmentRef"
+            },
+            "hostSegment": {
               "$ref": "#/$defs/segmentRef"
             }
           },

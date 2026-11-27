@@ -42,6 +42,13 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 			bad(p+"/name", "Name already exists in this collection.")
 		}
 		seen[v.ID], seen["name:"+v.Name] = true, true
+		if v.HostSegment != "" && !v.proxyNDP() {
+			bad(p+"/hostSegment", "Only a proxy NDP entry names a host segment.")
+		}
+		if v.proxyNDP() {
+			validateProxyNDP(d, i, p, subnets, taken, bad)
+			continue
+		}
 		if v.proxied() {
 			if validateProxy(d, v, p, subnets, taken, proxies, bad) {
 				proxies = append(proxies, v)
@@ -49,7 +56,7 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 			continue
 		}
 		if v.Segment != "" {
-			bad(p+"/segment", "Only a proxy ARP entry names a segment.")
+			bad(p+"/segment", "Only a proxy ARP or proxy NDP entry names a segment.")
 		}
 		// An address inside a proxy ARP entry is on its segment's subnet, so the subnet rule below refuses it too.
 		x, ok := vipPrefix(v)
@@ -98,6 +105,8 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 				bad(fmt.Sprintf("/dns/virtualAddresses/%d", j), "Expected an existing virtual address.")
 			} else if d.VirtualAddresses[i].proxied() {
 				bad(fmt.Sprintf("/dns/virtualAddresses/%d", j), "The firewall does not hold an address answered by proxy ARP, so the DNS service cannot listen on it.")
+			} else if !d.VirtualAddresses[i].held() {
+				bad(fmt.Sprintf("/dns/virtualAddresses/%d", j), "The firewall does not hold an address answered by proxy NDP, so the DNS service cannot listen on it.")
 			} else if x, ok := vipPrefix(d.VirtualAddresses[i]); ok && !x.IsSingleIP() {
 				bad(fmt.Sprintf("/dns/virtualAddresses/%d", j), "The DNS service listens on single addresses; name one address, not a block.")
 			}
@@ -118,7 +127,7 @@ func firewallHolds(d *declaration, a netip.Addr) bool {
 
 // holdsVirtual says whether a is a held virtual address of d, or inside a held block.
 func holdsVirtual(d *declaration, a netip.Addr) bool {
-	return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return !v.proxied() && heldContains(v, a) })
+	return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return v.held() && heldContains(v, a) })
 }
 
 // mapped is the IPv4-mapped IPv6 range, which no virtual address may touch.
@@ -171,6 +180,12 @@ func (c claim) overlaps(first, last netip.Addr) bool {
 	return !c.last.Less(first) && !last.Less(c.first)
 }
 
+// The claims a proxy NDP entry may not take either.
+const (
+	gatewayClaim = "This range holds a segment's gateway."
+	poolClaim    = "This range overlaps a DHCPv6 prefix delegation pool."
+)
+
 // claims are the addresses the declaration names for hosts other than the firewall: a proxy ARP entry's route to
 // andaru-vip, or a held block's local route, would take them over.
 func claims(d *declaration) []claim {
@@ -192,8 +207,8 @@ func claims(d *declaration) []claim {
 	}
 	for _, s := range d.Segments {
 		// Its route to andaru-vip would take the uplink's next hop with it.
-		one(s.Addressing.IPv4.Gateway, "This range holds a segment's gateway.")
-		one(s.Addressing.IPv6.Gateway, "This range holds a segment's gateway.")
+		one(s.Addressing.IPv4.Gateway, gatewayClaim)
+		one(s.Addressing.IPv6.Gateway, gatewayClaim)
 		if s.Addressing.DNS != nil {
 			for _, raw := range s.Addressing.DNS.Servers {
 				server(raw, "This range holds a segment's DNS server.")
@@ -234,7 +249,7 @@ func claims(d *declaration) []claim {
 	for _, e := range d.DHCP6 {
 		if e.PrefixDelegation != nil {
 			if p, err := netip.ParsePrefix(e.PrefixDelegation.Prefix); err == nil && p.Addr().Is6() {
-				span(p, "This range overlaps a DHCPv6 prefix delegation pool.")
+				span(p, poolClaim)
 			}
 		}
 	}
@@ -298,7 +313,7 @@ func validateProxy(d *declaration, v virtualAddress, p string, own []netip.Prefi
 	overlap := slices.IndexFunc(before, func(o virtualAddress) bool { y, _ := vipPrefix(o); return y.Overlaps(x) })
 	switch {
 	case ok && a.Is6() && !a.Is4In6():
-		bad(p+"/address", "Proxy NDP is not offered yet (#43).")
+		bad(p+"/address", "Expected an IPv4 address; for an IPv6 host on the uplink's prefix, use a proxyNdp entry.")
 	case !ok || !a.Is4() || !blockShape(x, 24):
 		bad(p+"/address", "Expected an IPv4 address, or a prefix of length 24 to 32 with its host bits zero; not loopback or link-local.")
 	case seg < 0:
@@ -316,6 +331,75 @@ func validateProxy(d *declaration, v virtualAddress, p string, own []netip.Prefi
 		return true
 	}
 	return false
+}
+
+// ndpClaims are the claims a proxy NDP entry may not take, in its words: its route would take the gateway's traffic,
+// or a delegated prefix's. Other named hosts are the inside host itself, which the route leads to.
+var ndpClaims = map[string]string{
+	gatewayClaim: "This address is a segment's gateway.",
+	poolClaim:    "This address is in a DHCPv6 prefix delegation pool.",
+}
+
+// validateProxyNDP checks the proxy NDP entry at index i against its two segments, the firewall's static addresses
+// (own), the other virtual addresses, and the gateways and DHCPv6 delegation pools the declaration names (taken).
+func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken []claim, bad func(string, string)) {
+	v := d.VirtualAddresses[i]
+	byID := func(id string) int { return slices.IndexFunc(d.Segments, func(s segment) bool { return s.ID == id }) }
+	seg, host := byID(v.Segment), byID(v.HostSegment)
+	switch {
+	case seg < 0:
+		bad(p+"/segment", "Expected an existing segment.")
+	case slices.ContainsFunc(d.Links, func(l link) bool { return l.ID == d.Segments[seg].Link && l.Kind == "pppoe" }):
+		// A point-to-point link has no neighbours to answer; the provider routes whatever it gives the firewall there.
+		bad(p+"/segment", "Expected a segment on an Ethernet, VLAN, bridge or bond link: a PPPoE link has no neighbours to answer. For a prefix the provider routes over it, use a held block.")
+	case d.Segments[seg].Addressing.IPv6.Mode == "none":
+		bad(p+"/segment", "Expected a segment with IPv6: without it the link has no address to answer neighbour discovery from.")
+	case d.Segments[seg].Addressing.IPv6.Mode == "delegated":
+		bad(p+"/segment", "Expected a segment other than a delegated one: a delegated segment is inside, with no provider to ask for the address.")
+	}
+	switch {
+	case host < 0:
+		bad(p+"/hostSegment", "Expected an existing segment.")
+	case v.HostSegment == v.Segment:
+		bad(p+"/hostSegment", "Expected a segment other than the one the firewall answers on.")
+	case slices.ContainsFunc(d.Links, func(l link) bool { return l.ID == d.Segments[host].Link && l.Kind == "pppoe" }):
+		// PPPoE links are not networkd's, so the host route would not be rendered; and a PPP peer is the provider.
+		bad(p+"/hostSegment", "Expected a segment on an Ethernet, VLAN, bridge or bond link: the host is on an inside link, not a PPPoE one.")
+	case d.Segments[host].Addressing.IPv6.Mode != "static" && d.Segments[host].Addressing.IPv6.Mode != "delegated":
+		// SLAAC and DHCPv6 segments face upstream: the firewall sends no router advertisements there.
+		bad(p+"/hostSegment", "Expected an inside segment with static or delegated IPv6: the host routes back by the firewall's link-local address, which the firewall's router advertisements there give it.")
+	}
+	a, e := netip.ParseAddr(v.Address)
+	// Before i, every kind; after it, all but proxy NDP entries, which refuse the overlap themselves.
+	other := -1
+	for j, o := range d.VirtualAddresses {
+		if (j < i || !o.proxyNDP()) && heldContains(o, a) {
+			other = j
+			break
+		}
+	}
+	claimed := slices.IndexFunc(taken, func(c claim) bool { return ndpClaims[c.message] != "" && c.overlaps(a, a) })
+	v6 := func(s int) []netip.Prefix {
+		return slices.DeleteFunc(staticPrefixes(d.Segments[s]), func(x netip.Prefix) bool { return !x.Addr().Is6() })
+	}
+	switch {
+	// The kernel's proxy table holds single addresses, and the address is a host's on the uplink's prefix.
+	case e != nil || a.Zone() != "" || !a.Is6() || a.Is4In6() || !a.IsGlobalUnicast() || a.IsPrivate():
+		bad(p+"/address", "Expected one global unicast IPv6 address, without a length.")
+	case seg >= 0 && d.Segments[seg].Addressing.IPv6.Mode == "static" && !slices.ContainsFunc(v6(seg), func(x netip.Prefix) bool { return x.Contains(a) }):
+		bad(p+"/address", "Expected an address on one of the segment's static IPv6 subnets.")
+	case slices.ContainsFunc(own, func(x netip.Prefix) bool { return x.Addr() == a }):
+		bad(p+"/address", "This address is one of the firewall's own addresses.")
+	case other >= 0:
+		bad(p+"/address", fmt.Sprintf("This address overlaps virtual address %q.", d.VirtualAddresses[other].Name))
+	case slices.ContainsFunc(d.Segments, func(s segment) bool {
+		return s.ID != v.Segment && slices.ContainsFunc(staticPrefixes(s), func(x netip.Prefix) bool { return x.Contains(a) })
+	}):
+		// A host there already has a route, which this one would take to the host segment.
+		bad(p+"/address", "This address is on another segment's subnet, where a host already has a route.")
+	case claimed >= 0:
+		bad(p+"/address", ndpClaims[taken[claimed].message])
+	}
 }
 
 // proxied are the valid-looking proxy ARP entries' prefixes: no host holds an address in them.
@@ -341,7 +425,7 @@ func sameAddress(a, b string) bool {
 // would silently become one to an inside host nobody holds.
 func vipStillTargeted(old, d *declaration, input Changes) *Fault {
 	for _, v := range old.VirtualAddresses {
-		if v.proxied() {
+		if !v.held() {
 			continue
 		}
 		i := slices.IndexFunc(d.NAT.PortForwards, func(f portForward) bool {

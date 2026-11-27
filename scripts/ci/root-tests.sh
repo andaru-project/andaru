@@ -17,6 +17,7 @@ ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
 "$art/reset.test" -test.v -test.timeout=120s
 # The networkd and systemd tool proofs in this binary are lab proofs; CI runs the filter ones and dials PPPoE between
 # namespaces, which needs the host's ppp_generic and pppoe modules. The proxy ARP probe applies the image's sysctl.d
-# file, which the workflow puts beside the binaries. The routed block probe applies the rendered local routes.
+# file, which the workflow puts beside the binaries. The routed block probe applies the rendered local routes, and the
+# proxy NDP probe the rendered proxy entries and routes.
 ANDARU_TEST_PROXY_ARP_SYSCTL="$art/50-andaru-proxy-arp.conf" "$art/render.test" -test.v -test.timeout=180s \
-  -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea|PPPoESessionInNamespaces|ProxyARPInNamespace|RoutedBlockInNamespace"
+  -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea|PPPoESessionInNamespaces|ProxyARPInNamespace|RoutedBlockInNamespace|ProxyNDPInNamespace"

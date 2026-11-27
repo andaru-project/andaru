@@ -346,8 +346,8 @@ func TestProxyARPValidation(t *testing.T) {
 		path    string
 		message string
 	}{
-		"ipv6":              {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "fd00:1::50" }, p + "/address", "Proxy NDP is not offered yet (#43)."},
-		"ipv6 prefix":       {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "fd00:1::/64" }, p + "/address", "Proxy NDP is not offered yet (#43)."},
+		"ipv6":              {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "fd00:1::50" }, p + "/address", "Expected an IPv4 address; for an IPv6 host on the uplink's prefix, use a proxyNdp entry."},
+		"ipv6 prefix":       {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "fd00:1::/64" }, p + "/address", "Expected an IPv4 address; for an IPv6 host on the uplink's prefix, use a proxyNdp entry."},
 		"too short":         {func(d map[string]any) { item(d["virtualAddresses"].([]any), 3)["address"] = "192.0.0.0/23" }, q + "/address", ""},
 		"host bits":         {func(d map[string]any) { item(d["virtualAddresses"].([]any), 3)["address"] = "192.0.2.57/29" }, q + "/address", ""},
 		"not an address":    {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "lan" }, p + "/address", ""},
@@ -410,7 +410,7 @@ func TestProxyARPValidation(t *testing.T) {
 		}, p + "/segment", "no known subnet"},
 		"segment on an address": {func(d map[string]any) {
 			item(d["virtualAddresses"].([]any), 0)["segment"] = item(segmentsOf(d), 1)["id"]
-		}, "/virtualAddresses/0/segment", "Only a proxy ARP entry names a segment."},
+		}, "/virtualAddresses/0/segment", "Only a proxy ARP or proxy NDP entry names a segment."},
 		"address inside a proxy entry": {func(d map[string]any) { item(d["virtualAddresses"].([]any), 0)["address"] = "192.0.2.57" }, "/virtualAddresses/0/address", ""},
 		"unknown kind":                 {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["kind"] = "carp" }, p + "/kind", ""},
 		"dns listens on it": {func(d map[string]any) {
@@ -657,5 +657,171 @@ func refusedWith(t *testing.T, d map[string]any, path, message string) {
 	ve, _ := e.(validationError)
 	if !slices.ContainsFunc(ve, func(f FieldError) bool { return f.Path == path && strings.Contains(f.Message, message) }) {
 		t.Fatalf("error %v; fields %+v; want %s: %s", e, ve, path, message)
+	}
+}
+
+// ndpFixture adds a proxy NDP entry to the virtual address fixture: the WAN, moved from PPPoE to its VLAN, on a static
+// 2001:db8:1::/64 answers for an inside host on the LAN.
+func ndpFixture(t *testing.T) map[string]any {
+	t.Helper()
+	d := vipFixture(t)
+	d["links"] = slices.DeleteFunc(linksOf(d), func(l any) bool { return l.(map[string]any)["kind"] == "pppoe" })
+	item(segmentsOf(d), 0)["link"] = "lnk_00000000-0000-4000-8000-000000000002"
+	v4(d, 0)["mode"] = "dhcp"
+	item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"2001:db8:1::2/64"}, "gateway": "2001:db8:1::1"}
+	d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipP, "name": "host", "kind": "proxyNdp",
+		"segment": item(segmentsOf(d), 0)["id"], "hostSegment": item(segmentsOf(d), 1)["id"], "address": "2001:db8:1::50"})
+	return d
+}
+
+func TestProxyNDPValidation(t *testing.T) {
+	got := accepted(t, ndpFixture(t))
+	if v := got.VirtualAddresses[2]; v.Kind != "proxyNdp" || v.Address != "2001:db8:1::50" || v.Segment == "" || v.HostSegment == "" {
+		t.Fatalf("decoded %+v", got.VirtualAddresses)
+	}
+	vips := func(d map[string]any) []any { return d["virtualAddresses"].([]any) }
+	t.Run("an uplink by DHCPv6 has no known subnet", func(t *testing.T) {
+		d := ndpFixture(t)
+		item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+		item(vips(d), 2)["address"] = "2001:db8:7::50"
+		accepted(t, d)
+	})
+	// The route leads to the inside host, so a DNS upstream or management source there is right.
+	t.Run("named hosts it leads to", func(t *testing.T) {
+		d := ndpFixture(t)
+		d["dns"] = map[string]any{"mode": "forward", "segments": []any{}, "upstreams": []any{map[string]any{"address": "2001:db8:1::50", "protocol": "do53"}}}
+		const admin = "adr_00000005-0000-4000-8000-000000000005"
+		objs := d["aliases"].(map[string]any)
+		objs["addresses"] = append(objs["addresses"].([]any), map[string]any{"id": admin, "name": "admin", "kind": "host", "address": "2001:db8:1::50"})
+		d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{admin}}
+		accepted(t, d)
+	})
+	const p = "/virtualAddresses/2"
+	const shape = "Expected one global unicast IPv6 address, without a length."
+	for name, tc := range map[string]struct {
+		edit    func(d map[string]any)
+		path    string
+		message string
+	}{
+		"a length":        {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::50/128" }, p + "/address", shape},
+		"a prefix":        {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::/64" }, p + "/address", shape},
+		"unique local":    {func(d map[string]any) { item(vips(d), 2)["address"] = "fd00:1::50" }, p + "/address", shape},
+		"link-local":      {func(d map[string]any) { item(vips(d), 2)["address"] = "fe80::50" }, p + "/address", shape},
+		"with a zone":     {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::50%eth0" }, p + "/address", shape},
+		"multicast":       {func(d map[string]any) { item(vips(d), 2)["address"] = "ff0e::50" }, p + "/address", shape},
+		"loopback":        {func(d map[string]any) { item(vips(d), 2)["address"] = "::1" }, p + "/address", shape},
+		"unspecified":     {func(d map[string]any) { item(vips(d), 2)["address"] = "::" }, p + "/address", shape},
+		"IPv4-mapped":     {func(d map[string]any) { item(vips(d), 2)["address"] = "::ffff:198.51.100.50" }, p + "/address", shape},
+		"IPv4":            {func(d map[string]any) { item(vips(d), 2)["address"] = "198.51.100.50" }, p + "/address", shape},
+		"no segment":      {func(d map[string]any) { delete(item(vips(d), 2), "segment") }, p + "/segment", "Expected an existing segment."},
+		"no host segment": {func(d map[string]any) { delete(item(vips(d), 2), "hostSegment") }, p + "/hostSegment", "Expected an existing segment."},
+		"unknown host segment": {func(d map[string]any) {
+			item(vips(d), 2)["hostSegment"] = "seg_00000009-0000-4000-8000-000000000009"
+		}, p + "/hostSegment", "Expected an existing segment."},
+		"a host segment without IPv6": {func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "none"}
+		}, p + "/hostSegment", "Expected an inside segment with static or delegated IPv6"},
+		"an upstream host segment": {func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 56}
+		}, p + "/hostSegment", "Expected an inside segment with static or delegated IPv6"},
+		"an answering segment without IPv6": {func(d map[string]any) {
+			for _, s := range segmentsOf(d) {
+				if s.(map[string]any)["id"] == item(vips(d), 2)["segment"] {
+					s.(map[string]any)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "none"}
+				}
+			}
+		}, p + "/segment", "Expected a segment with IPv6"},
+		"an inside answering segment": {func(d map[string]any) {
+			// The LAN takes a /64 of the uplink's delegated prefix, and the entry answers there.
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "delegated", "from": item(segmentsOf(d), 0)["id"], "subnetId": "1"}
+			item(vips(d), 2)["segment"], item(vips(d), 2)["hostSegment"] = item(segmentsOf(d), 1)["id"], item(segmentsOf(d), 0)["id"]
+		}, p + "/segment", "Expected a segment other than a delegated one"},
+		"the same segment twice": {func(d map[string]any) { item(vips(d), 2)["hostSegment"] = item(vips(d), 2)["segment"] }, p + "/hostSegment", "Expected a segment other than the one the firewall answers on."},
+		"off the static subnet":  {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:2::50" }, p + "/address", "Expected an address on one of the segment's static IPv6 subnets."},
+		"a firewall address":     {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::2" }, p + "/address", "This address is one of the firewall's own addresses."},
+		"the uplink's gateway":   {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::1" }, p + "/address", "This address is a segment's gateway."},
+		"another proxy NDP entry": {func(d map[string]any) {
+			d["virtualAddresses"] = append(vips(d), map[string]any{"id": vipQ, "name": "twin", "kind": "proxyNdp", "segment": item(vips(d), 2)["segment"], "hostSegment": item(vips(d), 2)["hostSegment"], "address": "2001:db8:1::50"})
+		}, "/virtualAddresses/3/address", `This address overlaps virtual address "host".`},
+		"a held address": {func(d map[string]any) { item(vips(d), 1)["address"] = "2001:db8:1::50" }, p + "/address", `This address overlaps virtual address "dns6".`},
+		"a held address after it": {func(d map[string]any) {
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+			d["virtualAddresses"] = append(vips(d), map[string]any{"id": vipQ, "name": "late", "address": "2001:db8:1::50"})
+		}, p + "/address", `This address overlaps virtual address "late".`},
+		"a held block": {func(d map[string]any) {
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+			item(vips(d), 1)["address"] = "2001:db8:1::/64"
+		}, p + "/address", `This address overlaps virtual address "dns6".`},
+		"on the host segment's subnet": {func(d map[string]any) {
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+			v6(d, 1)["addresses"] = []any{"fd00:1::1/64", "2001:db8:1::1/64"}
+		}, p + "/address", "This address is on another segment's subnet, where a host already has a route."},
+		"on a third segment's subnet": {func(d map[string]any) {
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+			d["links"] = append(linksOf(d), map[string]any{"id": "lnk_00000000-0000-4000-8000-000000000009", "name": "dmz", "kind": "ethernet", "mtu": 1500, "enabled": true, "permanentMac": "52:54:00:aa:bb:09"})
+			d["segments"] = append(segmentsOf(d), map[string]any{"id": "seg_00000000-0000-4000-8000-000000000009", "name": "dmz", "link": "lnk_00000000-0000-4000-8000-000000000009",
+				"zone": item(segmentsOf(d), 1)["zone"], "addressing": map[string]any{"ipv4": map[string]any{"mode": "none"}, "ipv6": map[string]any{"mode": "static", "addresses": []any{"2001:db8:1::1/64"}}}})
+		}, p + "/address", "This address is on another segment's subnet, where a host already has a route."},
+		"in a DHCPv6 delegation pool": {func(d map[string]any) {
+			d["dhcp6"] = []any{map[string]any{"id": "dh6_00000001-0000-4000-8000-000000000001", "name": "lan6", "segment": item(segmentsOf(d), 1)["id"],
+				"ranges": []any{map[string]any{"first": "fd00:1::1000", "last": "fd00:1::1fff"}}, "prefixDelegation": map[string]any{"prefix": "2001:db8:1::/56", "delegatedLength": 64}}}
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+		}, p + "/address", "This address is in a DHCPv6 prefix delegation pool."},
+		"a host segment on an address": {func(d map[string]any) {
+			item(vips(d), 0)["hostSegment"] = item(segmentsOf(d), 1)["id"]
+		}, "/virtualAddresses/0/hostSegment", "Only a proxy NDP entry names a host segment."},
+		"dns listens on it": {func(d map[string]any) {
+			d["dns"] = map[string]any{"mode": "recursive", "segments": []any{}, "virtualAddresses": []any{vipA, vipP}}
+		}, "/dns/virtualAddresses/1", "The firewall does not hold an address answered by proxy NDP, so the DNS service cannot listen on it."},
+		"forward target": {func(d map[string]any) {
+			setNAT(d, "portForwards", forward(d, map[string]any{"family": "ipv6", "target": map[string]any{"address": "2001:db8:1::50"}, "targetPort": nil, "ports": "443"}))
+		}, "/nat/portForwards/0/target/address", "Expected a static IPv6 address of the firewall"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := ndpFixture(t)
+			tc.edit(d)
+			refusedWith(t, d, tc.path, tc.message)
+		})
+	}
+	t.Run("a PPPoE uplink", func(t *testing.T) {
+		d := vipFixture(t)
+		d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipP, "name": "host", "kind": "proxyNdp",
+			"segment": item(segmentsOf(d), 0)["id"], "hostSegment": item(segmentsOf(d), 1)["id"], "address": "2001:db8:1::50"})
+		refusedWith(t, d, "/virtualAddresses/2/segment", "a PPPoE link has no neighbours to answer. For a prefix the provider routes over it, use a held block.")
+	})
+	t.Run("a host segment on a proxy ARP entry", func(t *testing.T) {
+		d := proxyFixture(t)
+		item(d["virtualAddresses"].([]any), 2)["hostSegment"] = item(segmentsOf(d), 0)["id"]
+		refusedWith(t, d, "/virtualAddresses/2/hostSegment", "Only a proxy NDP entry names a host segment.")
+	})
+	// The original fixture's WAN is on a PPPoE link: as the host segment it is refused.
+	t.Run("a PPPoE host segment", func(t *testing.T) {
+		d := vipFixture(t)
+		item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"2001:db8:1::2/64"}}
+		item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"fd00:9::1/64"}}
+		d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipP, "name": "host", "kind": "proxyNdp",
+			"segment": item(segmentsOf(d), 1)["id"], "hostSegment": item(segmentsOf(d), 0)["id"], "address": "2001:db8:1::50"})
+		refusedWith(t, d, "/virtualAddresses/2/hostSegment", "Expected a segment on an Ethernet, VLAN, bridge or bond link")
+	})
+
+}
+
+// A batch can name the segments it creates in a proxy NDP entry by label.
+func TestProxyNDPSegmentsByLabel(t *testing.T) {
+	c, e := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"links","localId":"uplink","value":{"name":"uplink","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01"}},{"op":"create","collection":"links","localId":"inside","value":{"name":"inside","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:02"}},{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},{"op":"create","collection":"zones","localId":"lan","value":{"name":"lan"}},
+		{"op":"create","collection":"segments","localId":"up","value":{"name":"wan","link":"@uplink","zone":"@wan","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","addresses":["2001:db8:1::2/64"]}}}},
+		{"op":"create","collection":"segments","localId":"in","value":{"name":"lan","link":"@inside","zone":"@lan","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","addresses":["fd00:2::1/64"]}}}},
+		{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"host","kind":"proxyNdp","segment":"@up","hostSegment":"@in","address":"2001:db8:1::50"}}]}`))
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := initialState()
+	p, e := prepareChanges(&s, c, "1", fixedTime)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if v := p.State.Config.VirtualAddresses[0]; v.Segment != p.Created["up"] || v.HostSegment != p.Created["in"] {
+		t.Fatalf("segments %q %q, created %v", v.Segment, v.HostSegment, p.Created)
 	}
 }

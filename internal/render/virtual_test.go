@@ -118,3 +118,61 @@ func TestHeldAddressOnLearnedSubnet(t *testing.T) {
 		t.Fatalf("a neighbouring subnet warned: %+v", r.Findings)
 	}
 }
+
+// A proxy NDP entry is on no andaru-vip: with no other virtual address there is no dummy device.
+func TestProxyNDPIsNotOnTheDummy(t *testing.T) {
+	r := render(t, change(t, fixture(t, "proxy-ndp"), func(d map[string]any) {
+		d["virtualAddresses"] = d["virtualAddresses"].([]any)[1:]
+	}))
+	if slices.ContainsFunc(r.Files, func(f File) bool { return strings.Contains(f.Path, "andaru-vip") }) {
+		t.Fatalf("andaru-vip rendered:\n%s", golden(r))
+	}
+	if !strings.Contains(fileEnding(t, r, "ens18.network").Content, "IPv6ProxyNDPAddress=2001:db8:1::50\n") {
+		t.Fatalf("no proxy entry:\n%s", golden(r))
+	}
+}
+
+// A proxy NDP address on no subnet its segment's link has, declared or learned, is warned about; one on a subnet the
+// link learned is not, and a subnet another link learned does not count.
+func TestProxyNDPOffSubnet(t *testing.T) {
+	const one, two = "/virtualAddresses/1/address", "/virtualAddresses/2/address"
+	in := fixture(t, "proxy-ndp")
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || findingAt(r, "PROXY_NDP_OFF_SUBNET", two) {
+		t.Fatalf("on the static subnet, yet %+v", r.Findings)
+	}
+	in = change(t, in, func(d map[string]any) {
+		item(d, "segments", 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 56}
+	})
+	// Nothing learned yet, or a DHCPv6 address alone, a /128: the uplink's prefix is unknown, so nothing is said.
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || !r.Realizable {
+		t.Fatalf("nothing learned, yet %+v", r.Findings)
+	}
+	in.Links[0].Addresses = []host.AddressStatus{
+		{Family: "ipv6", Address: "fe80::1", PrefixLength: 64, Scope: "link"},
+		{Family: "ipv6", Address: "fd00:1::2", PrefixLength: 64, Scope: "global"}, // a ULA tells nothing of the global prefix
+		{Family: "ipv6", Address: "2001:db8:1::abcd", PrefixLength: 128, Scope: "global"},
+	}
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) {
+		t.Fatalf("a DHCPv6 /128 alone warned: %+v", r.Findings)
+	}
+	// Given to the firewall itself, by DHCPv6: the host cannot have it.
+	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:1::50", PrefixLength: 128, Scope: "global"}}
+	if r := render(t, in); !findingAt(r, "PROXY_NDP_ADDRESS_HELD", one) || findingAt(r, "PROXY_NDP_ADDRESS_HELD", two) {
+		t.Fatalf("the uplink's own address not warned, or another warned: %+v", r.Findings)
+	}
+	// The uplink on another prefix: the address is off it, whatever the LAN learned.
+	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:9::2", PrefixLength: 64, Scope: "global"}}
+	in.Links[1].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:1::9", PrefixLength: 64, Scope: "global"}}
+	if r := render(t, in); !findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || !findingAt(r, "PROXY_NDP_OFF_SUBNET", two) {
+		t.Fatalf("off the uplink's prefix, or the LAN's subnet counted: %+v", r.Findings)
+	}
+	in.Links[0].Addresses = []host.AddressStatus{
+		{Family: "ipv6", Address: "fe80::1", PrefixLength: 64, Scope: "link"},
+		{Family: "ipv6", Address: "2001:db8:1::2", PrefixLength: 64, Scope: "global"},
+	}
+	// Nor is it a held address on a learned subnet: the firewall does not hold it.
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || findingAt(r, "PROXY_NDP_OFF_SUBNET", two) ||
+		findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", one) || findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", two) {
+		t.Fatalf("on the learned subnet, yet %+v", r.Findings)
+	}
+}

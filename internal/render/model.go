@@ -151,7 +151,8 @@ type declaration struct {
 	DHCP  []dhcpEntry  `json:"dhcp"`
 	DHCP6 []dhcp6Entry `json:"dhcp6"`
 	DNS   *dnsService  `json:"dns"`
-	// VirtualAddresses are held on the dummy device andaru-vip, or of kind proxyArp routed to it and answered on a segment.
+	// VirtualAddresses are held on the dummy device andaru-vip, or of kind proxyArp routed to it and answered on a
+	// segment, or of kind proxyNdp answered on a segment and routed to the host's segment.
 	VirtualAddresses []virtualAddress `json:"virtualAddresses"`
 }
 
@@ -160,10 +161,18 @@ type virtualAddress struct {
 	Kind    string `json:"kind"`
 	Address string `json:"address"`
 	Segment string `json:"segment"`
+	// HostSegment is a proxyNdp entry's: the segment the inside host is on.
+	HostSegment string `json:"hostSegment"`
 }
 
 // proxied says whether v is answered by proxy ARP rather than held by the firewall.
 func (v virtualAddress) proxied() bool { return v.Kind == "proxyArp" }
+
+// proxyNDP says whether v is an inside host's address answered by proxy NDP and routed to its host segment.
+func (v virtualAddress) proxyNDP() bool { return v.Kind == "proxyNdp" }
+
+// held says whether the firewall holds v: neither proxy ARP nor proxy NDP answers for it.
+func (v virtualAddress) held() bool { return !v.proxied() && !v.proxyNDP() }
 
 type dhcpOption struct {
 	Code       int    `json:"code"`

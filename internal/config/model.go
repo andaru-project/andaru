@@ -450,16 +450,25 @@ func (c *channel) secrets() []channelSecret {
 }
 
 // virtualAddress is an address the firewall holds on its dummy interface, answered on every segment the filter lets reach it;
-// or, of kind proxyArp, an address or prefix the firewall answers ARP for on one segment's link without holding it.
+// or, of kind proxyArp, an address or prefix the firewall answers ARP for on one segment's link without holding it;
+// or, of kind proxyNdp, an inside host's IPv6 address the firewall answers neighbour discovery for on one segment's
+// link and routes to the host's segment.
 type virtualAddress struct {
 	identity
-	Kind    string `json:"kind,omitempty"`
-	Address string `json:"address"`
-	Segment string `json:"segment,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	Address     string `json:"address"`
+	Segment     string `json:"segment,omitempty"`
+	HostSegment string `json:"hostSegment,omitempty"`
 }
 
 // proxied says whether v is answered by proxy ARP rather than held by the firewall.
 func (v virtualAddress) proxied() bool { return v.Kind == "proxyArp" }
+
+// proxyNDP says whether v is an inside host's address answered by proxy NDP and routed to its host segment.
+func (v virtualAddress) proxyNDP() bool { return v.Kind == "proxyNdp" }
+
+// held says whether the firewall holds v: neither proxy ARP nor proxy NDP answers for it.
+func (v virtualAddress) held() bool { return !v.proxied() && !v.proxyNDP() }
 
 func emptyDeclaration() declaration {
 	return declaration{SchemaVersion: schemaVersion, Links: []link{}, Segments: []segment{}, Zones: []zone{}}
