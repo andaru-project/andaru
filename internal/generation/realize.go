@@ -207,6 +207,14 @@ func has(set []placed, path string) bool {
 
 // place swaps files only. It writes before it removes, so /run never holds less than one complete configuration.
 func (r Realizer) place(from, to []placed) error {
+	// Before overwriting any add-on file whose content changed, invalidate its started stamp so an
+	// interrupted activation or rollback never mistakes the old stamp for a still-matching container.
+	for _, slug := range addonSlugs(to) {
+		stamp := r.Root + addonStampPath(slug)
+		if started, err := os.ReadFile(stamp); err == nil && string(started) != addonSum(slug, to) {
+			_ = os.Remove(stamp)
+		}
+	}
 	for _, f := range to {
 		target := r.Root + f.path
 		dirMode := fs.FileMode(0o755)
@@ -694,7 +702,9 @@ func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, na
 		if o, err := r.observe(verify, withDNS); err != nil {
 			reason = err.Error()
 		} else if reason = o.unmet(next, names, route); reason == "" {
-			return r.verifyAddons(verify, next)
+			// Pass the outer activate ctx so slow networkd convergence does not starve add-on readiness;
+			// verifyAddons applies its own bounded timeout within ctx.
+			return r.verifyAddons(ctx, next)
 		}
 		select {
 		case <-verify.Done():

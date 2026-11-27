@@ -132,4 +132,35 @@ func TestRemoveAllManagedImages(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(stateDir, StagedStateFile)); !os.IsNotExist(err) {
 		t.Fatalf("expected staged file removed, stat err = %v", err)
 	}
+
+	// Partial removal failure must keep failed digest recorded for retry.
+	const d2 = "ghcr.io/tailscale/tailscale@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	if err := writeStagedState(stateDir, StagedState{Images: map[string]StagedImage{
+		d1: {Digest: d1, ImageID: "sha256:1"},
+		d2: {Digest: d2, ImageID: "sha256:2"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	err = RemoveAllManagedImages(t.Context(), stateDir, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) == 3 && args[0] == "rmi" && args[1] == "-f" {
+			if args[2] == d2 {
+				return nil, errors.New("busy")
+			}
+			return nil, nil
+		}
+		if len(args) == 3 && args[0] == "image" && args[1] == "exists" && args[2] == d2 {
+			return nil, nil
+		}
+		return nil, errors.New("not found")
+	})
+	if err == nil {
+		t.Fatal("expected partial removal error")
+	}
+	st, rerr := ReadStagedState(stateDir)
+	if rerr != nil {
+		t.Fatalf("ReadStagedState after partial failure: %v", rerr)
+	}
+	if !slices.Equal(st.Digests(), []string{d2}) {
+		t.Fatalf("expected failed digest %s retained for retry, got %v", d2, st.Digests())
+	}
 }

@@ -1,8 +1,10 @@
 package render
 
 import (
+	"cmp"
+	"encoding/json"
 	"fmt"
-	"math"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,11 +55,9 @@ func addonHasBusGrants(g addonBusGrants) bool {
 }
 
 // addons renders Quadlet .container, .env, and .secret files for enabled add-ons, and emits
-// blocking findings if Podman is absent, an enabled add-on's pinned digest is unstaged, or a secret is unresolved.
+// blocking findings if Podman is absent, an enabled add-on's pinned digest is unstaged,
+// a secret is unresolved, or any bound value contains unsafe control characters.
 func (r *renderer) addons() {
-	if len(r.d.Addons) == 0 {
-		return
-	}
 	for i, a := range r.d.Addons {
 		if !a.Enabled {
 			continue
@@ -87,6 +87,10 @@ type renderedAddonSecret struct {
 	real     string
 }
 
+func hasUnsafeDirectiveChar(s string) bool {
+	return strings.ContainsRune(s, 0) || strings.ContainsAny(s, "\r\n")
+}
+
 func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 	basePath := fmt.Sprintf("/addons/%d", idx)
 	sources := []string{basePath}
@@ -104,6 +108,7 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 
 	var execArgs []string
 	var secrets []renderedAddonSecret
+	unsafe := false
 
 	for _, prop := range m.Properties {
 		val, present := a.Settings[prop.Name]
@@ -146,7 +151,37 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		if prop.Binding == nil {
 			continue
 		}
-		r.bindAddonProperty(prop, val, propPath, envMap, &execArgs)
+		if !bindAddonProperty(prop, val, envMap, &execArgs) {
+			r.find("error", "ADDON_SETTING_INVALID", propPath, "Add-on setting contains NUL bytes or newlines that cannot be rendered safely.")
+			unsafe = true
+		}
+	}
+
+	// Defense-in-depth: never emit Quadlet or env files if any env value or CLI word contains NUL or newlines.
+	for _, k := range slices.Sorted(maps.Keys(envMap)) {
+		if hasUnsafeDirectiveChar(k) || hasUnsafeDirectiveChar(envMap[k]) {
+			r.find("error", "ADDON_SETTING_INVALID", basePath, fmt.Sprintf("Environment binding %q contains unsafe control characters.", k))
+			unsafe = true
+		}
+	}
+	var combinedExec []string
+	if len(m.Runtime.Command) > 0 {
+		if hasUnsafeDirectiveChar(m.Runtime.Command[0]) {
+			r.find("error", "ADDON_SETTING_INVALID", basePath, "Add-on entrypoint contains unsafe control characters.")
+			unsafe = true
+		}
+		combinedExec = append(combinedExec, m.Runtime.Command[1:]...)
+	}
+	combinedExec = append(combinedExec, m.Runtime.Args...)
+	combinedExec = append(combinedExec, execArgs...)
+	for _, arg := range combinedExec {
+		if hasUnsafeDirectiveChar(arg) {
+			r.find("error", "ADDON_SETTING_INVALID", basePath, "Add-on argument contains unsafe control characters.")
+			unsafe = true
+		}
+	}
+	if unsafe {
+		return
 	}
 
 	hasBus := addonHasBusGrants(a.BusGrants)
@@ -167,22 +202,17 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		})
 	}
 
-	// Render non-secret environment file (0600) when any env vars exist.
-	envPath := ""
-	if len(envMap) > 0 {
-		envPath = addonEnvPath(m.Slug)
-		r.file(envPath, "0600", formatEnvFile(envMap), slices.Clone(sources))
-	}
+	// Render Podman --env-file (0600, literal KEY=VALUE lines; Podman does not strip quotes).
+	envPath := addonEnvPath(m.Slug)
+	r.file(envPath, "0600", formatEnvFile(envMap), slices.Clone(sources))
 
 	// Build Quadlet .container unit.
 	var header strings.Builder
 	if m.Health != nil && m.Health.Endpoint != "" {
-		if ep, ok := findAddonEndpoint(m, m.Health.Endpoint); ok {
+		if ei := slices.IndexFunc(m.Endpoints, func(ep addon.EndpointSpec) bool { return ep.Name == m.Health.Endpoint }); ei >= 0 {
+			ep := m.Endpoints[ei]
 			port, _ := m.EndpointPort(ep.Name, a.Settings)
-			expected := 200
-			if m.Health.ExpectedStatus != nil {
-				expected = *m.Health.ExpectedStatus
-			}
+			expected := deref(m.Health.ExpectedStatus, 200)
 			fmt.Fprintf(&header, "# andaru-health-url: %s://127.0.0.1:%d%s %d\n", ep.Protocol, port, m.Health.Path, expected)
 			if m.Health.TimeoutSeconds > 0 {
 				fmt.Fprintf(&header, "# andaru-health-timeout: %d\n", m.Health.TimeoutSeconds)
@@ -216,45 +246,33 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		containerLines = append(containerLines, "AddDevice="+dev)
 	}
 	for _, st := range m.Storage {
-		opts := "Z"
+		opts := "Z,U"
 		if st.ReadOnly {
-			opts = "ro,Z"
+			opts = "ro,Z,U"
 		}
 		hostDir := addonStorageDir + m.Slug + "/" + st.Name
 		containerLines = append(containerLines, fmt.Sprintf("Volume=%s:%s:%s", hostDir, st.MountPath, opts))
 	}
 	if len(secrets) > 0 {
-		containerLines = append(containerLines, fmt.Sprintf("Volume=%s%s/secrets:%s:ro,Z", addonRuntimeDir, m.Slug, addonSecretsContDir))
+		containerLines = append(containerLines, fmt.Sprintf("Volume=%s%s/secrets:%s:ro,Z,U", addonRuntimeDir, m.Slug, addonSecretsContDir))
 	}
 	if hasBus {
-		containerLines = append(containerLines, fmt.Sprintf("Volume=%s%s/bus:%s:ro,Z", addonRuntimeDir, m.Slug, addonBusTokenContDir))
-		containerLines = append(containerLines, fmt.Sprintf("Volume=%s:%s", addonBusSocketHostDir, addonBusSocketContDir))
+		containerLines = append(containerLines, fmt.Sprintf("Volume=%s%s/bus:%s:ro,Z,U", addonRuntimeDir, m.Slug, addonBusTokenContDir))
+		containerLines = append(containerLines, fmt.Sprintf("Volume=%s:%s:z", addonBusSocketHostDir, addonBusSocketContDir))
 	}
-	if envPath != "" {
-		containerLines = append(containerLines, "EnvironmentFile="+envPath)
-	}
+	containerLines = append(containerLines, "EnvironmentFile="+envPath)
 
-	var combinedExec []string
 	if len(m.Runtime.Command) > 0 {
-		containerLines = append(containerLines, "Entrypoint="+quoteSystemdWord(m.Runtime.Command[0]))
-		combinedExec = append(combinedExec, m.Runtime.Command[1:]...)
+		containerLines = append(containerLines, "Entrypoint="+m.Runtime.Command[0])
 	}
-	combinedExec = append(combinedExec, m.Runtime.Args...)
-	combinedExec = append(combinedExec, execArgs...)
 	if len(combinedExec) > 0 {
-		quoted := make([]string, len(combinedExec))
-		for i, arg := range combinedExec {
-			quoted[i] = quoteSystemdWord(arg)
-		}
-		containerLines = append(containerLines, "Exec="+strings.Join(quoted, " "))
+		containerLines = append(containerLines, "Exec="+joinQuadletWords(combinedExec))
 	}
 
 	if m.Health != nil && len(m.Health.HealthCmd) > 0 {
-		quotedCmd := make([]string, len(m.Health.HealthCmd))
-		for i, arg := range m.Health.HealthCmd {
-			quotedCmd[i] = quoteSystemdWord(arg)
+		if rawCmd, err := json.Marshal(m.Health.HealthCmd); err == nil {
+			containerLines = append(containerLines, "HealthCmd="+string(rawCmd))
 		}
-		containerLines = append(containerLines, "HealthCmd="+strings.Join(quotedCmd, " "))
 		if m.Health.IntervalSeconds > 0 {
 			containerLines = append(containerLines, fmt.Sprintf("HealthInterval=%ds", m.Health.IntervalSeconds))
 		}
@@ -266,14 +284,10 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		}
 	}
 
-	stopSec := 5
-	if m.Runtime.StopTimeoutSeconds != nil {
-		stopSec = *m.Runtime.StopTimeoutSeconds
-	}
 	serviceLines := []string{
 		"Restart=on-failure",
 		"RestartSec=5",
-		fmt.Sprintf("TimeoutStopSec=%d", stopSec),
+		fmt.Sprintf("TimeoutStopSec=%d", deref(m.Runtime.StopTimeoutSeconds, 5)),
 	}
 
 	content := header.String() + ini(
@@ -284,170 +298,122 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 	r.file(addonContainerPath(m.Slug), "0600", content, sources)
 }
 
-func (r *renderer) bindAddonProperty(prop addon.Property, val any, propPath string, envMap map[string]string, execArgs *[]string) {
+func bindAddonProperty(prop addon.Property, val any, envMap map[string]string, execArgs *[]string) bool {
 	b := prop.Binding
 	switch prop.Type {
 	case "string", "zone-reference":
 		s, ok := val.(string)
 		if !ok {
-			return
+			return true
 		}
-		emitScalarBinding(b, s, envMap, execArgs)
+		if hasUnsafeDirectiveChar(s) {
+			return false
+		}
+		emitScalarBinding(prop.Name, b, s, envMap, execArgs)
 	case "boolean":
 		bv, ok := val.(bool)
 		if !ok {
-			return
+			return true
 		}
 		if b.Type == "argument" && b.Style == "flag" {
 			if bv {
 				*execArgs = append(*execArgs, b.Name)
 			}
-			return
+			return true
 		}
-		emitScalarBinding(b, strconv.FormatBool(bv), envMap, execArgs)
+		emitScalarBinding(prop.Name, b, strconv.FormatBool(bv), envMap, execArgs)
 	case "integer":
-		iv, ok := toAddonInt64(val)
+		iv, ok := addon.ToExactInt64(val)
 		if !ok {
-			return
+			return true
 		}
-		emitScalarBinding(b, strconv.FormatInt(iv, 10), envMap, execArgs)
+		emitScalarBinding(prop.Name, b, strconv.FormatInt(iv, 10), envMap, execArgs)
 	case "enum":
-		// Single-select enum (string or 1-element array) unwraps automatically.
 		if s, ok := val.(string); ok {
-			emitScalarBinding(b, s, envMap, execArgs)
-			return
+			if hasUnsafeDirectiveChar(s) {
+				return false
+			}
+			emitScalarBinding(prop.Name, b, s, envMap, execArgs)
+			return true
 		}
-		items, ok := toStringSlice(val)
+		items, ok := addon.ToStringSlice(val)
 		if !ok || len(items) == 0 {
-			return
+			return true
+		}
+		for _, item := range items {
+			if hasUnsafeDirectiveChar(item) {
+				return false
+			}
 		}
 		if prop.MaxItems != nil && *prop.MaxItems == 1 && len(items) == 1 {
-			emitScalarBinding(b, items[0], envMap, execArgs)
-			return
+			emitScalarBinding(prop.Name, b, items[0], envMap, execArgs)
+			return true
 		}
-		emitListBinding(b, items, envMap, execArgs)
+		emitListBinding(prop.Name, b, items, envMap, execArgs)
 	case "string-list":
-		items, ok := toStringSlice(val)
+		items, ok := addon.ToStringSlice(val)
 		if !ok || len(items) == 0 {
-			return
+			return true
 		}
-		emitListBinding(b, items, envMap, execArgs)
-	default:
-		_ = propPath
+		for _, item := range items {
+			if hasUnsafeDirectiveChar(item) {
+				return false
+			}
+		}
+		emitListBinding(prop.Name, b, items, envMap, execArgs)
 	}
+	return true
 }
 
-func emitScalarBinding(b *addon.Binding, v string, envMap map[string]string, execArgs *[]string) {
+func emitScalarBinding(propName string, b *addon.Binding, v string, envMap map[string]string, execArgs *[]string) {
 	switch b.Type {
 	case "environment":
-		envMap[b.Name] = v
+		envMap[cmp.Or(b.Name, propName)] = v
 	case "argument":
 		*execArgs = append(*execArgs, b.Name, v)
 	}
 }
 
-func emitListBinding(b *addon.Binding, items []string, envMap map[string]string, execArgs *[]string) {
+func emitListBinding(propName string, b *addon.Binding, items []string, envMap map[string]string, execArgs *[]string) {
 	if b.Encoding == nil {
 		return
 	}
 	switch b.Encoding.Mode {
 	case "join":
-		emitScalarBinding(b, strings.Join(items, b.Encoding.Separator), envMap, execArgs)
+		emitScalarBinding(propName, b, strings.Join(items, b.Encoding.Separator), envMap, execArgs)
 	case "repeat":
 		if b.Type != "argument" {
 			return
 		}
 		for _, item := range items {
-			emitScalarBinding(b, item, envMap, execArgs)
+			emitScalarBinding(propName, b, item, envMap, execArgs)
 		}
 	}
 }
 
-func findAddonEndpoint(m *addon.Manifest, name string) (addon.EndpointSpec, bool) {
-	for _, ep := range m.Endpoints {
-		if ep.Name == name {
-			return ep, true
-		}
-	}
-	return addon.EndpointSpec{}, false
-}
-
-func toAddonInt64(v any) (int64, bool) {
-	switch n := v.(type) {
-	case int:
-		return int64(n), true
-	case int64:
-		return n, true
-	case float64:
-		if math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n {
-			return 0, false
-		}
-		return int64(n), true
-	default:
-		return 0, false
-	}
-}
-
-func toStringSlice(v any) ([]string, bool) {
-	switch s := v.(type) {
-	case []string:
-		return s, true
-	case []any:
-		out := make([]string, 0, len(s))
-		for _, item := range s {
-			str, ok := item.(string)
-			if !ok {
-				return nil, false
-			}
-			out = append(out, str)
-		}
-		return out, true
-	default:
-		return nil, false
-	}
-}
-
-// formatEnvFile renders sorted KEY=VALUE lines suitable for systemd EnvironmentFile=.
+// formatEnvFile renders sorted literal KEY=VALUE lines for Podman --env-file.
+// Callers guarantee keys and values contain no NUL bytes or newlines.
 func formatEnvFile(envMap map[string]string) string {
-	keys := make([]string, 0, len(envMap))
-	for k := range envMap {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
 	var b strings.Builder
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(envMap)) {
 		b.WriteString(k)
 		b.WriteByte('=')
-		b.WriteString(quoteEnvValue(envMap[k]))
+		b.WriteString(envMap[k])
 		b.WriteByte('\n')
 	}
 	return b.String()
 }
 
-// quoteEnvValue quotes a systemd EnvironmentFile value when it contains whitespace or syntax-significant characters.
-func quoteEnvValue(v string) string {
-	if v == "" {
-		return `""`
+// joinQuadletWords quotes each argument word for Quadlet Exec= (Quadlet parses double-quoted
+// words and performs systemd specifier/variable escaping when generating ExecStart=).
+func joinQuadletWords(words []string) string {
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = quoteOption(w)
 	}
-	needsQuote := strings.ContainsAny(v, " \t\"'\\#;$")
-	if !needsQuote {
-		return v
-	}
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
-}
-
-// quoteSystemdWord quotes an argument word for Quadlet Exec=/Entrypoint=/HealthCmd= without shell interpolation,
-// escaping backslashes, double quotes, systemd specifiers (%), and environment expansion ($).
-func quoteSystemdWord(s string) string {
-	escaped := strings.NewReplacer(
-		`\`, `\\`,
-		`"`, `\"`,
-		`%`, `%%`,
-		`$`, `$$`,
-	).Replace(s)
-	return `"` + escaped + `"`
+	return strings.Join(quoted, " ")
 }
 
 func sanitizeUnitLine(s string) string {
-	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+	return strings.NewReplacer("\r", " ", "\n", " ", "\x00", "").Replace(s)
 }

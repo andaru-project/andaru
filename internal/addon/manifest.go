@@ -49,6 +49,9 @@ func ValidID(id string) bool { return idPattern.MatchString(id) }
 // ValidSlug reports whether slug matches the add-on slug contract.
 func ValidSlug(slug string) bool { return slugPattern.MatchString(slug) }
 
+// ValidDigestImage reports whether ref is a registry-qualified immutable @sha256: image reference.
+func ValidDigestImage(ref string) bool { return validDigestImage(ref) }
+
 // ValidInterfaceName reports whether name is a valid, non-reserved add-on interface name.
 func ValidInterfaceName(name string) bool { return validAddonInterfaceName(name) }
 
@@ -196,7 +199,7 @@ type EndpointSpec struct {
 }
 
 // EndpointPort returns the effective listening port for endpoint name under settings,
-// honoring PortSetting when present and falling back to the endpoint's default Port.
+// honoring PortSetting (or its declared property default) when present and falling back to the endpoint's Port.
 func (m *Manifest) EndpointPort(name string, settings map[string]any) (int, bool) {
 	if m == nil {
 		return 0, false
@@ -205,10 +208,20 @@ func (m *Manifest) EndpointPort(name string, settings map[string]any) (int, bool
 		if ep.Name != name {
 			continue
 		}
-		if ep.PortSetting != "" && settings != nil {
+		if ep.PortSetting != "" {
 			propName := strings.TrimPrefix(ep.PortSetting, "/")
-			if n, ok := toExactInt64(settings[propName]); ok && n >= 1 && n <= 65535 {
-				return int(n), true
+			if settings != nil {
+				if n, ok := ToExactInt64(settings[propName]); ok && n >= 1 && n <= 65535 {
+					return int(n), true
+				}
+			}
+			for _, prop := range m.Properties {
+				if prop.Name == propName {
+					if n, ok := ToExactInt64(prop.Default); ok && n >= 1 && n <= 65535 {
+						return int(n), true
+					}
+					break
+				}
 			}
 		}
 		return ep.Port, true
@@ -933,13 +946,13 @@ func validateRuntime(m *Manifest, usedEnv map[string]string, bad func(string, st
 		bad("/runtime/stopTimeoutSeconds", "stopTimeoutSeconds must be between 1 and 10")
 	}
 	for i, c := range rt.Command {
-		if c == "" || strings.ContainsRune(c, 0) {
-			bad(fmt.Sprintf("/runtime/command/%d", i), "command element must be non-empty and contain no NUL bytes")
+		if c == "" || hasControlChar(c) {
+			bad(fmt.Sprintf("/runtime/command/%d", i), "command element must be non-empty and contain no control characters")
 		}
 	}
 	for i, a := range rt.Args {
-		if strings.ContainsRune(a, 0) {
-			bad(fmt.Sprintf("/runtime/args/%d", i), "argument must not contain NUL bytes")
+		if hasControlChar(a) {
+			bad(fmt.Sprintf("/runtime/args/%d", i), "argument must not contain control characters")
 		}
 	}
 	envKeys := make([]string, 0, len(rt.Env))
@@ -1185,8 +1198,8 @@ func validateProperty(prop *Property, p string, usedEnv, usedArg, usedSecretFile
 		seenOpt := map[string]bool{}
 		for i, opt := range prop.Options {
 			op := fmt.Sprintf("%s/options/%d", p, i)
-			if opt.Value == "" {
-				bad(op+"/value", "enum option value must not be empty")
+			if opt.Value == "" || hasControlChar(opt.Value) {
+				bad(op+"/value", "enum option value must be non-empty and contain no control characters")
 			} else if seenOpt[opt.Value] {
 				bad(op+"/value", "duplicate enum option value")
 			}
@@ -1288,8 +1301,8 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 			} else if b.Encoding.Mode == "join" {
 				if b.Encoding.Separator == "" {
 					bad(p+"/encoding/separator", "join encoding requires a non-empty separator")
-				} else if strings.ContainsRune(b.Encoding.Separator, 0) {
-					bad(p+"/encoding/separator", "join separator must not contain NUL bytes")
+				} else if hasControlChar(b.Encoding.Separator) {
+					bad(p+"/encoding/separator", "join separator must not contain control characters")
 				} else {
 					checkEnumJoinSeparator(prop, p, b.Encoding.Separator, bad)
 				}

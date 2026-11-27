@@ -199,8 +199,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	fed := make(chan struct{})
 	go func() { defer close(fed); feeds.run(lifetime) }()
 	defer func() { cancel(context.Canceled); <-fed }()
+	// Evaluate and release the boot add-on hold synchronously before serving API requests so an early
+	// Activate never mistakes boot startup for a pending settings hold.
+	initialHoldRetry := hold.check(lifetime)
 	held := make(chan struct{})
-	go func() { defer close(held); hold.run(lifetime) }()
+	go func() { defer close(held); hold.runWithInitial(lifetime, initialHoldRetry) }()
 	defer func() { cancel(context.Canceled); <-held }()
 	// The traffic history fills for as long as the engine serves, and the sampler is gone before this returns.
 	sampled := make(chan struct{})

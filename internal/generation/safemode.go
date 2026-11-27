@@ -106,14 +106,31 @@ func (r Realizer) applySafeModeOnBoot() {
 
 // ReleaseAddonsHold removes the fail-closed boot hold once the engine confirms no upgrade decisions are pending,
 // and starts enabled add-on units of the live generation unless boot safe mode is active.
+// If starting live add-ons fails, the hold file is restored before unlocking so callers retry cleanly.
 func (r Realizer) ReleaseAddonsHold(ctx context.Context) error {
+	if r.StateDir != "" {
+		if _, err := os.Stat(r.dir()); err == nil {
+			unlock, err := r.lock()
+			if err != nil {
+				return err
+			}
+			defer unlock()
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	if err := os.Remove(r.Root + AddonsHeldFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if ReadSafeMode(r.Root, r.StateDir).Active {
 		return nil
 	}
-	return r.startLiveAddons(ctx)
+	if err := r.startLiveAddonsLocked(ctx); err != nil {
+		// Restore the hold flag fail-closed so the engine's retry loop attempts release again.
+		_ = writeAtomic(r.Root+AddonsHeldFile, []byte("1\n"), 0o644)
+		return err
+	}
+	return nil
 }
 
 func pathPresentFailClosed(path string) bool {
@@ -123,5 +140,9 @@ func pathPresentFailClosed(path string) bool {
 
 func kernelArgPresent(root string) bool {
 	raw, err := os.ReadFile(root + "/proc/cmdline")
-	return err == nil && slices.Contains(strings.Fields(string(raw)), SafeModeKernelArg)
+	if err != nil {
+		// Fail closed on unexpected read errors; ENOENT is normal in unit tests without a mock /proc.
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	return slices.Contains(strings.Fields(string(raw)), SafeModeKernelArg)
 }

@@ -1,11 +1,13 @@
 package addon
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,7 +28,7 @@ const (
 var (
 	// ErrAddonNotFound reports a slug absent from the shipped catalog.
 	ErrAddonNotFound = errors.New("add-on not found in catalog")
-	// ErrImageReferenced reports an attempt to remove an image digest still needed by a saved or rollback generation.
+	// ErrImageReferenced reports an attempt to remove an image digest still needed by a retained generation or saved config.
 	ErrImageReferenced = errors.New("staged image is referenced by a retained generation or saved configuration")
 )
 
@@ -44,12 +46,10 @@ type StagedState struct {
 
 // Digests returns the sorted list of staged immutable digest references.
 func (s StagedState) Digests() []string {
-	out := make([]string, 0, len(s.Images))
-	for k := range s.Images {
-		out = append(out, k)
+	if len(s.Images) == 0 {
+		return []string{}
 	}
-	slices.Sort(out)
-	return out
+	return slices.Sorted(maps.Keys(s.Images))
 }
 
 // ReadStagedState reads StateDir/addons-staged.json. A missing file returns an empty state.
@@ -89,20 +89,14 @@ func DefaultCommandRunner(ctx context.Context, name string, args ...string) ([]b
 }
 
 // Stager manages explicit out-of-band Podman image staging and removal for catalog add-ons.
-// It runs outside the generations lock so slow WAN pulls never block apply or rollback.
+// It runs outside the generations lock during slow pulls so WAN downloads never block apply or rollback.
+// ReferencedImages protects retained generations; the engine HTTP API additionally checks the saved head in config.db.
 type Stager struct {
 	StateDir         string
 	CatalogDir       string
 	Run              CommandRunner
 	Now              func() time.Time
 	ReferencedImages func() (map[string]bool, error)
-}
-
-func (s Stager) catalogDir() string {
-	if s.CatalogDir != "" {
-		return s.CatalogDir
-	}
-	return DefaultCatalogDir
 }
 
 func (s Stager) run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -119,11 +113,26 @@ func (s Stager) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (s Stager) withLock(fn func() error) error {
-	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+func (s Stager) imageForSlug(slug string) (string, error) {
+	if !ValidSlug(slug) {
+		return "", fmt.Errorf("invalid add-on slug %q", slug)
+	}
+	cat, err := LoadCatalog(cmp.Or(s.CatalogDir, DefaultCatalogDir))
+	if err != nil {
+		return "", err
+	}
+	m, ok := cat.BySlug(slug)
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ErrAddonNotFound, slug)
+	}
+	return m.Runtime.Image, nil
+}
+
+func withStagedLock(stateDir string, fn func() error) error {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(s.StateDir, stagedLockFile), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(filepath.Join(stateDir, stagedLockFile), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
@@ -136,18 +145,10 @@ func (s Stager) withLock(fn func() error) error {
 
 // Stage pulls the catalog add-on's pinned digest into local Podman storage and records its verified image ID.
 func (s Stager) Stage(ctx context.Context, slug string) (StagedImage, error) {
-	if !ValidSlug(slug) {
-		return StagedImage{}, fmt.Errorf("invalid add-on slug %q", slug)
-	}
-	cat, err := LoadCatalog(s.catalogDir())
+	imageRef, err := s.imageForSlug(slug)
 	if err != nil {
 		return StagedImage{}, err
 	}
-	m, ok := cat.BySlug(slug)
-	if !ok {
-		return StagedImage{}, fmt.Errorf("%w: %s", ErrAddonNotFound, slug)
-	}
-	imageRef := m.Runtime.Image
 	pullCtx, cancel := context.WithTimeout(ctx, stageTimeout)
 	defer cancel()
 	if _, err := s.run(pullCtx, podmanBinary, "pull", imageRef); err != nil {
@@ -162,11 +163,14 @@ func (s Stager) Stage(ctx context.Context, slug string) (StagedImage, error) {
 		return StagedImage{}, fmt.Errorf("verify staged add-on image %s: empty image ID", imageRef)
 	}
 	entry := StagedImage{Digest: imageRef, ImageID: imageID, StagedAt: s.now()}
-	err = s.withLock(func() error {
+	err = withStagedLock(s.StateDir, func() error {
+		// Re-verify the image is still present under lock so a concurrent Unstage cannot leave a phantom record.
+		if _, err := s.run(pullCtx, podmanBinary, "image", "exists", imageRef); err != nil {
+			return fmt.Errorf("staged add-on image %s vanished before recording: %w", imageRef, err)
+		}
 		st, err := ReadStagedState(s.StateDir)
 		if err != nil {
-			// Replace unreadable index with fresh state carrying the verified image.
-			st = StagedState{Images: map[string]StagedImage{}}
+			return err
 		}
 		st.Images[imageRef] = entry
 		return writeStagedState(s.StateDir, st)
@@ -179,26 +183,19 @@ func (s Stager) Stage(ctx context.Context, slug string) (StagedImage, error) {
 
 // Unstage removes an add-on's staged image from local Podman storage when no retained generation references it.
 func (s Stager) Unstage(ctx context.Context, slug string) error {
-	if !ValidSlug(slug) {
-		return fmt.Errorf("invalid add-on slug %q", slug)
-	}
-	cat, err := LoadCatalog(s.catalogDir())
+	imageRef, err := s.imageForSlug(slug)
 	if err != nil {
 		return err
 	}
-	m, ok := cat.BySlug(slug)
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrAddonNotFound, slug)
-	}
-	return s.UnstageDigest(ctx, m.Runtime.Image)
+	return s.UnstageDigest(ctx, imageRef)
 }
 
-// UnstageDigest removes one immutable image digest if no retained generation or saved config references it.
+// UnstageDigest removes one immutable image digest if no retained generation references it.
 func (s Stager) UnstageDigest(ctx context.Context, imageRef string) error {
 	if !validDigestImage(imageRef) {
 		return fmt.Errorf("invalid image digest reference %q", imageRef)
 	}
-	return s.withLock(func() error {
+	return withStagedLock(s.StateDir, func() error {
 		if s.ReferencedImages != nil {
 			refs, err := s.ReferencedImages()
 			if err != nil {
@@ -216,7 +213,7 @@ func (s Stager) UnstageDigest(ctx context.Context, imageRef string) error {
 		}
 		st, err := ReadStagedState(s.StateDir)
 		if err != nil {
-			st = StagedState{Images: map[string]StagedImage{}}
+			return err
 		}
 		delete(st.Images, imageRef)
 		return writeStagedState(s.StateDir, st)
@@ -224,26 +221,49 @@ func (s Stager) UnstageDigest(ctx context.Context, imageRef string) error {
 }
 
 // RemoveAllManagedImages removes every staged add-on image tracked under StateDir during a factory reset.
+// Any digest whose removal fails stays recorded in addons-staged.json so a retry cleans it up.
 func RemoveAllManagedImages(ctx context.Context, stateDir string, run CommandRunner) error {
-	st, err := ReadStagedState(stateDir)
-	if err != nil || len(st.Images) == 0 {
+	if stateDir == "" {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, StagedStateFile)); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if run == nil {
 		run = DefaultCommandRunner
 	}
-	var errs []error
-	for _, digest := range st.Digests() {
-		if _, err := run(ctx, podmanBinary, "rmi", "-f", digest); err != nil {
-			if _, existsErr := run(ctx, podmanBinary, "image", "exists", digest); existsErr == nil {
-				errs = append(errs, fmt.Errorf("remove managed image %s: %w", digest, err))
+	return withStagedLock(stateDir, func() error {
+		st, err := ReadStagedState(stateDir)
+		if err != nil {
+			return err
+		}
+		if len(st.Images) == 0 {
+			if err := os.Remove(filepath.Join(stateDir, StagedStateFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			return nil
+		}
+		var errs []error
+		remaining := StagedState{Images: map[string]StagedImage{}}
+		for _, digest := range st.Digests() {
+			if _, err := run(ctx, podmanBinary, "rmi", "-f", digest); err != nil {
+				if _, existsErr := run(ctx, podmanBinary, "image", "exists", digest); existsErr == nil {
+					errs = append(errs, fmt.Errorf("remove managed image %s: %w", digest, err))
+					remaining.Images[digest] = st.Images[digest]
+				}
 			}
 		}
-	}
-	if err := os.Remove(filepath.Join(stateDir, StagedStateFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
+		if len(remaining.Images) > 0 {
+			if werr := writeStagedState(stateDir, remaining); werr != nil {
+				errs = append(errs, werr)
+			}
+			return errors.Join(errs...)
+		}
+		if err := os.Remove(filepath.Join(stateDir, StagedStateFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+		return errors.Join(errs...)
+	})
 }
 
 func writeStagedState(stateDir string, st StagedState) error {
@@ -277,6 +297,10 @@ func writeStagedState(stateDir string, st StagedState) error {
 	}
 	if err := os.Rename(tmp.Name(), filepath.Join(stateDir, StagedStateFile)); err != nil {
 		return err
+	}
+	if d, err := os.Open(stateDir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	ok = true
 	return nil

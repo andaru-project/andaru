@@ -188,12 +188,12 @@ func TestRenderAddonQuadletEnvSecretsAndNFTZone(t *testing.T) {
 		"DropCapability=ALL",
 		"AddCapability=NET_ADMIN",
 		"AddDevice=/dev/net/tun",
-		"Volume=/var/lib/andaru/addons/tailscale/state:/var/lib/tailscale:Z",
-		"Volume=/run/andaru-addons/tailscale/secrets:/run/andaru/secrets:ro,Z",
-		"Volume=/run/andaru-addons/tailscale/bus:/run/andaru/bus:ro,Z",
-		"Volume=/run/andaru-addons/bus-socket:/run/andaru/bus-socket",
+		"Volume=/var/lib/andaru/addons/tailscale/state:/var/lib/tailscale:Z,U",
+		"Volume=/run/andaru-addons/tailscale/secrets:/run/andaru/secrets:ro,Z,U",
+		"Volume=/run/andaru-addons/tailscale/bus:/run/andaru/bus:ro,Z,U",
+		"Volume=/run/andaru-addons/bus-socket:/run/andaru/bus-socket:z",
 		"EnvironmentFile=/run/andaru-addons/tailscale/andaru-addon-tailscale.env",
-		`Exec="--accept-routes" "--tag" "tag:edge" "--tag" "tag:$$100%% \"quoted\""`,
+		`Exec="--accept-routes" "--tag" "tag:edge" "--tag" "tag:$100% \"quoted\""`,
 		"TimeoutStopSec=5",
 	} {
 		if !strings.Contains(ctr.Content, want) {
@@ -336,6 +336,94 @@ func TestRenderAddonBlockingFindingsAndNoBusMountWhenDenied(t *testing.T) {
 			if strings.Contains(f.Content, "ANDARU_BUS_") {
 				t.Fatalf("denied bus grants should not set ANDARU_BUS_*:\n%s", f.Content)
 			}
+		}
+	}
+}
+
+func TestRenderAddonHardeningNewlineLiteralEnvEntrypointAndHealthCmd(t *testing.T) {
+	// Newlines in env-bound or arg-bound settings must fail closed with ADDON_SETTING_INVALID and emit no unit/env files.
+	cat := testAddonCatalog(t, renderTestTailscaleManifest)
+	facts := allFacts
+	facts.PodmanTool = true
+	facts.StagedImages = []string{renderTestTailscaleDigest}
+	injected := json.RawMessage(`{
+		"links": [], "segments": [], "zones": [{"id":"zon_vpn"}],
+		"addons": [{
+			"id": "org.andaru.tailscale",
+			"enabled": true,
+			"settings": {
+				"hostname": "good\nINJECTED=evil",
+				"tags": ["ok\n[Service]\nExecStart=/bin/sh"]
+			}
+		}]
+	}`)
+	res, err := Network(Input{Declaration: injected, Catalog: cat, Facts: facts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Realizable {
+		t.Fatal("expected Realizable=false for newline-injected settings")
+	}
+	for _, f := range res.Files {
+		if strings.Contains(f.Path, "tailscale") {
+			t.Fatalf("must not emit add-on files on unsafe setting: %s", f.Path)
+		}
+	}
+
+	// Literal Podman --env-file (spaces/empty unquoted), raw Entrypoint=, JSON array HealthCmd=, default env binding name.
+	const customManifest = `{
+	  "manifestVersion": 1, "id": "org.test.app", "slug": "app", "name": "App", "version": "1.0.0",
+	  "application": {"name":"App","version":"1"}, "requires": [{"name":"andaru.extension-api","version":"1.0.0"}],
+	  "permissions": [{"name":"view","title":"View"}],
+	  "runtime": {
+	    "image": "` + renderTestTailscaleDigest + `",
+	    "network": "host",
+	    "command": ["/usr/bin/app", "--serve"],
+	    "env": {"APP_FLAGS": "--a --b", "EMPTY_VAR": ""}
+	  },
+	  "health": {"healthCmd": ["/usr/bin/app", "health", "--quiet"]},
+	  "properties": [
+	    {"name":"APP_MODE","type":"string","default":"prod","title":"Mode","binding":{"type":"environment"}}
+	  ]
+	}`
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "app")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "manifest.json"), []byte(customManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	customCat, err := addon.LoadCatalog(dir)
+	if err != nil {
+		t.Fatalf("LoadCatalog custom: %v", err)
+	}
+	customDecl := json.RawMessage(`{"links":[],"segments":[],"zones":[],"addons":[{"id":"org.test.app","enabled":true,"settings":{}}]}`)
+	cres, err := Network(Input{Declaration: customDecl, Catalog: customCat, Facts: facts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cres.Realizable {
+		t.Fatalf("expected custom Realizable=true, findings=%+v", cres.Findings)
+	}
+	byPath := map[string]File{}
+	for _, f := range cres.Files {
+		byPath[f.Path] = f
+	}
+	envContent := byPath["/run/andaru-addons/app/andaru-addon-app.env"].Content
+	for _, want := range []string{"APP_FLAGS=--a --b\n", "EMPTY_VAR=\n", "APP_MODE=prod\n"} {
+		if !strings.Contains(envContent, want) {
+			t.Errorf("env missing literal %q:\n%s", want, envContent)
+		}
+	}
+	ctrContent := byPath["/run/containers/systemd/andaru-addon-app.container"].Content
+	for _, want := range []string{
+		"Entrypoint=/usr/bin/app\n",
+		`Exec="--serve"`,
+		`HealthCmd=["/usr/bin/app","health","--quiet"]`,
+	} {
+		if !strings.Contains(ctrContent, want) {
+			t.Errorf("container missing %q:\n%s", want, ctrContent)
 		}
 	}
 }

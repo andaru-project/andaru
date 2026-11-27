@@ -229,11 +229,78 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 		t.Fatalf("ReleaseAddonsHold should start live add-on unit; cmds=%v", cmds)
 	}
 
-	// 5. Teardown removes add-on units and /run/andaru-addons.
+	// 5. Disabling an add-on in gen 4 stops the unit and removes /run/andaru-addons/<slug> while preserving bus-socket.
+	if err := os.MkdirAll(root+addonBusSocketHostDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	cmds = nil
+	mu.Unlock()
+	m4 := Manifest{SavedVersion: "4", CreatedAt: time.Now().UTC(), ConfirmTimeoutSeconds: 60}
+	id4, err := Create(Dir(dir), m4, map[string][]byte{})
+	if err != nil {
+		t.Fatalf("Create gen 4: %v", err)
+	}
+	if err := r.Activate(t.Context(), id4); err != nil {
+		t.Fatalf("Activate gen 4: %v", err)
+	}
+	mu.Lock()
+	stoppedOnDisable := slices.ContainsFunc(cmds, func(c string) bool {
+		return strings.Contains(c, "stop andaru-addon-tailscale.service")
+	})
+	mu.Unlock()
+	if !stoppedOnDisable {
+		t.Fatalf("disabling add-on should stop unit; cmds=%v", cmds)
+	}
+	if _, err := os.Stat(root + "/run/andaru-addons/tailscale"); !os.IsNotExist(err) {
+		t.Fatalf("expected /run/andaru-addons/tailscale removed on disable, err=%v", err)
+	}
+	if _, err := os.Stat(root + addonBusSocketHostDir); err != nil {
+		t.Fatalf("expected shared bus-socket dir preserved, err=%v", err)
+	}
+	if err := r.Confirm(t.Context(), id4); err != nil {
+		t.Fatalf("Confirm gen 4: %v", err)
+	}
+
+	// 6. ReleaseAddonsHold restores addons-held fail-closed if starting live add-ons fails.
+	failR := r
+	failR.Run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if filepath.Base(name) == "systemctl" && len(args) > 0 && args[0] == "daemon-reload" {
+			return nil, errors.New("systemd busy")
+		}
+		return nil, nil
+	}
+	// Restore gen 3 as live so ReleaseAddonsHold actually attempts to start an add-on.
+	if err := os.WriteFile(root+AddonsHeldFile, []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m5, f5 := testAddonFiles("http://127.0.0.1:9002/healthz", "TS_HOSTNAME=gw5\n")
+	m5.SavedVersion = "5"
+	id5, err := Create(Dir(dir), m5, f5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Activate(t.Context(), id5); err != nil {
+		t.Fatalf("Activate gen 5 under hold: %v", err)
+	}
+	if err := r.Confirm(t.Context(), id5); err != nil {
+		t.Fatal(err)
+	}
+	if err := failR.ReleaseAddonsHold(t.Context()); err == nil {
+		t.Fatal("expected ReleaseAddonsHold failure on daemon-reload error")
+	}
+	if _, err := os.Stat(root + AddonsHeldFile); err != nil {
+		t.Fatalf("expected AddonsHeldFile restored fail-closed after ReleaseAddonsHold failure, err=%v", err)
+	}
+
+	// 7. Teardown removes per-add-on runtime dirs while preserving bus-socket.
 	if err := r.Teardown(t.Context()); err != nil {
 		t.Fatalf("Teardown: %v", err)
 	}
-	if _, err := os.Stat(root + "/run/andaru-addons"); !os.IsNotExist(err) {
-		t.Fatalf("expected /run/andaru-addons removed on teardown, err=%v", err)
+	if _, err := os.Stat(root + "/run/andaru-addons/tailscale"); !os.IsNotExist(err) {
+		t.Fatalf("expected /run/andaru-addons/tailscale removed on teardown, err=%v", err)
+	}
+	if _, err := os.Stat(root + addonBusSocketHostDir); err != nil {
+		t.Fatalf("expected bus-socket preserved on teardown, err=%v", err)
 	}
 }

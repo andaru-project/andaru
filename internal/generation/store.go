@@ -79,9 +79,9 @@ var (
 	pppOptions = regexp.MustCompile(`^` + pppDir + `[A-Za-z0-9_.:-]+\.options$`)
 	pppUnit    = regexp.MustCompile(`^` + pppUnitPrefix + `[A-Za-z0-9_.:-]+\.service$`)
 	// Add-on Quadlets, non-secret env files, and per-secret files (generation-flat unique basenames).
-	addonContainer = regexp.MustCompile(`^` + addonQuadletPrefix + `([a-z0-9][a-z0-9-]{0,31})\.container$`)
-	addonEnv       = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z0-9][a-z0-9-]{0,31})/andaru-addon-([a-z0-9][a-z0-9-]{0,31})\.env$`)
-	addonSecret    = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z0-9][a-z0-9-]{0,31})/secrets/andaru-addon-([a-z0-9][a-z0-9-]{0,31})-[A-Za-z][A-Za-z0-9_]{0,63}\.secret$`)
+	addonContainer = regexp.MustCompile(`^` + addonQuadletPrefix + `([a-z][a-z0-9-]{0,31})\.container$`)
+	addonEnv       = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z][a-z0-9-]{0,31})/andaru-addon-([a-z][a-z0-9-]{0,31})\.env$`)
+	addonSecret    = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z][a-z0-9-]{0,31})/secrets/andaru-addon-([a-z][a-z0-9-]{0,31})-[A-Za-z][A-Za-z0-9_]{0,63}\.secret$`)
 	idName         = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 )
 

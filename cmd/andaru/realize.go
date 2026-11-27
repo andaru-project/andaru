@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/addon"
@@ -53,8 +54,15 @@ func newRealizer(stateDir, busSocket string) (realizeVerbs, error) {
 	return generation.Realizer{
 		StateDir: stateDir, RenderDisaster: renderDisaster(""), Activating: activating,
 		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			// One stuck tool must not hold the generations lock.
-			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			// One stuck tool must not hold the generations lock; add-on systemctl stop/start/restart
+			// gets 25s to cover manifests with TimeoutStopSec up to 10s plus container cleanup.
+			limit := 10 * time.Second
+			if name == "/usr/bin/systemctl" && len(args) >= 2 &&
+				(args[0] == "stop" || args[0] == "start" || args[0] == "restart") &&
+				strings.HasPrefix(args[len(args)-1], "andaru-addon-") {
+				limit = 25 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(ctx, limit)
 			defer cancel()
 			out, err := exec.CommandContext(ctx, name, args...).Output()
 			var exit *exec.ExitError
@@ -102,8 +110,12 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		if !generationID.MatchString(rest[0]) {
 			return usageError(stderr, realizeUsage, "andaru realize")
 		}
-	case "addon-stage", "addon-unstage":
+	case "addon-stage":
 		if !addon.ValidSlug(rest[0]) {
+			return usageError(stderr, realizeUsage, "andaru realize")
+		}
+	case "addon-unstage":
+		if !addon.ValidSlug(rest[0]) && !addon.ValidDigestImage(rest[0]) {
 			return usageError(stderr, realizeUsage, "andaru realize")
 		}
 	case "addon-ctl":
@@ -119,7 +131,8 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	if blocked && verb != "boot" {
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		// The engine keeps owing these: it tries them again after the reset.
-		if verb == "set-hostname" || verb == "aliases" || verb == "addons-release-hold" || verb == "addon-stage" || verb == "addon-unstage" || verb == "addon-ctl" {
+		switch verb {
+		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl":
 			return 1
 		}
 		return 0

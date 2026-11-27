@@ -3,10 +3,12 @@ package generation
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,15 +18,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/addon"
 )
 
 const (
-	addonQuadletPrefix = "/run/containers/systemd/andaru-addon-"
-	addonRuntimeDir    = "/run/andaru-addons/"
-	addonStoragePrefix = "/var/lib/andaru/addons/"
+	addonQuadletPrefix     = "/run/containers/systemd/andaru-addon-"
+	addonRuntimeDir        = "/run/andaru-addons/"
+	addonBusSocketHostDir  = "/run/andaru-addons/bus-socket"
+	addonStoragePrefix     = "/var/lib/andaru/addons/"
+	defaultAddonVerifyWait = 15 * time.Second
 )
 
 var (
@@ -34,6 +39,17 @@ var (
 	ErrAddonNotApplied = errors.New("add-on is not enabled in the applied generation")
 
 	addonStorageNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
+
+	// addonHealthClient is strictly restricted to verified 127.0.0.1 loopback URLs in probeHealthURL.
+	// InsecureSkipVerify applies only to internal loopback HTTPS health endpoints (often self-signed).
+	addonHealthClient = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // loopback-only verified in probeHealthURL
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 )
 
 func addonUnitName(slug string) string { return "andaru-addon-" + slug + ".service" }
@@ -57,15 +73,15 @@ func addonSlugFromPath(path string) (string, bool) {
 
 func addonSlugs(set []placed) []string {
 	seen := map[string]bool{}
-	var slugs []string
 	for _, f := range set {
-		if m := addonContainer.FindStringSubmatch(f.path); len(m) == 2 && !seen[m[1]] {
+		if m := addonContainer.FindStringSubmatch(f.path); len(m) == 2 {
 			seen[m[1]] = true
-			slugs = append(slugs, m[1])
 		}
 	}
-	slices.Sort(slugs)
-	return slugs
+	if len(seen) == 0 {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(seen))
 }
 
 func addonSum(slug string, set []placed) string {
@@ -96,8 +112,8 @@ func (r Realizer) addonStorageRoot() string {
 	return "/var/lib/andaru/addons"
 }
 
-// ensureAddonStorageDirs creates host storage directories referenced by Volume=/var/lib/andaru/addons/<slug>/<name>:...
-func (r Realizer) ensureAddonStorageDirs(set []placed) error {
+// ensureAddonDirs creates host storage and bus-mount directories referenced by Volume= lines in .container files.
+func (r Realizer) ensureAddonDirs(set []placed) error {
 	base := r.addonStorageRoot()
 	for _, f := range set {
 		m := addonContainer.FindStringSubmatch(f.path)
@@ -105,18 +121,35 @@ func (r Realizer) ensureAddonStorageDirs(set []placed) error {
 			continue
 		}
 		slug := m[1]
-		prefix := "Volume=" + addonStoragePrefix + slug + "/"
+		storagePrefix := "Volume=" + addonStoragePrefix + slug + "/"
+		busTokenPrefix := "Volume=" + addonRuntimeDir + slug + "/bus:"
+		busSocketPrefix := "Volume=" + addonBusSocketHostDir + ":"
 		for line := range strings.SplitSeq(string(f.data), "\n") {
-			rest, ok := strings.CutPrefix(strings.TrimSpace(line), prefix)
-			if !ok {
-				continue
-			}
-			name, _, hasColon := strings.Cut(rest, ":")
-			if !hasColon || !addonStorageNamePattern.MatchString(name) {
-				continue
-			}
-			if err := os.MkdirAll(filepath.Join(base, slug, name), 0o700); err != nil {
-				return fmt.Errorf("create add-on storage directory %s/%s: %w", slug, name, err)
+			trimmed := strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(trimmed, storagePrefix):
+				rest := strings.TrimPrefix(trimmed, storagePrefix)
+				name, _, hasColon := strings.Cut(rest, ":")
+				if !hasColon || !addonStorageNamePattern.MatchString(name) {
+					continue
+				}
+				if err := os.MkdirAll(filepath.Join(base, slug, name), 0o700); err != nil {
+					return fmt.Errorf("create add-on storage directory %s/%s: %w", slug, name, err)
+				}
+			case strings.HasPrefix(trimmed, busTokenPrefix):
+				if err := os.MkdirAll(r.Root+strings.TrimSuffix(addonRuntimeDir, "/"), 0o700); err != nil {
+					return err
+				}
+				if err := os.MkdirAll(r.Root+addonRuntimeDir+slug+"/bus", 0o700); err != nil {
+					return fmt.Errorf("create add-on bus token directory %s: %w", slug, err)
+				}
+			case strings.HasPrefix(trimmed, busSocketPrefix):
+				if err := os.MkdirAll(r.Root+strings.TrimSuffix(addonRuntimeDir, "/"), 0o700); err != nil {
+					return err
+				}
+				if err := os.MkdirAll(r.Root+addonBusSocketHostDir, 0o755); err != nil {
+					return fmt.Errorf("create add-on bus socket directory: %w", err)
+				}
 			}
 		}
 	}
@@ -125,14 +158,10 @@ func (r Realizer) ensureAddonStorageDirs(set []placed) error {
 
 func (r Realizer) stopAddon(ctx context.Context, slug string) error {
 	unit := addonUnitName(slug)
-	_, err := r.Run(ctx, "/usr/bin/systemctl", "stop", unit)
-	if err == nil {
-		return nil
+	if err := r.stopUnit(ctx, unit); err != nil {
+		return fmt.Errorf("stop add-on %s: %w", unit, err)
 	}
-	if state, showErr := r.Run(ctx, "/usr/bin/systemctl", "show", "-p", "LoadState", "--value", unit); showErr == nil && strings.TrimSpace(string(state)) == "not-found" {
-		return nil
-	}
-	return fmt.Errorf("stop add-on %s: %w", unit, err)
+	return nil
 }
 
 // addons stops removed/disabled add-on units, reloads systemd so podman-system-generator updates
@@ -154,17 +183,13 @@ func (r Realizer) addons(ctx context.Context, from, to []placed) error {
 		errs := make([]error, len(removed))
 		var wg sync.WaitGroup
 		for i, slug := range removed {
-			wg.Add(1)
-			go func(idx int, sl string) {
-				defer wg.Done()
-				if err := r.stopAddon(ctx, sl); err != nil {
-					errs[idx] = err
+			wg.Go(func() {
+				if err := r.stopAddon(ctx, slug); err != nil {
+					errs[i] = err
 					return
 				}
-				_ = os.Remove(r.Root + addonStampPath(sl))
-				_ = os.Remove(r.Root + addonRuntimeDir + sl + "/secrets")
-				_ = os.Remove(r.Root + addonRuntimeDir + sl)
-			}(i, slug)
+				_ = os.RemoveAll(r.Root + addonRuntimeDir + slug)
+			})
 		}
 		wg.Wait()
 		if err := errors.Join(errs...); err != nil {
@@ -172,7 +197,7 @@ func (r Realizer) addons(ctx context.Context, from, to []placed) error {
 		}
 	}
 
-	if err := r.ensureAddonStorageDirs(to); err != nil {
+	if err := r.ensureAddonDirs(to); err != nil {
 		return err
 	}
 
@@ -180,15 +205,25 @@ func (r Realizer) addons(ctx context.Context, from, to []placed) error {
 		return fmt.Errorf("reload systemd for add-on units: %w", err)
 	}
 
-	// Safe mode or settings hold keeps add-ons off; drop stale stamps so ReleaseAddonsHold starts them once cleared.
+	// Safe mode or settings hold keeps add-ons off; stop any previously live add-on whose files changed so it
+	// never continues running stale config/secrets, and drop stale stamps so ReleaseAddonsHold starts it once cleared.
 	if ReadSafeMode(r.Root, r.StateDir).Active {
+		var stopErrs []error
 		for _, slug := range has {
 			sum := addonSum(slug, to)
-			if started, err := os.ReadFile(r.Root + addonStampPath(slug)); err == nil && string(started) != sum {
-				_ = os.Remove(r.Root + addonStampPath(slug))
+			stamp := r.Root + addonStampPath(slug)
+			started, err := os.ReadFile(stamp)
+			changed := err != nil || string(started) != sum
+			if changed && slices.Contains(had, slug) {
+				if serr := r.stopAddon(ctx, slug); serr != nil {
+					stopErrs = append(stopErrs, serr)
+				}
+			}
+			if changed {
+				_ = os.Remove(stamp)
 			}
 		}
-		return nil
+		return errors.Join(stopErrs...)
 	}
 
 	if len(has) == 0 {
@@ -198,29 +233,29 @@ func (r Realizer) addons(ctx context.Context, from, to []placed) error {
 	errs := make([]error, len(has))
 	var wg sync.WaitGroup
 	for i, slug := range has {
-		wg.Add(1)
-		go func(idx int, sl string) {
-			defer wg.Done()
-			sum := addonSum(sl, to)
-			stamp := r.Root + addonStampPath(sl)
+		wg.Go(func() {
+			sum := addonSum(slug, to)
+			stamp := r.Root + addonStampPath(slug)
 			if started, err := os.ReadFile(stamp); err != nil || string(started) != sum {
-				if err := r.stopAddon(ctx, sl); err != nil {
-					errs[idx] = err
+				// Clear stamp before stop/start so an interruption guarantees rollback recreates the container.
+				_ = os.Remove(stamp)
+				if err := r.stopAddon(ctx, slug); err != nil {
+					errs[i] = err
 					return
 				}
 			}
-			if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", addonUnitName(sl)); err != nil {
-				errs[idx] = fmt.Errorf("start add-on %s: %w", addonUnitName(sl), err)
+			if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", addonUnitName(slug)); err != nil {
+				errs[i] = fmt.Errorf("start add-on %s: %w", addonUnitName(slug), err)
 				return
 			}
 			if err := os.MkdirAll(filepath.Dir(stamp), 0o700); err != nil {
-				errs[idx] = err
+				errs[i] = err
 				return
 			}
 			if err := writeAtomic(stamp, []byte(sum), 0o600); err != nil {
-				errs[idx] = err
+				errs[i] = err
 			}
-		}(i, slug)
+		})
 	}
 	wg.Wait()
 	return errors.Join(errs...)
@@ -230,15 +265,18 @@ type addonHealthSpec struct {
 	slug           string
 	url            string
 	expectedStatus int
+	timeout        time.Duration
+	startPeriod    time.Duration
 	hasHealthCmd   bool
 }
 
 func parseAddonHealth(slug string, data []byte) addonHealthSpec {
-	spec := addonHealthSpec{slug: slug, expectedStatus: 200}
+	spec := addonHealthSpec{slug: slug, expectedStatus: 200, timeout: 2 * time.Second}
 	for line := range strings.SplitSeq(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if rest, ok := strings.CutPrefix(trimmed, "# andaru-health-url:"); ok {
-			fields := strings.Fields(rest)
+		switch {
+		case strings.HasPrefix(trimmed, "# andaru-health-url:"):
+			fields := strings.Fields(strings.TrimPrefix(trimmed, "# andaru-health-url:"))
 			if len(fields) >= 1 {
 				spec.url = fields[0]
 			}
@@ -247,14 +285,27 @@ func parseAddonHealth(slug string, data []byte) addonHealthSpec {
 					spec.expectedStatus = code
 				}
 			}
-		} else if strings.HasPrefix(trimmed, "HealthCmd=") {
+		case strings.HasPrefix(trimmed, "# andaru-health-timeout:"):
+			if sec, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(trimmed, "# andaru-health-timeout:"))); err == nil && sec > 0 && sec <= 10 {
+				spec.timeout = time.Duration(sec) * time.Second
+			}
+		case strings.HasPrefix(trimmed, "# andaru-health-start-period:"):
+			if sec, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(trimmed, "# andaru-health-start-period:"))); err == nil && sec > 0 && sec <= 30 {
+				spec.startPeriod = time.Duration(sec) * time.Second
+			}
+		case strings.HasPrefix(trimmed, "HealthCmd="):
 			spec.hasHealthCmd = true
+		case strings.HasPrefix(trimmed, "HealthStartPeriod="):
+			raw := strings.TrimSuffix(strings.TrimPrefix(trimmed, "HealthStartPeriod="), "s")
+			if sec, err := strconv.Atoi(raw); err == nil && sec > 0 && sec <= 30 {
+				spec.startPeriod = time.Duration(sec) * time.Second
+			}
 		}
 	}
 	return spec
 }
 
-func (r Realizer) probeHealthURL(ctx context.Context, rawURL string) (int, error) {
+func (r Realizer) probeHealthURL(ctx context.Context, rawURL string, timeout time.Duration) (int, error) {
 	if r.HealthGet != nil {
 		return r.HealthGet(ctx, rawURL)
 	}
@@ -262,17 +313,13 @@ func (r Realizer) probeHealthURL(ctx context.Context, rawURL string) (int, error
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() != "127.0.0.1" {
 		return 0, fmt.Errorf("invalid loopback health URL %q", rawURL)
 	}
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return 0, err
 	}
-	resp, err := client.Do(req)
+	resp, err := addonHealthClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -280,11 +327,10 @@ func (r Realizer) probeHealthURL(ctx context.Context, rawURL string) (int, error
 	return resp.StatusCode, nil
 }
 
-// verifyAddons checks that every enabled add-on in next reaches active/healthy state within the verify context.
+// verifyAddons checks that every enabled add-on in next reaches active/healthy state within a bounded budget.
 // Skipped when safe mode or settings hold is active so recovery applies succeed while add-ons are held off.
 func (r Realizer) verifyAddons(ctx context.Context, next []placed) string {
-	slugs := addonSlugs(next)
-	if len(slugs) == 0 || ReadSafeMode(r.Root, r.StateDir).Active {
+	if ReadSafeMode(r.Root, r.StateDir).Active {
 		return ""
 	}
 	bySlug := map[string]addonHealthSpec{}
@@ -293,19 +339,28 @@ func (r Realizer) verifyAddons(ctx context.Context, next []placed) string {
 			bySlug[m[1]] = parseAddonHealth(m[1], f.data)
 		}
 	}
+	if len(bySlug) == 0 {
+		return ""
+	}
+	budget := defaultAddonVerifyWait
+	if r.VerifyWait > 0 && r.VerifyWait < budget {
+		budget = r.VerifyWait
+	}
+	verifyCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 
 	poll := r.Poll
 	if poll <= 0 {
 		poll = 200 * time.Millisecond
 	}
+	slugs := slices.Sorted(maps.Keys(bySlug))
 	reasons := make([]string, len(slugs))
 	var wg sync.WaitGroup
 	for i, slug := range slugs {
-		wg.Add(1)
-		go func(idx int, spec addonHealthSpec) {
-			defer wg.Done()
-			reasons[idx] = r.waitAddonReady(ctx, spec, poll)
-		}(i, bySlug[slug])
+		spec := bySlug[slug]
+		wg.Go(func() {
+			reasons[i] = r.waitAddonReady(verifyCtx, spec, poll)
+		})
 	}
 	wg.Wait()
 	for _, reason := range reasons {
@@ -318,6 +373,7 @@ func (r Realizer) verifyAddons(ctx context.Context, next []placed) string {
 
 func (r Realizer) waitAddonReady(ctx context.Context, spec addonHealthSpec, poll time.Duration) string {
 	unit := addonUnitName(spec.slug)
+	startedAt := time.Now()
 	lastReason := "add-on " + spec.slug + " did not become ready"
 	for {
 		out, err := r.Run(ctx, "/usr/bin/systemctl", "show", "-p", "ActiveState", "--value", unit)
@@ -331,7 +387,7 @@ func (r Realizer) waitAddonReady(ctx context.Context, spec addonHealthSpec, poll
 			case "active":
 				switch {
 				case spec.url != "":
-					code, herr := r.probeHealthURL(ctx, spec.url)
+					code, herr := r.probeHealthURL(ctx, spec.url, spec.timeout)
 					if herr == nil && code == spec.expectedStatus {
 						return ""
 					}
@@ -341,10 +397,21 @@ func (r Realizer) waitAddonReady(ctx context.Context, spec addonHealthSpec, poll
 						lastReason = fmt.Sprintf("add-on %s health check returned HTTP %d (want %d)", spec.slug, code, spec.expectedStatus)
 					}
 				case spec.hasHealthCmd:
-					if _, herr := r.Run(ctx, "/usr/bin/podman", "healthcheck", "run", addonContainerName(spec.slug)); herr == nil {
-						return ""
+					hout, herr := r.Run(ctx, "/usr/bin/podman", "inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{end}}", addonContainerName(spec.slug))
+					if herr != nil {
+						lastReason = fmt.Sprintf("add-on %s health inspection failed: %v", spec.slug, herr)
 					} else {
-						lastReason = fmt.Sprintf("add-on %s health command failed: %v", spec.slug, herr)
+						switch status := strings.TrimSpace(string(hout)); status {
+						case "healthy":
+							return ""
+						case "unhealthy":
+							if spec.startPeriod == 0 || time.Since(startedAt) >= spec.startPeriod {
+								return fmt.Sprintf("add-on %s reported unhealthy", spec.slug)
+							}
+							lastReason = fmt.Sprintf("add-on %s health status is unhealthy (within start period)", spec.slug)
+						default:
+							lastReason = fmt.Sprintf("add-on %s health status is %q", spec.slug, status)
+						}
 					}
 				default:
 					return ""
@@ -361,24 +428,17 @@ func (r Realizer) waitAddonReady(ctx context.Context, spec addonHealthSpec, poll
 	}
 }
 
-// startLiveAddons starts enabled add-on units of the live generation after boot hold clears.
-func (r Realizer) startLiveAddons(ctx context.Context) error {
+// startLiveAddonsLocked starts enabled add-on units of the live generation after boot hold clears.
+// Caller holds r.lock() when r.dir() exists.
+func (r Realizer) startLiveAddonsLocked(ctx context.Context) error {
 	if r.StateDir == "" {
 		return nil
 	}
 	if _, err := os.Stat(r.dir()); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	unlock, err := r.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
 	p, err := readPointers(r.dir())
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
 		return err
 	}
 	if p.Live == nil {
@@ -391,9 +451,6 @@ func (r Realizer) startLiveAddons(ctx context.Context) error {
 	set, err := r.files(g)
 	if err != nil {
 		return err
-	}
-	if len(addonSlugs(set)) == 0 {
-		return nil
 	}
 	return r.addons(ctx, nil, set)
 }
@@ -439,14 +496,23 @@ func (r Realizer) AddonControl(ctx context.Context, action, slug string) error {
 }
 
 // ReferencedAddonImages returns all immutable Image= digests referenced by Confirmed, LastKnownGood, Pending, or Live generations.
+// Acquires generations/lock when the generations directory exists so concurrent transitions are serialized.
 func ReferencedAddonImages(stateDir string) (map[string]bool, error) {
 	refs := map[string]bool{}
 	dir := Dir(stateDir)
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		return refs, nil
+	}
+	lockFile, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer lockFile.Close()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("lock generations: %w", err)
+	}
 	p, err := readPointers(dir)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return refs, nil
-		}
 		return nil, err
 	}
 	seenID := map[int]bool{}
@@ -477,7 +543,32 @@ func ReferencedAddonImages(stateDir string) (map[string]bool, error) {
 	return refs, nil
 }
 
-// cleanupAddonsOnTeardown removes any stray add-on Quadlets, /run/andaru-addons, and tracked Podman images during factory reset.
+// cleanupAddonsOnTeardownIfPresent runs cleanup only when orphaned add-on files or staged images exist
+// (preserving Teardown's no-op behavior when p.Live == nil on a clean host).
+func (r Realizer) cleanupAddonsOnTeardownIfPresent(ctx context.Context) error {
+	matches, _ := filepath.Glob(r.Root + addonQuadletPrefix + "*.container")
+	hasRuntime := false
+	if entries, err := os.ReadDir(r.Root + strings.TrimSuffix(addonRuntimeDir, "/")); err == nil {
+		for _, e := range entries {
+			if e.Name() != "bus-socket" {
+				hasRuntime = true
+				break
+			}
+		}
+	}
+	hasStaged := false
+	if r.StateDir != "" {
+		_, err := os.Stat(filepath.Join(r.StateDir, addon.StagedStateFile))
+		hasStaged = err == nil
+	}
+	if len(matches) == 0 && !hasRuntime && !hasStaged {
+		return nil
+	}
+	return r.cleanupAddonsOnTeardown(ctx)
+}
+
+// cleanupAddonsOnTeardown removes any stray add-on Quadlets, per-add-on runtime directories under /run/andaru-addons
+// (preserving /run/andaru-addons/bus-socket for andaru-engine), and tracked Podman images during factory reset.
 func (r Realizer) cleanupAddonsOnTeardown(ctx context.Context) error {
 	var errs []error
 	matches, _ := filepath.Glob(r.Root + addonQuadletPrefix + "*.container")
@@ -497,8 +588,16 @@ func (r Realizer) cleanupAddonsOnTeardown(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if err := os.RemoveAll(r.Root + strings.TrimSuffix(addonRuntimeDir, "/")); err != nil {
-		errs = append(errs, err)
+	runBase := r.Root + strings.TrimSuffix(addonRuntimeDir, "/")
+	if entries, err := os.ReadDir(runBase); err == nil {
+		for _, e := range entries {
+			if e.Name() == "bus-socket" {
+				continue
+			}
+			if rerr := os.RemoveAll(filepath.Join(runBase, e.Name())); rerr != nil {
+				errs = append(errs, rerr)
+			}
+		}
 	}
 	if r.StateDir != "" {
 		if err := addon.RemoveAllManagedImages(ctx, r.StateDir, r.Run); err != nil {

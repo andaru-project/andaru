@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/aliasfeed"
 )
 
@@ -66,15 +67,25 @@ func (r *renderer) filterChains() {
 		}
 	}
 	hasAddonZones := false
+	seenAddonIface := map[string]bool{}
 	for _, a := range d.Addons {
-		if !a.Enabled {
+		if !a.Enabled || r.in.Catalog == nil {
+			continue
+		}
+		m, ok := r.in.Catalog.ByID(a.ID)
+		if !ok {
 			continue
 		}
 		for _, ifc := range a.Interfaces {
-			if ifc.Zone != "" && ifc.Name != "" {
-				zones[ifc.Zone] = append(zones[ifc.Zone], ifc.Name)
-				hasAddonZones = true
+			if ifc.Zone == "" || !addon.ValidInterfaceName(ifc.Name) || seenAddonIface[ifc.Name] {
+				continue
 			}
+			if !slices.ContainsFunc(m.Interfaces, func(spec addon.InterfaceSpec) bool { return spec.Name == ifc.Name }) {
+				continue
+			}
+			seenAddonIface[ifc.Name] = true
+			zones[ifc.Zone] = append(zones[ifc.Zone], ifc.Name)
+			hasAddonZones = true
 		}
 	}
 	for _, z := range d.Zones {

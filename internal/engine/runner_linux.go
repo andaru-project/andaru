@@ -76,6 +76,10 @@ func (s systemdRunner) Realize(ctx context.Context, verb string, id int, extra .
 	if id != 0 {
 		unit = "andaru-realize-" + verb + "-" + strconv.Itoa(id)
 	}
-	args := []string{"--quiet", "--wait", "--collect", "--unit=" + unit, "-p", realizeRuntime}
+	runtime := realizeRuntime
+	if verb == "addon-stage" {
+		runtime = "RuntimeMaxSec=600"
+	}
+	args := []string{"--quiet", "--wait", "--collect", "--unit=" + unit, "-p", runtime}
 	return s.exec(ctx, "/usr/bin/systemd-run", append(args, s.command(verb, id, extra...)...)...)
 }
