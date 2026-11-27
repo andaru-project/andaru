@@ -1,0 +1,41 @@
+# Standalone Netplane: the network view without Andaru's firewall, as a container.
+# Build from the repository root: podman build -f packaging/netplane/Containerfile --build-arg VERSION=1.2.3 .
+# The Node and Go bases are image/Containerfile's: bump them together.
+
+FROM docker.io/library/node:20.19.2@sha256:ba077fe891ce516b24bdbbd66d27d1e8e8c5a6e6b31ec7e7e559b45c3fca0643 AS web
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY web/ ./
+RUN npm run build:netplane
+
+FROM docker.io/library/golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS go
+ARG VERSION=0.0.0-dev
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ cmd/
+COPY internal/ internal/
+COPY web/embed_netplane.go web/
+COPY --from=web /src/web/dist-netplane/ web/dist-netplane/
+RUN CGO_ENABLED=0 go build -tags embedui -trimpath -buildvcs=false \
+        -ldflags "-s -w -X main.Version=${VERSION}" -o /out/netplane ./cmd/netplane && \
+    # The volumes' mount points, owned by the image's user so that a fresh named volume is writable.
+    mkdir -p /out/config /out/data
+
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.title="Netplane" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.source="https://github.com/andaru-project/andaru" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+COPY --from=go /out/netplane /usr/bin/netplane
+COPY --from=go --chown=65532:65532 /out/config /config
+COPY --from=go --chown=65532:65532 /out/data /data
+# distroless's nonroot user.
+USER 65532:65532
+VOLUME ["/config", "/data"]
+EXPOSE 8099
+# A non-loopback listen needs NETPLANE_API_TOKEN (or the config's api_token_secret): without one, serve refuses to start.
+ENTRYPOINT ["/usr/bin/netplane", "serve"]
+CMD ["--config", "/config/netplane.yaml", "--db", "/data/netplane.db", "--listen", ":8099"]
