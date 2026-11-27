@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/securefs"
 	"golang.org/x/sys/unix"
@@ -34,8 +35,13 @@ type Store struct {
 	closeOnce          sync.Once
 	closeErr           error
 	// saved is told of each new head once it is committed.
-	saved func(Version)
+	saved   func(Version)
+	catalog *addon.Catalog
 }
+
+// SetCatalog attaches the validated add-on catalog so add-on writes are checked against their manifests.
+// It must be called before the store is shared across goroutines.
+func (s *Store) SetCatalog(cat *addon.Catalog) { s.catalog = cat }
 
 func unavailable() *Fault {
 	return fault("STORE_UNAVAILABLE", "", "Configuration storage is unavailable; inspect the engine journal.")
@@ -129,7 +135,7 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		return nil, diagnostic("open-secret", e)
 	}
 	// Additive history tables let older stores accept newer configuration collections.
-	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL+dhcp6DDL+vipDDL+roleDDL+firewallDDL+writerDDL+notificationDDL); e != nil {
+	if _, e = cfg.ExecContext(ctx, additiveDDL); e != nil {
 		cfg.Close()
 		sec.Close()
 		return nil, diagnostic("open-config-policy-table", e)
@@ -383,7 +389,7 @@ func (s *Store) MigrateHead(ctx context.Context) (Version, error) {
 	}
 	// A restore of nothing saves the head as it reads now: in the current form, with the rules and aliases it
 	// renamed recorded as changed.
-	if p.prepared, _, err = prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC()); err != nil {
+	if p.prepared, _, err = prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC(), s.catalog); err != nil {
 		return "", err
 	}
 	saved, err := p.publish(ctx)
@@ -409,7 +415,7 @@ func (s *Store) fallBack(ctx context.Context) error {
 		return err
 	}
 	defer p.Close()
-	prepared, _, err := prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC())
+	prepared, _, err := prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC(), s.catalog)
 	if err != nil {
 		return err
 	}
@@ -491,7 +497,7 @@ func (s *Store) prepareSave(ctx context.Context, actor authz.Actor, input Change
 	if len(current.questions) > 0 {
 		return nil, ErrUpgradePending
 	}
-	p.prepared, e = prepareChanges(&current, input, next, time.Now().UTC())
+	p.prepared, e = prepareChangesWithCatalog(&current, input, next, time.Now().UTC(), s.catalog)
 	if e != nil {
 		return nil, e
 	}

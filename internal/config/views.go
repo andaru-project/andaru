@@ -103,10 +103,14 @@ type emailView struct {
 
 // viewSecret is a reference's view: whether it is set, and its version, never its value.
 func viewSecret(ref *secretReference, secrets secretDocument) (*secretView, error) {
+	return viewSecretInScope(ref, "core", secrets)
+}
+
+func viewSecretInScope(ref *secretReference, scope string, secrets secretDocument) (*secretView, error) {
 	if ref == nil {
 		return nil, nil
 	}
-	meta, ok := secrets.Scopes["core"][ref.Secret]
+	meta, ok := secrets.Scopes[scope][ref.Secret]
 	if !ok && !ref.Unresolved {
 		return nil, fault("STORE_UNAVAILABLE", "", "Secret reference is unavailable.")
 	}
@@ -163,6 +167,25 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 			}
 		}
 		v = view
+	case *addonConfig:
+		view := *x
+		if len(x.Settings) > 0 {
+			cp := make(map[string]any, len(x.Settings))
+			scope := addonSecretScope(x.ID)
+			for k, val := range x.Settings {
+				if ref, ok := addonSecretRef(val); ok {
+					sv, err := viewSecretInScope(ref, scope, secrets)
+					if err != nil {
+						return ObjectView{}, err
+					}
+					cp[k] = sv
+				} else {
+					cp[k] = val
+				}
+			}
+			view.Settings = cp
+		}
+		v = view
 	}
 	if v == nil {
 		return ObjectView{}, fault("NOT_FOUND", "", "Object does not exist.")
@@ -173,32 +196,39 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 	}
 	return ObjectView{Value: raw, Version: version}, nil
 }
-func publicSnapshot(s savedState) (SnapshotView, error) {
-	links := make([]json.RawMessage, 0, len(s.Config.Links))
-	for i := range s.Config.Links {
-		l := &s.Config.Links[i]
-		v, e := viewObject(l, s.Versions[objectKey{"links", l.ID}].Version, s.Secrets)
+func viewSlice[T any](items []T, col string, id func(*T) string, s savedState) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, 0, len(items))
+	for i := range items {
+		item := &items[i]
+		v, e := viewObject(item, s.Versions[objectKey{col, id(item)}].Version, s.Secrets)
 		if e != nil {
-			return SnapshotView{}, e
+			return nil, e
 		}
-		links = append(links, v.Value)
+		out = append(out, v.Value)
 	}
-	channels := make([]json.RawMessage, 0, len(s.Config.Notifications.Channels))
-	for i := range s.Config.Notifications.Channels {
-		c := &s.Config.Notifications.Channels[i]
-		v, e := viewObject(c, s.Versions[objectKey{"notifications.channels", c.ID}].Version, s.Secrets)
-		if e != nil {
-			return SnapshotView{}, e
-		}
-		channels = append(channels, v.Value)
+	return out, nil
+}
+
+func publicSnapshot(s savedState) (SnapshotView, error) {
+	links, err := viewSlice(s.Config.Links, "links", func(l *link) string { return l.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
+	channels, err := viewSlice(s.Config.Notifications.Channels, "notifications.channels", func(c *channel) string { return c.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
+	addons, err := viewSlice(s.Config.Addons, "addons", func(a *addonConfig) string { return a.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
 	}
 	used := map[string]bool{}
 	for _, h := range heldSecrets(&s.Config) {
-		if !h.ref.Unresolved {
+		if h.scope == "core" && !h.ref.Unresolved {
 			used[h.ref.Secret] = true
 		}
 	}
-	// The whole declaration, every section included, with each link and channel as its secret-free view.
+	// The whole declaration, every section included, with each link, channel, and add-on as its secret-free view.
 	var d map[string]json.RawMessage
 	whole, e := json.Marshal(s.Config)
 	if e == nil {
@@ -212,6 +242,11 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 	}
 	if len(channels) > 0 {
 		if d["notifications"], e = json.Marshal(map[string]any{"channels": channels}); e != nil {
+			return SnapshotView{}, e
+		}
+	}
+	if len(addons) > 0 {
+		if d["addons"], e = json.Marshal(addons); e != nil {
 			return SnapshotView{}, e
 		}
 	}

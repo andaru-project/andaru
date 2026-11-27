@@ -45,9 +45,9 @@ var schemas = sync.OnceValues(func() (*schemaSet, error) {
 	if s.backupSecret, e = c.Compile("https://andaru.invalid/private/backup-config-secrets-v1"); e != nil {
 		return nil, e
 	}
-	s.objects = make(map[string]*jsonschema.Schema, 16)
+	s.objects = make(map[string]*jsonschema.Schema, 17)
 	for collection, kind := range map[string]string{"links": "link", "segments": "segment", "zones": "zone", "roles": "role", "aliases.addresses": "address", "aliases.ports": "portAlias",
-		"rules": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#", "dhcp": "dhcp", "dhcp6": "dhcp6", "virtualAddresses": "virtualAddress", "notifications.channels": "channel", "dns": "dnsService#", "nat.portForwards": "portForward", "nat.oneToOne": "oneToOne"} {
+		"rules": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#", "dhcp": "dhcp", "dhcp6": "dhcp6", "virtualAddresses": "virtualAddress", "notifications.channels": "channel", "addons": "addon", "dns": "dnsService#", "nat.portForwards": "portForward", "nat.oneToOne": "oneToOne"} {
 		kind, whole := strings.CutSuffix(kind, "#")
 		if !whole {
 			kind += "Write"
@@ -107,7 +107,7 @@ func schemaErrors(err error) error {
 	return details
 }
 func safePointer(tokens []string) string {
-	const fields = " aliases rules not schemaVersion links segments zones roles capabilities builtIn objects policy nat management dhcp dns ranges leaseTime dnsServers domainName domainSearch ntpServers nextServer bootFileName options code type data alwaysSend staticLeases mac hostname upstreams tlsName localDomain registerLeases outbound segment allowedSources input forward action to services log protocol ports types address prefix first last before order id name description kind mtu enabled permanentMac parent vlanId members mode stp stpPriority forwardDelay helloTime maxAge multicastSnooping lacpRate miiMonitorMs transmitHashPolicy lldp emitLldp offloads receiveChecksum transmitChecksum tcpSegmentation tcp6Segmentation genericSegmentation genericReceive genericReceiveHardware largeReceive vlanReceiveAcceleration vlanTransmitAcceleration vlanReceiveFilter ntupleFilter username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo priority routerLifetime validLifetime preferredLifetime pref64 portForwards oneToOne dhcp6 duid prefixDelegation delegatedLength excludedPrefix prefixId length virtualAddresses family ingressZones fromNegated toNegated destinationNegated ports noRedirect target targetPort filterRule reflection self external internal destination noBinat prefixOnly withoutRA sendRelease duid dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets notifications channels filter minSeverity sources webhook url authorization ntfy server topic token pushover user telegram chatId email host port security names refreshSeconds "
+	const fields = " aliases rules not schemaVersion links segments zones roles capabilities builtIn objects policy nat management dhcp dns ranges leaseTime dnsServers domainName domainSearch ntpServers nextServer bootFileName options code type data alwaysSend staticLeases mac hostname upstreams tlsName localDomain registerLeases outbound segment allowedSources input forward action to services log protocol ports types address prefix first last before order id name description kind mtu enabled permanentMac parent vlanId members mode stp stpPriority forwardDelay helloTime maxAge multicastSnooping lacpRate miiMonitorMs transmitHashPolicy lldp emitLldp offloads receiveChecksum transmitChecksum tcpSegmentation tcp6Segmentation genericSegmentation genericReceive genericReceiveHardware largeReceive vlanReceiveAcceleration vlanTransmitAcceleration vlanReceiveFilter ntupleFilter username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo priority routerLifetime validLifetime preferredLifetime pref64 portForwards oneToOne dhcp6 duid prefixDelegation delegatedLength excludedPrefix prefixId length virtualAddresses family ingressZones fromNegated toNegated destinationNegated ports noRedirect target targetPort filterRule reflection self external internal destination noBinat prefixOnly withoutRA sendRelease duid dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets notifications channels filter minSeverity sources webhook url authorization ntfy server topic token pushover user telegram chatId email host port security names refreshSeconds addons settings interfaces zone busGrants publish subscribe "
 	var b strings.Builder
 	for _, t := range tokens {
 		if _, e := strconv.ParseUint(t, 10, 32); e != nil && t != "unresolved" && !strings.Contains(fields, " "+t+" ") {
@@ -137,7 +137,7 @@ func decodeDeclaration(raw []byte) (declaration, error) {
 	if e = json.Unmarshal(raw, &d); e != nil {
 		return d, validationError{{Path: "", Message: "Expected bounded integer fields."}}
 	}
-	if details := slices.Concat(validateRoles(&d), validateTopology(&d), validatePolicy(&d, 100), validateNAT(&d), validateServices(&d)); len(details) > 0 {
+	if details := slices.Concat(validateRoles(&d), validateTopology(&d), validatePolicy(&d, 100), validateNAT(&d), validateServices(&d), validateAddons(&d)); len(details) > 0 {
 		return declaration{}, validationError(details)
 	}
 	normalizeDeclaration(&d)

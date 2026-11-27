@@ -366,6 +366,25 @@ type declaration struct {
 	// VirtualAddresses are held by the firewall on no LAN, for its own services.
 	VirtualAddresses []virtualAddress `json:"virtualAddresses,omitzero"`
 	Notifications    notifications    `json:"notifications,omitzero"`
+	Addons           []addonConfig    `json:"addons,omitempty"`
+}
+
+type addonInterface struct {
+	Name string `json:"name"`
+	Zone string `json:"zone,omitempty"`
+}
+
+type addonBusGrants struct {
+	Publish   map[string]string `json:"publish,omitempty"`
+	Subscribe map[string]string `json:"subscribe,omitempty"`
+}
+
+type addonConfig struct {
+	ID         string           `json:"id"`
+	Enabled    bool             `json:"enabled"`
+	Settings   map[string]any   `json:"settings,omitempty"`
+	Interfaces []addonInterface `json:"interfaces,omitempty"`
+	BusGrants  addonBusGrants   `json:"busGrants,omitzero"`
 }
 
 type notifications struct {

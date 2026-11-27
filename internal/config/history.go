@@ -173,7 +173,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	state.secretBody = sb
 	for _, h := range heldSecrets(&d) {
 		if !h.ref.Unresolved {
-			if _, ok := state.Secrets.Scopes["core"][h.ref.Secret]; !ok {
+			if _, ok := state.Secrets.Scopes[h.scope][h.ref.Secret]; !ok {
 				return state, info, diagnostic("load-secret-missing-ref", nil)
 			}
 		}
@@ -504,14 +504,30 @@ type RealizationInput struct {
 	SavedVersion  Version
 	Value         json.RawMessage
 	Secrets       map[string]string
+	AddonSecrets  map[string]map[string]string
 	Authorization authz.Snapshot
 }
 
-// SameRealization reports whether two saved versions realize the same network: their declarations agree except
-// for the settings that take effect when saved, notifications, and the secrets their links use agree. An apply of
-// one over the other would change nothing, so the other needs no apply (#218).
+// SameRealization reports whether two saved versions realize the same network and add-ons: their declarations
+// agree except for the settings that take effect when saved, notifications, and the secrets their links and
+// enabled add-ons use agree. An apply of one over the other would change nothing, so the other needs no apply (#218).
 func SameRealization(a, b RealizationInput) bool {
-	return maps.Equal(a.Secrets, b.Secrets) && bytes.Equal(realized(a.Value), realized(b.Value))
+	return maps.Equal(a.Secrets, b.Secrets) && maps.EqualFunc(a.AddonSecrets, b.AddonSecrets, maps.Equal) && bytes.Equal(realized(a.Value), realized(b.Value))
+}
+
+func stripSecretViewMeta(raw json.RawMessage, requireSecretKey bool) (json.RawMessage, error) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return raw, nil
+	}
+	if requireSecretKey {
+		if _, hasSecret := m["secret"]; !hasSecret {
+			return raw, nil
+		}
+	}
+	delete(m, "updatedAt")
+	delete(m, "version")
+	return json.Marshal(m)
 }
 
 // realized is a declaration without the settings an apply does not realize; one it cannot read is kept whole.
@@ -521,25 +537,52 @@ func realized(value json.RawMessage) []byte {
 		return value
 	}
 	delete(d, "notifications")
-	// A link password's view says when its secret last changed; the secret itself is compared in SameRealization, so a
-	// password changed and changed back realizes as before.
+	// A secret view says when its secret last changed; the secret itself is compared in SameRealization, so a
+	// secret changed and changed back realizes as before.
 	var links []map[string]json.RawMessage
-	var err error
 	if json.Unmarshal(d["links"], &links) == nil {
 		for _, l := range links {
-			var p map[string]json.RawMessage
-			if json.Unmarshal(l["password"], &p) == nil && p != nil && err == nil {
-				delete(p, "updatedAt")
-				delete(p, "version")
-				l["password"], err = json.Marshal(p)
+			rawPass, ok := l["password"]
+			if !ok {
+				continue
 			}
+			stripped, err := stripSecretViewMeta(rawPass, false)
+			if err != nil {
+				return value
+			}
+			l["password"] = stripped
 		}
-		if err == nil {
-			d["links"], err = json.Marshal(links)
+		raw, err := json.Marshal(links)
+		if err != nil {
+			return value
 		}
+		d["links"] = raw
 	}
-	if err != nil {
-		return value
+	var addons []map[string]json.RawMessage
+	if len(d["addons"]) > 0 && json.Unmarshal(d["addons"], &addons) == nil {
+		for _, a := range addons {
+			var settings map[string]json.RawMessage
+			if json.Unmarshal(a["settings"], &settings) != nil || settings == nil {
+				continue
+			}
+			for k, rawVal := range settings {
+				stripped, err := stripSecretViewMeta(rawVal, true)
+				if err != nil {
+					return value
+				}
+				settings[k] = stripped
+			}
+			rawSettings, err := json.Marshal(settings)
+			if err != nil {
+				return value
+			}
+			a["settings"] = rawSettings
+		}
+		raw, err := json.Marshal(addons)
+		if err != nil {
+			return value
+		}
+		d["addons"] = raw
 	}
 	out, err := json.Marshal(d) // with its keys sorted, so both read alike
 	if err != nil {
@@ -585,6 +628,24 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 		for _, l := range state.Config.Links {
 			if l.Password != nil {
 				result.Secrets[l.Password.Secret] = state.Secrets.Scopes["core"][l.Password.Secret].Value
+			}
+		}
+		for i := range state.Config.Addons {
+			a := &state.Config.Addons[i]
+			if !a.Enabled {
+				continue
+			}
+			scoped := state.Secrets.Scopes[addonSecretScope(a.ID)]
+			for _, k := range addonSettingSecretKeys(a.Settings) {
+				if ref, ok := addonSecretRef(a.Settings[k]); ok && !ref.Unresolved {
+					if result.AddonSecrets == nil {
+						result.AddonSecrets = map[string]map[string]string{}
+					}
+					if result.AddonSecrets[a.ID] == nil {
+						result.AddonSecrets[a.ID] = map[string]string{}
+					}
+					result.AddonSecrets[a.ID][ref.Secret] = scoped[ref.Secret].Value
+				}
 			}
 		}
 		return nil

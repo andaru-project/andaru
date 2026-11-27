@@ -224,10 +224,11 @@ func (d declaration) filtered() bool { return d.Management != nil && d.Managemen
 
 // Input is everything a render depends on. Secrets holds real values.
 type Input struct {
-	Declaration json.RawMessage
-	Secrets     map[string]string
-	Links       []host.LinkStatus
-	Facts       host.RealizerFacts
+	Declaration  json.RawMessage
+	Secrets      map[string]string
+	AddonSecrets map[string]map[string]string
+	Links        []host.LinkStatus
+	Facts        host.RealizerFacts
 }
 
 // File is one rendered file. Content is safe to show; Real is not.

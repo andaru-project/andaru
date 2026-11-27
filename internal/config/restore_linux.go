@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
 )
 
@@ -98,7 +99,7 @@ func (s *Store) PreviewRestore(ctx context.Context, input RestoreDocuments) (res
 		if e != nil || n == int64(^uint64(0)>>1) {
 			return unavailable()
 		}
-		_, result, e = prepareRestoration(&current, decoded, Version(fmt.Sprint(n+1)), time.Now().UTC())
+		_, result, e = prepareRestoration(&current, decoded, Version(fmt.Sprint(n+1)), time.Now().UTC(), s.catalog)
 		return e
 	})
 	if err != nil {
@@ -134,7 +135,7 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 	if err = heldRestore(&current, decoded); err != nil {
 		return nil, empty, err
 	}
-	prepared, preview, err := prepareRestoration(&current, decoded, next, time.Now().UTC())
+	prepared, preview, err := prepareRestoration(&current, decoded, next, time.Now().UTC(), s.catalog)
 	if err != nil {
 		return nil, empty, err
 	}
@@ -213,58 +214,96 @@ func sameSecrets(a, b []byte) bool {
 		return true
 	}
 	var x, y secretDocument
-	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil || len(x.Scopes["core"]) != len(y.Scopes["core"]) {
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
 		return false
 	}
-	for name, s := range x.Scopes["core"] {
-		t, ok := y.Scopes["core"][name]
-		if !ok || s.Kind != t.Kind || s.Value != t.Value || s.Version != t.Version {
-			return false
-		}
-	}
-	return true
+	return maps.EqualFunc(x.Scopes, y.Scopes, func(xs, ys map[string]secretEntry) bool {
+		return maps.EqualFunc(xs, ys, func(s, t secretEntry) bool {
+			return s.Kind == t.Kind && s.Value == t.Value && s.Version == t.Version
+		})
+	})
 }
 
-func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time) (preparedChange, RestorePreview, error) {
+func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time, cat *addon.Catalog) (preparedChange, RestorePreview, error) {
 	var empty preparedChange
 	preview := RestorePreview{ExpectedSavedVersion: current.Version, UnresolvedSecrets: []string{}, BlockingSecrets: []string{}}
 	candidate := current.Config
 	if decoded.configuration != nil {
 		candidate = *decoded.configuration
+		if errs := validateAddonsWebUISeparation(cat, &candidate); len(errs) > 0 {
+			return empty, preview, boundaryFault(validationError(errs))
+		}
 	}
 	secrets := current.Secrets
+	secretsPruned := false
+	if decoded.secrets == nil && decoded.configuration != nil {
+		// Prune add-on secret scopes whose add-ons are absent from the restored configuration so orphaned
+		// scopes do not linger invisibly or conflict with future reinstalls.
+		presentAddons := make(map[string]bool, len(candidate.Addons))
+		for _, a := range candidate.Addons {
+			presentAddons[addonSecretScope(a.ID)] = true
+		}
+		pruned := emptySecrets()
+		for scope, entries := range current.Secrets.Scopes {
+			if scope != "core" && !presentAddons[scope] {
+				preview.SecretChanges.Deleted += len(entries)
+				secretsPruned = true
+				continue
+			}
+			pruned.Scopes[scope] = maps.Clone(entries)
+		}
+		if secretsPruned {
+			secrets = pruned
+		}
+	}
 	if decoded.secrets != nil {
 		secrets = emptySecrets()
-		core := decoded.secrets.Scopes["core"]
-		for name, entry := range core {
-			secrets.Scopes["core"][name] = secretEntry{Kind: entry.Kind, Value: entry.Value, Version: next, UpdatedAt: now.Format(time.RFC3339Nano)}
-			old, exists := current.Secrets.Scopes["core"][name]
-			if !exists {
-				preview.SecretChanges.Created++
-			} else if old.Kind != entry.Kind || old.Value != entry.Value {
-				preview.SecretChanges.Updated++
+		for scope, entries := range decoded.secrets.Scopes {
+			if scope != "core" && len(entries) == 0 {
+				continue
+			}
+			if secrets.Scopes[scope] == nil {
+				secrets.Scopes[scope] = map[string]secretEntry{}
+			}
+			oldScope := current.Secrets.Scopes[scope]
+			for name, entry := range entries {
+				secrets.Scopes[scope][name] = secretEntry{Kind: entry.Kind, Value: entry.Value, Version: next, UpdatedAt: now.Format(time.RFC3339Nano)}
+				old, exists := oldScope[name]
+				if !exists {
+					preview.SecretChanges.Created++
+				} else if old.Kind != entry.Kind || old.Value != entry.Value {
+					preview.SecretChanges.Updated++
+				}
 			}
 		}
-		for name := range current.Secrets.Scopes["core"] {
-			if _, ok := core[name]; !ok {
-				preview.SecretChanges.Deleted++
+		for scope, oldEntries := range current.Secrets.Scopes {
+			newEntries := decoded.secrets.Scopes[scope]
+			for name := range oldEntries {
+				if _, ok := newEntries[name]; !ok {
+					preview.SecretChanges.Deleted++
+				}
 			}
 		}
 	}
 	unresolved, blocked := map[string]bool{}, map[string]bool{}
 	for _, h := range heldSecrets(&candidate) {
 		reference := h.ref
-		entry, exists := secrets.Scopes["core"][reference.Secret]
+		scoped := secrets.Scopes[h.scope]
+		entry, exists := scoped[reference.Secret]
 		if decoded.configuration != nil && !decoded.ownSecrets && (decoded.secrets == nil || !exists) {
-			reference.Unresolved = true
+			h.setUnresolved()
+		}
+		label := reference.Secret
+		if h.scope != "core" {
+			label = h.scope + "/" + reference.Secret
 		}
 		switch {
 		case exists && entry.Kind != secretKind(h.key.Collection):
-			blocked[reference.Secret] = true // a restore keeps the binding a save keeps: a channel never holds a password
+			blocked[label] = true // a restore keeps the binding a save keeps: a channel never holds a password
 		case reference.Unresolved:
-			unresolved[reference.Secret] = true
+			unresolved[label] = true
 		case !exists:
-			blocked[reference.Secret] = true
+			blocked[label] = true
 		}
 	}
 	for name := range unresolved {
@@ -287,7 +326,7 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		}
 	}
 	secretBody := current.secretBody
-	if decoded.secrets != nil {
+	if decoded.secrets != nil || secretsPruned {
 		var err error
 		secretBody, err = canonical(secrets)
 		if err != nil {
