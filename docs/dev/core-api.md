@@ -33,6 +33,8 @@ To check an image by hand: `cosign verify --key image/cosign.pub ghcr.io/andaru-
 
 **Releasing** (maintainers): push a tag on `main`. `v1.2.3` is a release, `v1.2.3-a.N` (alpha), `v1.2.3-b.N` (beta) and `v1.2.3-rc.N` (release candidate) are prereleases; with the dot, `rc.10` sorts after `rc.9`. Tags must be signed: `git tag -s v1.2.3`. The release workflow builds both architectures, pushes them unsigned as `1.2.3-amd64` and `1.2.3-arm64`, signs the multi-architecture index in the `image-release` environment, and only then tags it `1.2.3`, and `stable` for a release.
 
+**Standalone Netplane.** The same workflow publishes `ghcr.io/andaru-project/netplane`, signed with the same key and tagged `1.2.3`, and `latest` for a release, and attaches a static `netplane` binary per architecture to the release. Running and building it: [packaging/netplane/README.md](../../packaging/netplane/README.md).
+
 **Nightlies.** [andaru-project/andaru-nightly](https://github.com/andaru-project/andaru-nightly) builds `main` every night it moved, and publishes it as `ghcr.io/andaru-project/andaru-nightly`. Each nightly gets a version tag, `v<YYYY-MM-DD>.<N>.<commit>` (the UTC date, the day's build number and the first 7 characters of the commit), and the floating tag `nightly`. They are signed with a separate nightly key, [`image/cosign-nightly.pub`](../../image/cosign-nightly.pub) (SHA-256 of the file `81b5e2f56d50905656c43ff646728388aca76e35ddcc1cfc26ffb097053f1f9d`). The image's policy trusts that key only for the `andaru-nightly` repository, so it can never sign a release. A box follows nightlies with `bootc switch --enforce-container-sigpolicy ghcr.io/andaru-project/andaru-nightly:nightly`.
 
 ## Run and inspect
