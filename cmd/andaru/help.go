@@ -8,7 +8,8 @@ import (
 	"text/tabwriter"
 )
 
-// Every help line stays within 80 columns; help_test.go checks it.
+// Every help line stays within 80 columns; help_test.go checks it. The man pages in packaging/man are these texts,
+// rendered: manpage_test.go checks them, and -update-man rewrites them.
 
 const topUsage = `usage: andaru engine [OPTIONS]
        andaru ctl [--socket PATH] COMMAND [ARGUMENTS]
@@ -25,7 +26,7 @@ Commands:
   engine    Run the engine: the local API, saved configuration and identities
   ctl       Read and change the configuration through the running engine
   realize   Privileged host steps the engine and systemd units run
-  outbound  The unprivileged service that sends notifications
+  outbound  The unprivileged service that sends notifications and fetches lists
 
 Run 'andaru <command> --help' for the options of a command.
 `

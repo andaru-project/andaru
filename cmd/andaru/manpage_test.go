@@ -1,0 +1,48 @@
+package main
+
+import (
+	"bytes"
+	"flag"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/andaru-project/andaru/internal/manpage"
+)
+
+var updateMan = flag.Bool("update-man", false, "rewrite packaging/man from the help texts")
+
+// The man pages the image ships are the help texts, rendered: run `go test ./cmd/... -update-man` after a help
+// change.
+func TestManPagesMatchTheHelp(t *testing.T) {
+	var ctl bytes.Buffer
+	ctlHelp(&ctl)
+	var details []manpage.Section
+	for _, c := range ctlCommands {
+		details = append(details, manpage.Section{Title: "andaru ctl " + c.name, Help: c.help()})
+	}
+	checkManPages(t, map[string][]byte{
+		"andaru.8":          manpage.Page("andaru", "8", "the Andaru firewall platform", topHelp),
+		"andaru-engine.8":   manpage.Page("andaru-engine", "8", "run the Andaru engine", engineHelp),
+		"andaru-ctl.8":      manpage.Page("andaru-ctl", "8", "read and change the configuration through the running engine", ctl.String(), details...),
+		"andaru-realize.8":  manpage.Page("andaru-realize", "8", "privileged host steps of Andaru", realizeHelp),
+		"andaru-outbound.8": manpage.Page("andaru-outbound", "8", "the service that talks to the outside world for Andaru", outboundHelp),
+	})
+}
+
+func checkManPages(t *testing.T, pages map[string][]byte) {
+	t.Helper()
+	dir := filepath.Join("..", "..", "packaging", "man")
+	for name, page := range pages {
+		path := filepath.Join(dir, name)
+		if *updateMan {
+			if err := os.WriteFile(path, page, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, page) {
+			t.Errorf("%s does not match the help (%v): run go test ./cmd/... -update-man", path, err)
+		}
+	}
+}

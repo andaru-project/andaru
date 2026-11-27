@@ -1,0 +1,38 @@
+.TH ANDARU\-REALIZE 8 "" "Andaru" "Andaru Manual"
+.nh
+.ad l
+.SH NAME
+andaru\-realize \- privileged host steps of Andaru
+.SH SYNOPSIS
+.nf
+andaru realize [OPTIONS] activate|confirm N
+andaru realize [OPTIONS] rollback N REASON
+andaru realize [OPTIONS] boot|leases|prefixes|aliases|factory\-reset
+andaru realize [OPTIONS] update\-check|update\-stage
+andaru realize [OPTIONS] update\-rollback|update\-reboot
+andaru realize [OPTIONS] set\-hostname NAME
+.fi
+.SH DESCRIPTION
+Privileged host steps. The engine runs them in transient systemd units, and Andaru's own units and timers run the rest; they are not meant to be typed.
+.SH VERBS
+.nf
+  activate N         Make generation N live
+  rollback N REASON  Roll generation N back to the previous one
+  confirm N          Keep generation N as the confirmed one boot uses
+  boot               Copy the confirmed generation into /run at boot
+  leases             Publish DHCP lease names and route delegated prefixes
+  prefixes           Follow the delegated IPv6 prefix into the DHCPv6 server
+  aliases            Load the fetched URL and host\-name alias lists into nft
+  factory\-reset      Run or resume the factory reset ctl factory\-reset planned
+  update\-check       Check for signed appliance image updates and cache status
+  update\-stage       Download and stage the next signed appliance image
+  update\-rollback    Queue rollback to the previous appliance image
+  update\-reboot      Reboot the appliance into the staged deployment
+  set\-hostname NAME  Set the static appliance hostname via hostnamectl
+.fi
+.SH OPTIONS
+.nf
+  \-\-state\-dir PATH   absolute private state directory (default /var/lib/andaru)
+  \-\-bus\-socket PATH  the engine's event bus socket, told of each activate,
+                     confirm and rollback; without it, the bus is not told
+.fi

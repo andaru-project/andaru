@@ -1,0 +1,330 @@
+.TH ANDARU\-CTL 8 "" "Andaru" "Andaru Manual"
+.nh
+.ad l
+.SH NAME
+andaru\-ctl \- read and change the configuration through the running engine
+.SH SYNOPSIS
+.nf
+andaru ctl [\-\-socket PATH] COMMAND [ARGUMENTS]
+.fi
+.SH DESCRIPTION
+Read and change Andaru's configuration through the running engine. Success is JSON on stdout, except for kept and factory\-reset, which print text; diagnostics go to stderr.
+.SH COMMANDS
+.nf
+  links          Show the host's network interfaces and their addresses
+  prefixes       Show the delegated IPv6 prefixes and how they are used
+  leases         Show the DHCPv4 and DHCPv6 leases
+  lldp           Show live LLDP neighbors discovered on host interfaces
+  offloads       Show the live offloads of the Ethernet devices
+  openapi        Print the engine API's OpenAPI description
+  setup\-code     Show or rotate the one\-time WebUI first\-boot setup code
+  config         Read and change the saved configuration
+  versions       List the saved versions and show one
+  preview        Show the files a saved version would give the network
+  apply          Make the saved network live behind a rollback timer
+  applies        List applies; confirm or roll one back
+  backup         Create, inspect and restore portable backups
+  kept           Keep the saved network for after a factory reset
+  users          Manage user accounts
+  tokens         Manage API tokens
+  audit          List the audit log
+  factory\-reset  Erase Andaru's state and start over
+.fi
+.SH OPTIONS
+.nf
+  \-\-socket PATH  absolute local engine socket path
+                 (default /run/andaru/engine.sock)
+.fi
+.PP
+.nf
+Run 'andaru ctl COMMAND \-\-help' for the arguments of a command.
+.fi
+.SH COMMANDS IN DETAIL
+.SS andaru ctl links
+.nf
+Show the host's network interfaces and their addresses.
+
+usage: andaru ctl links
+
+The interfaces the kernel reports now, as JSON on stdout.
+.fi
+.SS andaru ctl prefixes
+.nf
+Show the delegated IPv6 prefixes and how they are used.
+
+usage: andaru ctl prefixes
+
+Each WAN's requested length, its current prefix and lifetimes, each
+delegated segment's /64 and each pool's range, as JSON on stdout.
+.fi
+.SS andaru ctl leases
+.nf
+Show the DHCPv4 and DHCPv6 leases.
+
+usage: andaru ctl leases
+
+The DHCPv4 and DHCPv6 leases snapshot, as JSON on stdout.
+.fi
+.SS andaru ctl lldp
+.nf
+Show live LLDP neighbors discovered on host interfaces.
+
+usage: andaru ctl lldp
+
+The LLDP neighbors systemd\-networkd currently reports, as JSON on stdout.
+.fi
+.SS andaru ctl offloads
+.nf
+Show the live offloads of the Ethernet devices.
+
+usage: andaru ctl offloads
+
+Whether each offload Andaru manages runs on each Ethernet device, and whether
+the device can change it, as JSON on stdout.
+.fi
+.SS andaru ctl openapi
+.nf
+Print the engine API's OpenAPI description.
+
+usage: andaru ctl openapi
+.fi
+.SS andaru ctl setup\-code
+.nf
+Show or rotate the one\-time WebUI first\-boot setup code.
+
+usage: andaru ctl setup\-code [\-\-rotate]
+
+Prints the one\-time setup code while no administrator account exists.
+.fi
+.SS andaru ctl config
+.nf
+Read and change the saved configuration.
+
+usage: andaru ctl config show
+       andaru ctl config list|create COLLECTION
+       andaru ctl config get COLLECTION ID
+       andaru ctl config replace|delete \-\-version V COLLECTION ID
+       andaru ctl config get SINGLETON
+       andaru ctl config replace|delete \-\-version V SINGLETON
+       andaru ctl config order LIST \-\-version V ID...
+       andaru ctl config changes
+
+Commands:
+  show     Print the whole saved configuration
+  list     Print every object of a collection
+  get      Print one object, or a singleton
+  create   Create an object from the JSON document on stdin
+  replace  Replace an object or singleton with the JSON document on stdin
+  delete   Delete an object, or unset a singleton
+  order    Set the order of a list: every entry's ID once, first to last
+  changes  Save the batch of changes on stdin, all or nothing
+
+Collections: links, segments, zones, aliases/addresses, aliases/ports, dhcp,
+  dhcp6, virtualAddresses, notifications/channels, rules, nat/port\-forwards,
+  nat/one\-to\-one
+Singletons: management, nat/outbound, dns
+Lists: rules, nat/port\-forwards, nat/one\-to\-one
+
+Options:
+  \-\-version V  the version your last read returned; 0 sets a singleton
+               that is not set yet
+
+Example:
+  printf '%s\en' '{"name":"lan"}' | sudo andaru ctl config create zones
+.fi
+.SS andaru ctl versions
+.nf
+List the saved versions and show one.
+
+usage: andaru ctl versions list [\-\-limit N] [\-\-before V]
+       andaru ctl versions get V
+
+Commands:
+  list  List saved versions, newest first
+  get   Print one saved version and its changes
+
+Options:
+  \-\-limit N   maximum saved versions, 1\-100 (default 50)
+  \-\-before V  list only the versions older than V
+.fi
+.SS andaru ctl preview
+.nf
+Show the files a saved version would give the network.
+
+usage: andaru ctl preview network [\-\-saved\-version N]
+
+Shows the files Andaru would hand systemd\-networkd and pppd, and what would
+stop them working. It changes nothing.
+
+Options:
+  \-\-saved\-version N  saved version to render (default: the saved head)
+.fi
+.SS andaru ctl apply
+.nf
+Make the saved network live behind a rollback timer.
+
+usage: andaru ctl apply network \-\-saved\-version N [\-\-confirm\-timeout S]
+
+Unless confirmed from a new session in time, the previous network returns.
+
+Options:
+  \-\-saved\-version N    saved version to apply; must be the saved head
+  \-\-confirm\-timeout S  seconds until the change is rolled back unless
+                       confirmed, 30\-600 (default 120)
+
+Example:
+  sudo andaru ctl apply network \-\-saved\-version 12
+  sudo andaru ctl applies confirm 1   # from a NEW session
+.fi
+.SS andaru ctl applies
+.nf
+List applies; confirm or roll one back.
+
+usage: andaru ctl applies list
+       andaru ctl applies get|confirm|rollback ID
+
+Commands:
+  list      List every apply and the confirmed, last\-known\-good, pending
+            and live pointers
+  get       Show one apply
+  confirm   Keep a pending apply; run it from a new session
+  rollback  Undo a pending apply without waiting for its timer
+.fi
+.SS andaru ctl backup
+.nf
+Create, inspect and restore portable backups.
+
+usage: andaru ctl backup create \-\-output FILE [\-\-include\-secrets]
+                                [\-\-include\-credentials]
+       andaru ctl backup inspect \-\-input FILE
+       andaru ctl backup restore \-\-input FILE \-\-stores STORE[,STORE...]
+                                 [\-\-operation\-id ID]
+
+Commands:
+  create   Write a backup of the saved stores; never overwrites FILE
+  inspect  Validate a backup and print what it holds
+  restore  Replace the selected saved stores from a backup, after a preview
+           and typing RESTORE; it never applies networking
+
+Options:
+  \-\-output FILE          backup file to create
+  \-\-input FILE           backup file to read
+  \-\-include\-secrets      include secret values
+  \-\-include\-credentials  include user password credentials
+  \-\-stores STORES        stores to restore: configuration,
+                         configurationSecrets, users, userCredentials
+  \-\-operation\-id ID      restore operation ID; reuse it to retry the same
+                         restore (default: a new one)
+
+With \-\-include\-secrets or \-\-include\-credentials, create asks for a
+passphrase twice and encrypts the file; reading it asks for it again.
+
+Example:
+  sudo andaru ctl backup restore \-\-input andaru.zip \-\-stores configuration
+.fi
+.SS andaru ctl kept
+.nf
+Keep the saved network for after a factory reset.
+
+usage: andaru ctl kept store\-recovery
+
+Commands:
+  store\-recovery  Keep the saved head's network as the network a factory
+                  reset brings the box back on
+.fi
+.SS andaru ctl users
+.nf
+Manage user accounts.
+
+usage: andaru ctl users bootstrap\-admin \-\-login LOGIN [\-\-display\-name NAME]
+       andaru ctl users list [\-\-cursor CURSOR] [\-\-limit N]
+       andaru ctl users get ID
+       andaru ctl users create \-\-login LOGIN \-\-kind KIND \-\-revision N
+                               [\-\-display\-name NAME] [\-\-roles ID,...]
+                               [\-\-disabled]
+       andaru ctl users update ID \-\-revision N [\-\-login LOGIN]
+                               [\-\-display\-name NAME] [\-\-kind KIND]
+                               [\-\-roles ID,...] [\-\-enabled true|false]
+       andaru ctl users disable|delete|password\-reset ID \-\-revision N
+
+Commands:
+  bootstrap\-admin  Create the first administrator; asks for the password
+                   twice, then for BOOTSTRAP
+  list             List accounts
+  get              Show one account
+  create           Create an account
+  update           Change an account; give at least one field
+  disable          Disable an account
+  delete           Delete an account
+  password\-reset   Set an account's password; asks for it twice
+
+Options:
+  \-\-login LOGIN        login name, 3\-64 characters: letters, digits, '.',
+                       '_' and '\-', starting with a letter or digit; stored
+                       in lower case
+  \-\-display\-name NAME  display name, at most 128 characters
+  \-\-kind KIND          human or service
+  \-\-roles ID,...       role IDs, comma\-separated
+  \-\-disabled           create the account disabled
+  \-\-enabled BOOL       true enables the account, false disables it
+  \-\-revision N         identity revision your last read returned
+  \-\-cursor CURSOR      continue from a previous page's nextCursor
+  \-\-limit N            maximum accounts, 1\-100 (default 50)
+
+These commands require root.
+.fi
+.SS andaru ctl tokens
+.nf
+Manage API tokens.
+
+usage: andaru ctl tokens create \-\-account\-id ID \-\-name NAME \-\-scope CAP,...
+                                [\-\-expires\-at RFC3339 | \-\-no\-expiry]
+                                [\-\-revoke\-on\-password\-change true|false]
+       andaru ctl tokens list \-\-account\-id ID [\-\-cursor CURSOR] [\-\-limit N]
+       andaru ctl tokens revoke SELECTOR
+
+Commands:
+  create  Issue a token; its secret is shown once
+  list    List an account's tokens
+  revoke  Revoke a token by its selector
+
+Options:
+  \-\-account\-id ID                 account the token belongs to
+  \-\-name NAME                     token name, 1\-128 characters
+  \-\-scope CAP,...                 capabilities the token grants
+  \-\-expires\-at RFC3339            expiry time
+  \-\-no\-expiry                     never expire; revoke it explicitly
+  \-\-revoke\-on\-password\-change B   true revokes the token when the
+                                  account's password changes
+  \-\-cursor CURSOR                 continue from a previous page's nextCursor
+  \-\-limit N                       maximum tokens, 1\-50 (default 50)
+
+These commands require root.
+.fi
+.SS andaru ctl audit
+.nf
+List the audit log.
+
+usage: andaru ctl audit list [\-\-cursor CURSOR] [\-\-limit N]
+
+Options:
+  \-\-cursor CURSOR  continue from a previous page's nextCursor
+  \-\-limit N        maximum events, 1\-100 (default 50)
+
+This command requires root.
+.fi
+.SS andaru ctl factory\-reset
+.nf
+Erase Andaru's state and start over.
+
+usage: andaru ctl factory\-reset run|abort|status
+
+Commands:
+  run     Delete every account, setting, saved version, generation and audit
+          record, and bring the box back on the stored recovery network,
+          else on the last LAN an administrator used; interactive
+  status  Show whether a factory reset is in progress
+  abort   Cancel a factory reset that has not begun stopping Andaru
+
+These commands require root.
+.fi

@@ -1,0 +1,18 @@
+.TH ANDARU\-OUTBOUND 8 "" "Andaru" "Andaru Manual"
+.nh
+.ad l
+.SH NAME
+andaru\-outbound \- the service that talks to the outside world for Andaru
+.SH SYNOPSIS
+.nf
+andaru outbound [\-\-bus\-socket PATH] [\-\-cache\-dir PATH]
+.fi
+.SH DESCRIPTION
+Run andaru\-outbound, the unprivileged service that talks to the outside world for the engine: it reads delivery jobs from the event bus and sends them, and fetches the lists of the address aliases fed from a URL or from host names. Its systemd unit runs it as the andaru\-outbound user.
+.SH OPTIONS
+.nf
+  \-\-bus\-socket PATH  the bus socket for Andaru's services
+                     (default /run/andaru\-services/bus.sock)
+  \-\-cache\-dir PATH   where sent job IDs and jobs waiting for a retry are kept
+                     (default $CACHE_DIRECTORY, else /var/cache/andaru\-outbound)
+.fi

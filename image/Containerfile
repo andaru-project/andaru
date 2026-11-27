@@ -40,7 +40,7 @@ LABEL org.opencontainers.image.title="Andaru" \
 # stays too: its os-release carries the Fedora CoreOS build and stream (OSTREE_VERSION, RELEASE_TYPE) the ISO build reads.
 RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
     dnf -y versionlock add $(rpm -qa --qf '%{NAME}\n' | grep -E '^(systemd|grub2|shim|dracut|kernel|fedora-release)') && \
-    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent traceroute ethtool && \
+    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent traceroute ethtool man-db && \
     dnf -y remove moby-engine containerd && \
     dnf clean all && \
     rm /etc/dnf/versionlock.toml && \
@@ -52,6 +52,7 @@ RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
 
 COPY --from=go /out/andaru /out/andaru-web /usr/bin/
 COPY --from=web /src/web/dist/ /usr/share/andaru/web/
+COPY packaging/man/ /usr/share/man/man8/
 COPY packaging/systemd/andaru-*.service packaging/systemd/andaru-*.path packaging/systemd/andaru-*.timer /usr/lib/systemd/system/
 COPY packaging/systemd/kea-dhcp4.service.d/ /usr/lib/systemd/system/kea-dhcp4.service.d/
 COPY packaging/systemd/kea-dhcp6.service.d/ /usr/lib/systemd/system/kea-dhcp6.service.d/
