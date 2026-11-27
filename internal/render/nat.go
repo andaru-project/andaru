@@ -373,6 +373,7 @@ func (f *filter) checkExternal(external netip.Prefix, path string) {
 			}
 		}
 		// A proxy ARP entry on this segment covering the whole range answers for it.
+		// shortcut: a range covered only by the union of several entries still warns; merge the entries if it matters.
 		held = held || slices.ContainsFunc(r.d.VirtualAddresses, func(v virtualAddress) bool {
 			x := prefixOf(v.Address)
 			return v.proxied() && v.Segment == s.ID && x.IsValid() && x.Bits() <= external.Bits() && x.Contains(external.Addr())

@@ -343,11 +343,12 @@ func (r *renderer) networkd(i int) {
 		network = append(network, key+r.name[m])
 	}
 	sections, sources := r.addressing(l.ID, false)
-	if _, segmented := r.segment[l.ID]; segmented && r.d.filtered() {
+	seg, segmented := r.segment[l.ID]
+	if segmented && r.d.filtered() {
 		// Forwarding only together with the filter: nothing may route unfiltered.
 		network = append(network, "IPv4Forwarding=yes", "IPv6Forwarding=yes")
 	}
-	if i, segmented := r.segment[l.ID]; segmented && r.proxiesARP(r.d.Segments[i].ID) {
+	if segmented && r.proxiesARP(r.d.Segments[seg].ID) {
 		// Scoped by medium_id (packaging/sysctl.d) to the routes on andaru-vip.
 		network = append(network, "IPv4ProxyARP=yes")
 		sources = append(sources, "/virtualAddresses")

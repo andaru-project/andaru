@@ -231,6 +231,14 @@ func TestProxyARPCovers(t *testing.T) {
 	if findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/1/external") || findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/2/external") || !findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/3/external") {
 		t.Fatalf("findings %+v", r.Findings)
 	}
+	// A /28 that only half-overlaps the /29 entry is not covered.
+	r = render(t, change(t, fixture(t, "proxy-arp"), func(d map[string]any) {
+		d["nat"].(map[string]any)["oneToOne"].([]any)[2].(map[string]any)["external"] = "10.0.2.0/28"
+		d["nat"].(map[string]any)["oneToOne"].([]any)[2].(map[string]any)["internal"] = "192.0.2.16/28"
+	}))
+	if !findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/2/external") {
+		t.Fatalf("a half-covered /28: %+v", r.Findings)
+	}
 	// On another segment, the entry covers nothing.
 	r = render(t, change(t, fixture(t, "proxy-arp"), func(d map[string]any) {
 		d["virtualAddresses"].([]any)[0].(map[string]any)["segment"] = "seg_00000002-0000-4000-8000-000000000002"
