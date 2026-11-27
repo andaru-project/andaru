@@ -46,7 +46,7 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 			bad(p+"/hostSegment", "Only a proxy NDP entry names a host segment.")
 		}
 		if v.Kind == "proxyNdp" {
-			validateProxyNDP(d, i, p, subnets, bad)
+			validateProxyNDP(d, i, p, subnets, taken, bad)
 			continue
 		}
 		if v.proxied() {
@@ -180,6 +180,12 @@ func (c claim) overlaps(first, last netip.Addr) bool {
 	return !c.last.Less(first) && !last.Less(c.first)
 }
 
+// The claims a proxy NDP entry may not take either.
+const (
+	gatewayClaim = "This range holds a segment's gateway."
+	poolClaim    = "This range overlaps a DHCPv6 prefix delegation pool."
+)
+
 // claims are the addresses the declaration names for hosts other than the firewall: a proxy ARP entry's route to
 // andaru-vip, or a held block's local route, would take them over.
 func claims(d *declaration) []claim {
@@ -201,8 +207,8 @@ func claims(d *declaration) []claim {
 	}
 	for _, s := range d.Segments {
 		// Its route to andaru-vip would take the uplink's next hop with it.
-		one(s.Addressing.IPv4.Gateway, "This range holds a segment's gateway.")
-		one(s.Addressing.IPv6.Gateway, "This range holds a segment's gateway.")
+		one(s.Addressing.IPv4.Gateway, gatewayClaim)
+		one(s.Addressing.IPv6.Gateway, gatewayClaim)
 		if s.Addressing.DNS != nil {
 			for _, raw := range s.Addressing.DNS.Servers {
 				server(raw, "This range holds a segment's DNS server.")
@@ -243,7 +249,7 @@ func claims(d *declaration) []claim {
 	for _, e := range d.DHCP6 {
 		if e.PrefixDelegation != nil {
 			if p, err := netip.ParsePrefix(e.PrefixDelegation.Prefix); err == nil && p.Addr().Is6() {
-				span(p, "This range overlaps a DHCPv6 prefix delegation pool.")
+				span(p, poolClaim)
 			}
 		}
 	}
@@ -327,9 +333,16 @@ func validateProxy(d *declaration, v virtualAddress, p string, own []netip.Prefi
 	return false
 }
 
+// ndpClaims are the claims a proxy NDP entry may not take, in its words: its route would take the gateway's traffic,
+// or a delegated prefix's. Other named hosts are the inside host itself, which the route leads to.
+var ndpClaims = map[string]string{
+	gatewayClaim: "This address is a segment's gateway.",
+	poolClaim:    "This address is in a DHCPv6 prefix delegation pool.",
+}
+
 // validateProxyNDP checks the proxy NDP entry at index i against its two segments, the firewall's static addresses
-// (own), the other virtual addresses and the DHCPv6 delegation pools.
-func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, bad func(string, string)) {
+// (own), the other virtual addresses, and the gateways and DHCPv6 delegation pools the declaration names (taken).
+func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken []claim, bad func(string, string)) {
 	v := d.VirtualAddresses[i]
 	byID := func(id string) int { return slices.IndexFunc(d.Segments, func(s segment) bool { return s.ID == id }) }
 	seg, host := byID(v.Segment), byID(v.HostSegment)
@@ -351,6 +364,7 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, bad f
 			break
 		}
 	}
+	claimed := slices.IndexFunc(taken, func(c claim) bool { return ndpClaims[c.message] != "" && c.overlaps(a, a) })
 	v6 := func(s int) []netip.Prefix {
 		return slices.DeleteFunc(staticPrefixes(d.Segments[s]), func(x netip.Prefix) bool { return !x.Addr().Is6() })
 	}
@@ -366,14 +380,8 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, bad f
 		bad(p+"/address", fmt.Sprintf("This address overlaps virtual address %q.", d.VirtualAddresses[other].Name))
 	case host >= 0 && slices.ContainsFunc(v6(host), func(x netip.Prefix) bool { return x.Contains(a) }):
 		bad(p+"/address", "This address is on the host segment's subnet, where a host already has a route.")
-	case slices.ContainsFunc(d.DHCP6, func(e dhcp6Entry) bool {
-		if e.PrefixDelegation == nil {
-			return false
-		}
-		x, err := netip.ParsePrefix(e.PrefixDelegation.Prefix)
-		return err == nil && x.Contains(a)
-	}):
-		bad(p+"/address", "This address is in a DHCPv6 prefix delegation pool.")
+	case claimed >= 0:
+		bad(p+"/address", ndpClaims[taken[claimed].message])
 	}
 }
 

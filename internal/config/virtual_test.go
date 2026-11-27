@@ -683,6 +683,16 @@ func TestProxyNDPValidation(t *testing.T) {
 		item(vips(d), 2)["address"] = "2001:db8:7::50"
 		accepted(t, d)
 	})
+	// The route leads to the inside host, so a DNS upstream or management source there is right.
+	t.Run("named hosts it leads to", func(t *testing.T) {
+		d := ndpFixture(t)
+		d["dns"] = map[string]any{"mode": "forward", "segments": []any{}, "upstreams": []any{map[string]any{"address": "2001:db8:1::50", "protocol": "do53"}}}
+		const admin = "adr_00000005-0000-4000-8000-000000000005"
+		objs := d["aliases"].(map[string]any)
+		objs["addresses"] = append(objs["addresses"].([]any), map[string]any{"id": admin, "name": "admin", "kind": "host", "address": "2001:db8:1::50"})
+		d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{admin}}
+		accepted(t, d)
+	})
 	const p = "/virtualAddresses/2"
 	const shape = "Expected one global unicast IPv6 address, without a length."
 	for name, tc := range map[string]struct {
@@ -708,6 +718,7 @@ func TestProxyNDPValidation(t *testing.T) {
 		"the same segment twice": {func(d map[string]any) { item(vips(d), 2)["hostSegment"] = item(vips(d), 2)["segment"] }, p + "/hostSegment", "Expected a segment other than the one the firewall answers on."},
 		"off the static subnet":  {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:2::50" }, p + "/address", "Expected an address on one of the segment's static IPv6 subnets."},
 		"a firewall address":     {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::2" }, p + "/address", "This address is one of the firewall's own addresses."},
+		"the uplink's gateway":   {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::1" }, p + "/address", "This address is a segment's gateway."},
 		"another proxy NDP entry": {func(d map[string]any) {
 			d["virtualAddresses"] = append(vips(d), map[string]any{"id": vipQ, "name": "twin", "kind": "proxyNdp", "segment": item(vips(d), 2)["segment"], "hostSegment": item(vips(d), 2)["hostSegment"], "address": "2001:db8:1::50"})
 		}, "/virtualAddresses/3/address", `This address overlaps virtual address \"host\".`}, // quoted as the JSON-encoded error shows it
