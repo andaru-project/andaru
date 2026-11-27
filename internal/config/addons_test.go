@@ -249,3 +249,42 @@ func TestAddonConfigSecretsZonesBackupAndUninstall(t *testing.T) {
 		t.Fatalf("addon secret scope survived uninstall: %s", afterDel.ConfigurationSecrets)
 	}
 }
+
+func TestAddonWebUIRejectsManagementHost(t *testing.T) {
+	ctx := t.Context()
+	store := openAddonTestStore(t)
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		t.Skip("hostname unavailable")
+	}
+	dir := t.TempDir()
+	tsDir := filepath.Join(dir, "tailscale")
+	if err := os.MkdirAll(tsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	webuiManifest := strings.Replace(testTailscaleCatalogManifest,
+		`"bus": {`,
+		`"endpoints": [{ "name": "ui", "protocol": "https", "port": 8443, "exposure": "managed" }], "webui": { "title": "UI", "permission": "view", "endpoint": "ui", "hostnameSetting": "/hostname", "path": "/" }, "bus": {`, 1)
+	if err := os.WriteFile(filepath.Join(tsDir, "manifest.json"), []byte(webuiManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := addon.LoadCatalog(dir)
+	if err != nil {
+		t.Fatalf("load webui catalog: %v", err)
+	}
+	store.SetCatalog(cat)
+
+	actor := authz.Actor{Kind: "system", ID: "root"}
+	zRes, err := store.Save(ctx, actor, Changes{Operations: []Operation{
+		{Op: "create", Collection: "zones", LocalID: "ts", Value: json.RawMessage(`{"name":"VPN"}`)},
+	}})
+	if err != nil {
+		t.Fatalf("create zone: %v", err)
+	}
+	tsZone := zRes.Created["ts"]
+	if _, err := store.Save(ctx, actor, Changes{Operations: []Operation{
+		{Op: "create", Collection: "addons", Value: json.RawMessage(`{"id":"org.andaru.tailscale","enabled":false,"settings":{"hostname":"` + host + `"},"interfaces":[{"name":"tailscale0","zone":"` + tsZone + `"}]}`)},
+	}}); err == nil {
+		t.Fatalf("expected rejection when webui hostnameSetting matches host %q", host)
+	}
+}

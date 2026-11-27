@@ -631,6 +631,7 @@ func validateManifest(m *Manifest) []FieldError {
 
 	// Storage.
 	storages := map[string]bool{}
+	storageUpperEnv := map[string]string{}
 	mounts := map[string]bool{}
 	for i, st := range m.Storage {
 		p := fmt.Sprintf("/storage/%d", i)
@@ -638,8 +639,11 @@ func validateManifest(m *Manifest) []FieldError {
 			bad(p+"/name", "storage name must be a valid identifier")
 		} else if storages[st.Name] {
 			bad(p+"/name", "duplicate storage name")
+		} else if envKey := "ANDARU_STORAGE_" + strings.ToUpper(st.Name); storageUpperEnv[envKey] != "" {
+			bad(p+"/name", fmt.Sprintf("storage name collides with %s on generated variable %s", storageUpperEnv[envKey], envKey))
 		} else {
 			storages[st.Name] = true
+			storageUpperEnv["ANDARU_STORAGE_"+strings.ToUpper(st.Name)] = p
 		}
 		if !slices.Contains([]string{"state", "data", "cache", "logs"}, st.Purpose) {
 			bad(p+"/purpose", "unsupported storage purpose")
@@ -802,12 +806,12 @@ func validateManifest(m *Manifest) []FieldError {
 		if !strings.HasPrefix(m.WebUI.Path, "/") {
 			bad("/webui/path", "webui path must start with /")
 		}
-		if m.WebUI.HostnameSetting != "" {
-			if !strings.HasPrefix(m.WebUI.HostnameSetting, "/") {
-				bad("/webui/hostnameSetting", "hostnameSetting must be a property pointer like /hostname")
-			} else if ref, ok := propMap[strings.TrimPrefix(m.WebUI.HostnameSetting, "/")]; !ok || ref.Type != "string" || ref.Format != "hostname" {
-				bad("/webui/hostnameSetting", "hostnameSetting must reference a string property with format hostname")
-			}
+		if m.WebUI.HostnameSetting == "" {
+			bad("/webui/hostnameSetting", "hostnameSetting is required so the add-on WebUI uses a separate origin from Andaru")
+		} else if !strings.HasPrefix(m.WebUI.HostnameSetting, "/") {
+			bad("/webui/hostnameSetting", "hostnameSetting must be a property pointer like /hostname")
+		} else if ref, ok := propMap[strings.TrimPrefix(m.WebUI.HostnameSetting, "/")]; !ok || ref.Type != "string" || ref.Format != "hostname" {
+			bad("/webui/hostnameSetting", "hostnameSetting must reference a string property with format hostname")
 		}
 	}
 
@@ -1169,8 +1173,11 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 			bad(p+"/name", "secret file binding name must match [a-zA-Z][a-zA-Z0-9_]{0,63}")
 		} else if prev, dup := usedSecretFile[b.Name]; dup {
 			bad(p+"/name", fmt.Sprintf("secret file %q already bound at %s", b.Name, prev))
+		} else if envKey := "ANDARU_SECRET_" + strings.ToUpper(b.Name) + "_FILE"; usedEnv[envKey] != "" {
+			bad(p+"/name", fmt.Sprintf("secret file %q collides with %s on generated variable %s", b.Name, usedEnv[envKey], envKey))
 		} else {
 			usedSecretFile[b.Name] = p
+			usedEnv["ANDARU_SECRET_"+strings.ToUpper(b.Name)+"_FILE"] = p
 		}
 		if b.Format != "" && b.Format != "raw" && b.Format != "htpasswd" {
 			bad(p+"/format", `file binding format must be "raw" or "htpasswd"`)

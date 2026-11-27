@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"maps"
+	"net/netip"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -146,6 +148,16 @@ func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written ma
 				a.Settings = materialized
 			}
 		}
+		// Reject webui hostnameSetting values matching Andaru's own management hostname or IP so
+		// __Host-andaru_session is never sent to an add-on on another port.
+		if m.WebUI != nil && m.WebUI.HostnameSetting != "" {
+			propName := strings.TrimPrefix(m.WebUI.HostnameSetting, "/")
+			if rawHost, ok := a.Settings[propName].(string); ok && rawHost != "" {
+				if matchesManagementHost(d, rawHost) {
+					bad(p+"/settings/"+propName, "Add-on WebUI hostname must not match Andaru's management hostname or IP address.")
+				}
+			}
+		}
 		// Validate interface attachments against manifest.Interfaces.
 		allowedIfaces := make(map[string]addon.InterfaceSpec, len(m.Interfaces))
 		for _, spec := range m.Interfaces {
@@ -214,4 +226,47 @@ func addonSettingSecretKeys(settings map[string]any) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+func matchesManagementHost(d *declaration, candidate string) bool {
+	norm := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(candidate)), ".")
+	if norm == "" {
+		return false
+	}
+	if h, err := os.Hostname(); err == nil && h != "" {
+		host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+		if norm == host {
+			return true
+		}
+		if d.DNS != nil && d.DNS.LocalDomain != "" {
+			dom := strings.Trim(strings.ToLower(strings.TrimSpace(d.DNS.LocalDomain)), ".")
+			if dom != "" && norm == host+"."+dom {
+				return true
+			}
+		}
+	}
+	candAddr, isIP := parseHostAddr(norm)
+	if !isIP || d.Management == nil || d.Management.Segment == "" {
+		return false
+	}
+	for _, seg := range d.Segments {
+		if seg.ID != d.Management.Segment {
+			continue
+		}
+		for _, cidr := range append(slices.Clone(seg.Addressing.IPv4.Addresses), seg.Addressing.IPv6.Addresses...) {
+			if pfx, err := netip.ParsePrefix(cidr); err == nil && pfx.Addr() == candAddr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseHostAddr(s string) (netip.Addr, bool) {
+	trimmed := strings.TrimPrefix(strings.TrimSuffix(s, "]"), "[")
+	a, err := netip.ParseAddr(trimmed)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return a.Unmap(), true
 }

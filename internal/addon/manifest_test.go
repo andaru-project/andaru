@@ -299,3 +299,29 @@ func TestLoadCatalog(t *testing.T) {
 		t.Fatalf("expected duplicate interface error, got %v", err)
 	}
 }
+
+func TestManifestCaseCollisionAndWebUIOrigin(t *testing.T) {
+	// Storage names differing only by case collide on ANDARU_STORAGE_<UPPER_NAME>.
+	dupStorage := strings.Replace(validTailscaleManifest,
+		`{ "name": "state", "purpose": "state", "mountPath": "/var/lib/tailscale", "backup": false }`,
+		`{ "name": "state", "purpose": "state", "mountPath": "/var/lib/tailscale", "backup": false }, { "name": "STATE", "purpose": "data", "mountPath": "/var/lib/other", "backup": false }`, 1)
+	if _, err := ParseManifest([]byte(dupStorage)); err == nil || !strings.Contains(err.Error(), "ANDARU_STORAGE_STATE") {
+		t.Fatalf("expected storage env collision, got %v", err)
+	}
+
+	// Secret file names differing only by case collide on ANDARU_SECRET_<UPPER_NAME>_FILE.
+	dupSecret := strings.Replace(validTailscaleManifest,
+		`"binding": { "type": "file", "name": "auth_key", "format": "raw", "env": "TS_AUTHKEY", "prefix": "file:" }`,
+		`"binding": { "type": "file", "name": "auth_key", "format": "raw", "env": "TS_AUTHKEY", "prefix": "file:" } }, { "name": "secondKey", "type": "secret-reference", "title": "Second", "binding": { "type": "file", "name": "AUTH_KEY" }`, 1)
+	if _, err := ParseManifest([]byte(dupSecret)); err == nil || !strings.Contains(err.Error(), "ANDARU_SECRET_AUTH_KEY_FILE") {
+		t.Fatalf("expected secret file env collision, got %v", err)
+	}
+
+	// WebUI without hostnameSetting is rejected so add-on WebUI never shares Andaru's host.
+	noHostWebUI := strings.Replace(validTailscaleManifest,
+		`"logs": [`,
+		`"endpoints": [{ "name": "ui", "protocol": "https", "port": 8443, "exposure": "managed" }], "webui": { "title": "UI", "permission": "view", "endpoint": "ui", "path": "/" }, "logs": [`, 1)
+	if _, err := ParseManifest([]byte(noHostWebUI)); err == nil || !strings.Contains(err.Error(), "/webui/hostnameSetting") {
+		t.Fatalf("expected missing hostnameSetting rejection, got %v", err)
+	}
+}
