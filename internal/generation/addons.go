@@ -470,14 +470,21 @@ func (r Realizer) startLiveAddonsLocked(ctx context.Context) error {
 		return err
 	}
 	if err := r.addons(ctx, nil, set); err != nil {
-		// Use a detached bounded context so cleanup stops queued add-ons even if ctx was canceled/timed out.
+		// Use a detached bounded context and stop units concurrently so cleanup stops queued add-ons
+		// even if ctx was canceled/timed out, and report any cleanup stop failures alongside err.
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreLimit)
 		defer cancel()
-		for _, slug := range addonSlugs(set) {
-			_ = r.stopAddon(stopCtx, slug)
-			_ = os.Remove(r.Root + addonStampPath(slug))
+		slugs := addonSlugs(set)
+		stopErrs := make([]error, len(slugs))
+		var wg sync.WaitGroup
+		for i, slug := range slugs {
+			wg.Go(func() {
+				stopErrs[i] = r.stopAddon(stopCtx, slug)
+				_ = os.Remove(r.Root + addonStampPath(slug))
+			})
 		}
-		return err
+		wg.Wait()
+		return errors.Join(append([]error{err}, stopErrs...)...)
 	}
 	return nil
 }

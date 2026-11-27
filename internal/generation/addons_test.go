@@ -287,18 +287,20 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 		t.Fatalf("Confirm gen 4: %v", err)
 	}
 
-	// 6. ReleaseAddonsHold stops any already-started add-ons and restores addons-held fail-closed if starting fails.
+	// 6. ReleaseAddonsHold with two add-ons: alpha starts, tailscale fails -> alpha is stopped after start,
+	// its stamp is cleared, and addons-held is restored fail-closed.
 	var failMu sync.Mutex
-	var failStopped []string
+	var failEvents []string
 	failR := r
 	failR.Run = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if filepath.Base(name) == "systemctl" && len(args) >= 2 && args[0] == "stop" {
+		if filepath.Base(name) == "systemctl" && len(args) >= 2 {
+			unit := args[len(args)-1]
 			failMu.Lock()
-			failStopped = append(failStopped, args[1])
+			failEvents = append(failEvents, args[0]+" "+unit)
 			failMu.Unlock()
-		}
-		if filepath.Base(name) == "systemctl" && len(args) >= 3 && args[0] == "start" && args[2] == "andaru-addon-tailscale.service" {
-			return nil, errors.New("start failed")
+			if args[0] == "start" && unit == "andaru-addon-tailscale.service" {
+				return nil, errors.New("start failed")
+			}
 		}
 		return nil, nil
 	}
@@ -306,6 +308,9 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	m5, f5 := testAddonFiles("http://127.0.0.1:9002/healthz", "TS_HOSTNAME=gw5\n")
+	alphaPath := "/run/containers/systemd/andaru-addon-alpha.container"
+	f5[alphaPath] = []byte("[Unit]\nDescription=Alpha\n\n[Container]\nImage=" + testAddonDigest + "\nPull=never\nNetwork=host\n\n[Service]\nRestart=on-failure\n")
+	m5.Files = append(m5.Files, FileEntry{Path: alphaPath, Mode: "0600"})
 	m5.SavedVersion = "5"
 	id5, err := Create(Dir(dir), m5, f5)
 	if err != nil {
@@ -318,16 +323,26 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := failR.ReleaseAddonsHold(t.Context()); err == nil {
-		t.Fatal("expected ReleaseAddonsHold failure on unit start error")
+		t.Fatal("expected ReleaseAddonsHold failure on tailscale unit start error")
 	}
 	if _, err := os.Stat(root + AddonsHeldFile); err != nil {
 		t.Fatalf("expected AddonsHeldFile restored fail-closed after ReleaseAddonsHold failure, err=%v", err)
 	}
 	failMu.Lock()
-	wasStopped := slices.Contains(failStopped, "andaru-addon-tailscale.service")
+	startIdx := slices.Index(failEvents, "start andaru-addon-alpha.service")
+	stoppedAfterStart := false
+	for i := startIdx + 1; startIdx >= 0 && i < len(failEvents); i++ {
+		if failEvents[i] == "stop andaru-addon-alpha.service" {
+			stoppedAfterStart = true
+			break
+		}
+	}
 	failMu.Unlock()
-	if !wasStopped {
-		t.Fatalf("expected failed ReleaseAddonsHold to stop live add-on units before restoring hold; stopped=%v", failStopped)
+	if !stoppedAfterStart {
+		t.Fatalf("expected alpha (which started) to be stopped after start on partial ReleaseAddonsHold failure; events=%v", failEvents)
+	}
+	if _, err := os.Stat(root + addonStampPath("alpha")); !os.IsNotExist(err) {
+		t.Fatalf("expected alpha stamp removed on failed ReleaseAddonsHold, err=%v", err)
 	}
 
 	// 7. Teardown removes per-add-on runtime dirs while preserving bus-socket.
