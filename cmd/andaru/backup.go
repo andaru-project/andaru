@@ -322,7 +322,7 @@ func backupCreate(ctx context.Context, socket string, cmd backupCommand, stdout,
 		return 1
 	}
 	archive, err := backup.Decode(ctx, raw, passphrase)
-	if err != nil || archive.Manifest.FormatVersion != 2 || archive.Manifest.SavedVersion != savedVersion || !archive.Manifest.CreatedAt.Equal(captured) || archive.Documents.Users == nil ||
+	if err != nil || archive.Manifest.FormatVersion != 3 || archive.Manifest.SavedVersion != savedVersion || !archive.Manifest.CreatedAt.Equal(captured) || archive.Documents.Users == nil ||
 		slices.Contains(archive.Manifest.Scopes, "configurationSecrets") != cmd.includeSecrets || slices.Contains(archive.Manifest.Scopes, "userCredentials") != cmd.includeCredentials {
 		fmt.Fprintln(stderr, "engine returned an invalid backup archive")
 		return 1
@@ -548,7 +548,8 @@ func validOperationID(value string) bool {
 }
 
 func validManifest(m backup.Manifest) bool {
-	if (m.FormatVersion != 1 && m.FormatVersion != 2) || len(m.BackupID) != 32 || m.AndaruVersion == "" || len(m.AndaruVersion) > 128 || !validVersion(config.Version(m.SavedVersion)) || m.CreatedAt.IsZero() || m.CreatedAt.Location() != time.UTC || len(m.Scopes) < m.FormatVersion || m.Payloads == nil || m.SavedButUnappliedAreas == nil {
+	shape := min(m.FormatVersion, 2) // format 3 holds what format 2 does
+	if m.FormatVersion < 1 || m.FormatVersion > 3 || len(m.BackupID) != 32 || m.AndaruVersion == "" || len(m.AndaruVersion) > 128 || !validVersion(config.Version(m.SavedVersion)) || m.CreatedAt.IsZero() || m.CreatedAt.Location() != time.UTC || len(m.Scopes) < shape || m.Payloads == nil || m.SavedButUnappliedAreas == nil {
 		return false
 	}
 	if _, err := hex.DecodeString(m.BackupID); err != nil {
@@ -560,17 +561,17 @@ func validManifest(m backup.Manifest) bool {
 		}
 	}
 	maxScopes := 2
-	if m.FormatVersion == 2 {
+	if shape == 2 {
 		maxScopes = 4
 	}
-	if len(m.Scopes) > maxScopes || m.Scopes[0] != "configuration" || m.FormatVersion == 2 && m.Scopes[1] != "users" || len(m.Payloads) != len(m.Scopes) {
+	if len(m.Scopes) > maxScopes || m.Scopes[0] != "configuration" || shape == 2 && m.Scopes[1] != "users" || len(m.Payloads) != len(m.Scopes) {
 		return false
 	}
 	order := map[string]int{"configuration": 0, "users": 1, "configurationSecrets": 2, "userCredentials": 3}
 	last := -1
 	for _, scope := range m.Scopes {
 		position, ok := order[scope]
-		if !ok || position <= last || m.FormatVersion == 1 && position != 0 && position != 2 {
+		if !ok || position <= last || shape == 1 && position != 0 && position != 2 {
 			return false
 		}
 		last = position

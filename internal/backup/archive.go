@@ -46,6 +46,9 @@ type Source struct {
 	AndaruVersion, SavedVersion string
 	CapturedAt                  time.Time
 	Network                     NetworkObservation
+	// Realized says the live generation realizes the saved version although it was made from an older one: what
+	// changed since takes effect when saved, as notifications do. Only format 3 can say so (#233).
+	Realized bool
 }
 
 type Payload struct {
@@ -95,7 +98,7 @@ func validSource(source Source) bool {
 }
 
 func unapplied(source Source) []string {
-	if source.Network.Live == nil || source.Network.LiveSavedVersion != source.SavedVersion {
+	if source.Network.Live == nil || source.Network.LiveSavedVersion != source.SavedVersion && !source.Realized {
 		return []string{"network"}
 	}
 	return []string{}
@@ -139,9 +142,13 @@ func Encode(ctx context.Context, source Source, docs Documents, passphrase strin
 	} else if passphrase != "" {
 		return nil, &Error{Code: "PASSPHRASE_INVALID"}
 	}
+	// Format 1 holds the configuration alone. Format 3 is format 2 (with the users) whose unapplied areas are the
+	// engine's own finding; older releases refuse it as unsupported rather than read those areas as a lie.
 	format := 1
 	if docs.Users != nil {
-		format = 2
+		format = 3
+	} else {
+		source.Realized = false
 	}
 	manifest := Manifest{FormatVersion: format, CreatedAt: source.CapturedAt.UTC(), AndaruVersion: source.AndaruVersion, SavedVersion: source.SavedVersion, Scopes: []string{}, Payloads: map[string]Payload{}, Network: source.Network, SavedButUnappliedAreas: unapplied(source)}
 	var identity [16]byte
@@ -245,21 +252,24 @@ func decodeManifest(raw []byte) (Manifest, error) {
 	if decoder.Decode(&manifest) != nil {
 		return Manifest{}, invalid
 	}
-	if manifest.FormatVersion != 1 && manifest.FormatVersion != 2 {
+	if manifest.FormatVersion < 1 || manifest.FormatVersion > 3 {
 		return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 	}
+	shape := min(manifest.FormatVersion, 2) // format 3 holds what format 2 does
 	id, err := hex.DecodeString(manifest.BackupID)
-	source := Source{AndaruVersion: manifest.AndaruVersion, SavedVersion: manifest.SavedVersion, CapturedAt: manifest.CreatedAt, Network: manifest.Network}
+	// In format 3, over a live generation, the areas are the engine's finding: only their form is checked.
+	source := Source{AndaruVersion: manifest.AndaruVersion, SavedVersion: manifest.SavedVersion, CapturedAt: manifest.CreatedAt, Network: manifest.Network,
+		Realized: manifest.FormatVersion == 3 && len(manifest.SavedButUnappliedAreas) == 0}
 	_, offset := manifest.CreatedAt.Zone()
 	if err != nil || len(id) != 16 || !validSource(source) || offset != 0 || manifest.Scopes == nil || manifest.SavedButUnappliedAreas == nil || !slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) {
 		return Manifest{}, invalid
 	}
 	maxScopes := 2
-	if manifest.FormatVersion == 2 {
+	if shape == 2 {
 		maxScopes = 4
 	}
-	if len(manifest.Scopes) < manifest.FormatVersion || len(manifest.Scopes) > maxScopes || len(manifest.Payloads) != len(manifest.Scopes) ||
-		manifest.Scopes[0] != "configuration" || manifest.FormatVersion == 2 && manifest.Scopes[1] != "users" {
+	if len(manifest.Scopes) < shape || len(manifest.Scopes) > maxScopes || len(manifest.Payloads) != len(manifest.Scopes) ||
+		manifest.Scopes[0] != "configuration" || shape == 2 && manifest.Scopes[1] != "users" {
 		return Manifest{}, invalid
 	}
 	var rawPayloads map[string]json.RawMessage
@@ -271,7 +281,7 @@ func decodeManifest(raw []byte) (Manifest, error) {
 	last := -1
 	for _, scope := range manifest.Scopes {
 		position, known := order[scope]
-		if !known || position <= last || seen[scope] || manifest.FormatVersion == 1 && position != 0 && position != 2 {
+		if !known || position <= last || seen[scope] || shape == 1 && position != 0 && position != 2 {
 			return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 		}
 		last, seen[scope] = position, true

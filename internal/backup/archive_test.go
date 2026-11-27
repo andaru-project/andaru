@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"slices"
@@ -283,7 +284,7 @@ func TestIdentityDocumentsRequireV2AndCredentialEncryption(t *testing.T) {
 		t.Fatal(err)
 	}
 	decoded, err := Decode(context.Background(), plain, "")
-	if err != nil || decoded.Manifest.FormatVersion != 2 || !bytes.Equal(decoded.Documents.Users, []byte(usersJSON)) {
+	if err != nil || decoded.Manifest.FormatVersion != 3 || !bytes.Equal(decoded.Documents.Users, []byte(usersJSON)) {
 		t.Fatalf("plain identity archive: %+v %v", decoded.Manifest, err)
 	}
 	if slices.Contains(decoded.Manifest.Scopes, "userCredentials") {
@@ -291,8 +292,8 @@ func TestIdentityDocumentsRequireV2AndCredentialEncryption(t *testing.T) {
 	}
 
 	if _, err = Encode(context.Background(), source, Documents{
-		Configuration:  []byte(configJSON),
-		Users:          []byte(usersJSON),
+		Configuration:   []byte(configJSON),
+		Users:           []byte(usersJSON),
 		UserCredentials: []byte(credentialsJSON),
 	}, ""); err == nil {
 		t.Fatal("plaintext credentials were accepted")
@@ -319,5 +320,69 @@ func TestV1ArchiveRemainsReadableWithoutIdentityMembers(t *testing.T) {
 	decoded, err := Decode(context.Background(), raw, "")
 	if err != nil || decoded.Manifest.FormatVersion != 1 || decoded.Documents.Users != nil || decoded.Documents.UserCredentials != nil {
 		t.Fatalf("v1 archive: %+v %v", decoded, err)
+	}
+}
+
+// Format 3 trusts the engine's unapplied areas over a live generation; format 2 and the factory network keep them
+// derived from the versions, and a later format is unsupported (#233).
+func TestFormat3UnappliedAreas(t *testing.T) {
+	archive := func(format int, live any, areas []string) []byte {
+		config, users := []byte(configJSON), []byte(usersJSON)
+		cd, ud := sha256.Sum256(config), sha256.Sum256(users)
+		liveSaved := "6"
+		if live == nil {
+			liveSaved = ""
+		}
+		raw, err := json.Marshal(map[string]any{
+			"formatVersion": format, "backupId": strings.Repeat("1", 32), "createdAt": "2026-11-15T09:00:00Z", "andaruVersion": "0.4.0~dev-1", "savedVersion": "7",
+			"scopes": []string{"configuration", "users"},
+			"payloads": map[string]any{
+				"config.json": map[string]any{"schemaVersion": 1, "size": len(config), "sha256": hex.EncodeToString(cd[:])},
+				"users.json":  map[string]any{"schemaVersion": 1, "size": len(users), "sha256": hex.EncodeToString(ud[:])},
+			},
+			"network": map[string]any{"live": live, "pending": nil, "liveSavedVersion": liveSaved}, "savedButUnappliedAreas": areas,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fixtureZIP(t, []archiveEntry{{name: "manifest.json", body: raw}, {name: "config.json", body: config}, {name: "users.json", body: users}})
+	}
+	for _, c := range []struct {
+		format int
+		live   any
+		areas  []string
+		code   string // "" accepted
+	}{
+		{2, 3, []string{"network"}, ""},
+		{2, 3, []string{}, "INVALID_ARCHIVE"},
+		{3, 3, []string{}, ""},
+		{3, 3, []string{"network"}, ""},
+		{3, nil, []string{}, "INVALID_ARCHIVE"},
+		{3, nil, []string{"network"}, ""},
+		{4, 3, []string{"network"}, "UNSUPPORTED_SCHEMA"},
+	} {
+		_, err := Decode(context.Background(), archive(c.format, c.live, c.areas), "")
+		var e *Error
+		if c.code == "" && err != nil || c.code != "" && (!errors.As(err, &e) || e.Code != c.code) {
+			t.Errorf("format %d, live %v, areas %q: %v", c.format, c.live, c.areas, err)
+		}
+	}
+
+	// The engine's finding reaches a format 3 archive; a format 1 archive cannot carry it.
+	source := sourceFixture()
+	source.Realized = true
+	for _, users := range [][]byte{[]byte(usersJSON), nil} {
+		raw, err := Encode(context.Background(), source, Documents{Configuration: json.RawMessage(configJSON), Users: users}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := Decode(context.Background(), raw, "")
+		want, format := []string{}, 3
+		if users == nil {
+			want, format = []string{"network"}, 1
+		}
+		if err != nil || decoded.Manifest.FormatVersion != format || !slices.Equal(decoded.Manifest.SavedButUnappliedAreas, want) {
+			t.Fatalf("users %v: %+v %v", users != nil, decoded.Manifest, err)
+		}
 	}
 }

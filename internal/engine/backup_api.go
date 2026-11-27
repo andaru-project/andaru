@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -245,11 +246,16 @@ func (h *backupHandler) create(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	realized, err := realizes(r.Context(), h.store.RealizationInput, &documents.SavedVersion, config.Version(observed.LiveSavedVersion))
+	if err != nil {
+		slog.WarnContext(r.Context(), "compare the saved version with the live generation for the backup", "error", err)
+	}
 	encoded, err := backup.Encode(r.Context(), backup.Source{
 		AndaruVersion: buildVersion,
 		SavedVersion:  string(documents.SavedVersion),
 		CapturedAt:    captured,
 		Network:       backup.NetworkObservation{Live: observed.Live, Pending: observed.Pending, LiveSavedVersion: observed.LiveSavedVersion},
+		Realized:      observed.Live != nil && realized,
 	}, backup.Documents{Configuration: documents.Configuration, ConfigurationSecrets: documents.ConfigurationSecrets, Users: identityDocuments.Users, UserCredentials: identityDocuments.UserCredentials}, options.Passphrase)
 	if err != nil {
 		writeBackupError(w, r, err)
