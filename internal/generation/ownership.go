@@ -172,6 +172,7 @@ func (r Realizer) fence(ctx context.Context) error {
 // Fence is boot while a factory reset blocks it. denyAll, unless the journal says Andaru never ran the network,
 // keeps deny-all even on a box never set up.
 func (r Realizer) Fence(ctx context.Context, denyAll bool) error {
+	r.applySafeModeOnBoot()
 	if denyAll && !r.setUp() {
 		// The journal says Andaru ran the network, so the box was set up: the catch-all keeps WAN from a lease.
 		if err := r.DenyAll(ctx); err != nil {

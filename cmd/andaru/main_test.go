@@ -247,6 +247,11 @@ func (f *fakeVerbs) FillAliases(context.Context) error {
 	return f.err
 }
 
+func (f *fakeVerbs) ReleaseAddonsHold(context.Context) error {
+	f.calls = append(f.calls, "addons-release-hold")
+	return f.err
+}
+
 func (f *fakeVerbs) Fence(_ context.Context, denyAll bool) error {
 	f.calls = append(f.calls, fmt.Sprint("fence ", denyAll))
 	return f.err

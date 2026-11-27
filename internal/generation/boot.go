@@ -96,6 +96,7 @@ func (r Realizer) copyKeptFirst(ctx context.Context, id int) {
 
 // Boot puts the confirmed generation into /run before networkd starts. It renders nothing.
 func (r Realizer) Boot(ctx context.Context) (result error) {
+	r.applySafeModeOnBoot()
 	// Before any .link file applies, what each Ethernet device runs is its driver's default. It runs before the lock,
 	// which the disaster path never takes; the record is written atomically.
 	// Short: the unit's 30s start limit must leave the restore its own restoreLimit.

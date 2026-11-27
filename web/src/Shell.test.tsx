@@ -1001,3 +1001,40 @@ it('retries failed notification reads while hidden when browser notifications ar
   await answered();
   expect(shown).toEqual(['Recovered alert']);
 });
+
+it('shows the safe mode banner and system details row when safeMode is active', async () => {
+  fetchRoutes({
+    '/api/v1/status/system': {
+      version: '0.5.0',
+      safeMode: { active: true, reasons: ['boot', 'settingsHold'] },
+      hostname: 'andaru-fw',
+      kernel: '7.3.4',
+      architecture: 'x86_64',
+      time: '2026-11-27T12:00:00Z',
+      bootedAt: '2026-11-27T11:00:00Z',
+      memoryBytes: 4294967296,
+      guest: 'kvm',
+      iommu: false,
+      cpu: {
+        model: 'Test CPU',
+        cores: 2,
+        threads: 2,
+        microcode: '0x1',
+        level: 'x86-64-v3',
+        features: { cryptography: [], security: [], virtualization: [] },
+        vulnerabilities: [],
+      },
+      hardware: { vendor: 'QEMU', product: 'PC', serial: '', boardVendor: '', board: '', biosVendor: '', biosVersion: '', biosDate: '' },
+    },
+  });
+
+  render(
+    <MemoryRouter initialEntries={['/system/details']}>
+      <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText('Safe mode active')).toBeInTheDocument();
+  expect(screen.getByText(/Add-ons are disabled \(one-boot safe mode, pending settings upgrade decisions\)/)).toBeInTheDocument();
+  expect(screen.getByText(/Active \(one-boot safe mode, pending settings upgrade decisions\)/)).toBeInTheDocument();
+});

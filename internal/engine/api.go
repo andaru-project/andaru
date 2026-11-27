@@ -76,7 +76,8 @@ var systemRoot = ""
 
 // systemResponse is the box's description beside the Andaru version that serves it.
 type systemResponse struct {
-	Version string `json:"version"`
+	Version  string                    `json:"version"`
+	SafeMode generation.SafeModeStatus `json:"safeMode"`
 	host.SystemInfo
 }
 
@@ -97,6 +98,10 @@ func newHandlerWithServices(readLinks func(context.Context) ([]host.LinkStatus, 
 }
 
 func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsAPI, aliasesAPI http.Handler) http.Handler {
+	return newHandlerWithState(readLinks, configuration, identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsAPI, aliasesAPI, "")
+}
+
+func newHandlerWithState(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsAPI, aliasesAPI http.Handler, stateDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -243,7 +248,7 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "The system description is unavailable; inspect the engine journal.")
 				return
 			}
-			writeJSON(w, r, http.StatusOK, systemResponse{Version: buildVersion, SystemInfo: info})
+			writeJSON(w, r, http.StatusOK, systemResponse{Version: buildVersion, SafeMode: generation.ReadSafeMode(systemRoot, stateDir), SystemInfo: info})
 			return
 		}
 		links, err := readLinks(r.Context())

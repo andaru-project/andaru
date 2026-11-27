@@ -3,7 +3,7 @@ import { useCallback, useRef, useState, type FormEvent, type ReactNode } from 'r
 import { Link } from 'react-router';
 import { ApiClient, apiErrorMessage, reportError } from '../api';
 import { bytes, duration, firmwareDate, plural } from '../format';
-import type { SystemInfo, UpdateStatus } from '../types';
+import type { SafeModeReason, SafeModeStatus, SystemInfo, UpdateStatus } from '../types';
 import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
 
@@ -71,6 +71,18 @@ export function updateNotice(update?: UpdateStatus): UpdateNotice | null {
   return null;
 }
 
+const safeModeReasonLabel: Record<SafeModeReason, string> = {
+  boot: 'one-boot safe mode',
+  kernelArg: 'kernel argument (andaru.safe=1)',
+  settingsHold: 'pending settings upgrade decisions',
+};
+
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper for SystemWidget and Shell
+export function formatSafeModeReasons(safeMode?: SafeModeStatus): string {
+  if (!safeMode?.active || safeMode.reasons.length === 0) return '';
+  return safeMode.reasons.map((r) => safeModeReasonLabel[r] ?? r).join(', ');
+}
+
 function UpdatePill({ update }: { update?: UpdateStatus }) {
   const notice = updateNotice(update);
   if (!notice) return null;
@@ -93,6 +105,7 @@ export function SystemWidget({ info, loadedAt, update }: { info: SystemInfo; loa
       <Row label="Version">
         <Group gap="xs" wrap="wrap">
           <span>{info.version}</span>
+          {info.safeMode?.active && <Badge size="xs" variant="filled" color="orange">Safe mode</Badge>}
           <UpdatePill update={update} />
         </Group>
       </Row>
@@ -124,6 +137,7 @@ export function SystemFacts({ info, loadedAt }: { info: SystemInfo; loadedAt: nu
       <Card title="Software">
         <Row label="Hostname">{info.hostname || '—'}</Row>
         <Row label="Version">{info.version}</Row>
+        {info.safeMode?.active && <Row label="Safe mode">Active ({formatSafeModeReasons(info.safeMode)})</Row>}
         <Row label="Kernel">{info.kernel}</Row>
         {running}
       </Card>

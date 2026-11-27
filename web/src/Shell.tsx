@@ -29,7 +29,7 @@ import { TokensScreen } from './screens/TokensScreen';
 import { TrafficFlowScreen } from './screens/TrafficFlowScreen';
 import { UpgradeScreen } from './screens/UpgradeScreen';
 import { UpdatesScreen } from './screens/UpdatesScreen';
-import { SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
+import { formatSafeModeReasons, SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import { VirtualIpsScreen } from './screens/VirtualIpsScreen';
 import { ZonesScreen } from './screens/ZonesScreen';
@@ -327,6 +327,11 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
         {connected && !onChangesPage && changes.error && <Alert color="orange" role="alert" title="Could not check pending changes">{changes.error}</Alert>}
         {connected && upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Could not check upgrade status">{upgrade.error}</Alert>}
         {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
+        {system.data?.info.safeMode?.active && (
+          <Alert color="orange" role="status" title="Safe mode active">
+            Add-ons are disabled ({formatSafeModeReasons(system.data.info.safeMode)}).
+          </Alert>
+        )}
         {capabilities.has('configuration.apply') && changes.data?.head === '0' && pathname !== '/setup' && (
           <Alert color="blue" role="status" title="Initial setup">
             This appliance has no saved network configuration yet. <Anchor component={Link} to="/setup">Open setup assistant</Anchor>
