@@ -2,6 +2,7 @@ package render
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -91,7 +92,7 @@ func TestReflectionObjectSkipsVirtualAddresses(t *testing.T) {
 func TestHeldBlockOnLearnedSubnet(t *testing.T) {
 	const four, six = "/virtualAddresses/2/address", "/virtualAddresses/3/address"
 	in := fixture(t, "routed-block")
-	if r := render(t, in); findingAt(r, "HELD_BLOCK_ON_LEARNED_SUBNET", four) || findingAt(r, "HELD_BLOCK_ON_LEARNED_SUBNET", six) {
+	if r := render(t, in); findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", four) || findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", six) {
 		t.Fatalf("nothing learned, yet %+v", r.Findings)
 	}
 	in.Links[0].Addresses = []host.AddressStatus{
@@ -102,15 +103,18 @@ func TestHeldBlockOnLearnedSubnet(t *testing.T) {
 	in.Facts.Delegated = delegation.State{WANs: map[string]delegation.WAN{"ens18": {Requested: 48,
 		Current: &delegation.Held{Prefix: netip.MustParsePrefix("2001:db8::/32"), Preferred: time.Now().Add(time.Hour), Valid: time.Now().Add(2 * time.Hour)}}}}
 	r := render(t, in)
-	if !findingAt(r, "HELD_BLOCK_ON_LEARNED_SUBNET", four) || !findingAt(r, "HELD_BLOCK_ON_LEARNED_SUBNET", six) || !r.Realizable {
+	if !findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", four) || !findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", six) || !r.Realizable {
 		t.Fatalf("findings %+v", r.Findings)
 	}
-	if findingAt(r, "HELD_BLOCK_ON_LEARNED_SUBNET", "/virtualAddresses/0/address") {
-		t.Fatal("warned about a single held address")
+	// A single held address on a learned subnet takes that one host's traffic: warned too, in its own words.
+	if !slices.ContainsFunc(r.Findings, func(f Finding) bool {
+		return f.Code == "HELD_ADDRESS_ON_LEARNED_SUBNET" && f.Path == "/virtualAddresses/0/address" && strings.HasPrefix(f.Message, "This address is on ")
+	}) {
+		t.Fatalf("no warning for a single held address: %+v", r.Findings)
 	}
 	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv4", Address: "203.0.113.10", PrefixLength: 29, Scope: "global"}}
 	in.Facts.Delegated = delegation.State{}
-	if r := render(t, in); findingAt(r, "HELD_BLOCK_ON_LEARNED_SUBNET", four) {
+	if r := render(t, in); findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", four) {
 		t.Fatalf("a neighbouring subnet warned: %+v", r.Findings)
 	}
 }

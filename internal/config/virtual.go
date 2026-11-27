@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
-	"strings"
 )
 
 // vipDevice is the dummy interface that holds the virtual addresses; no link may take its name.
@@ -60,8 +59,12 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 			minBits = 24
 		}
 		other := slices.IndexFunc(held, func(h int) bool { y, _ := vipPrefix(d.VirtualAddresses[h]); return y.Overlaps(x) })
-		// A named server may be a service on the firewall itself, so only the hosts the declaration names count.
-		claimed := slices.IndexFunc(taken, func(c claim) bool { return !c.served && c.overlaps(a, lastOf(x)) })
+		// A named server may be a service on the firewall itself, so only the hosts the declaration names count. Only
+		// blocks, a new form: a saved single address that one of these refusals would now catch must still load.
+		claimed := -1
+		if block {
+			claimed = slices.IndexFunc(taken, func(c claim) bool { return !c.served && c.overlaps(a, lastOf(x)) })
+		}
 		switch {
 		case !ok || !blockShape(x, minBits):
 			bad(p+"/address", "Expected one unicast IPv4 or IPv6 address, or a block: an IPv4 prefix of length 24 to 32 or an IPv6 prefix of length 48 to 128, with its host bits zero; not loopback or link-local.")
@@ -82,11 +85,7 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 			bad(p+"/address", "This address is on a segment's subnet: add it to the segment's addresses instead.")
 		case claimed >= 0:
 			// The local route would take the host's traffic, replies to it included.
-			m := taken[claimed].message
-			if !block {
-				m = strings.Replace(strings.Replace(m, "This range holds ", "This address is ", 1), "This range overlaps ", "This address is in ", 1)
-			}
-			bad(p+"/address", m)
+			bad(p+"/address", taken[claimed].message)
 		default:
 			held = append(held, i)
 		}
@@ -124,9 +123,12 @@ func holdsVirtual(d *declaration, a netip.Addr) bool {
 
 // blockShape says whether x is a unicast address, or a prefix of at least minBits with its host bits zero, none of
 // whose addresses is unspecified, loopback, multicast, link-local, IPv4-mapped or the IPv4 limited broadcast.
+// mapped is the IPv4-mapped IPv6 range, which no virtual address may touch.
+var mapped = netip.MustParsePrefix("::ffff:0:0/96")
+
 func blockShape(x netip.Prefix, minBits int) bool {
 	a := x.Addr()
-	return x.IsValid() && x.Bits() >= minBits && x == x.Masked() && !a.Is4In6() && validUnicast(a) && !a.IsLinkLocalUnicast() && validUnicast(lastOf(x))
+	return x.IsValid() && x.Bits() >= minBits && x == x.Masked() && !x.Overlaps(mapped) && validUnicast(a) && !a.IsLinkLocalUnicast() && validUnicast(lastOf(x))
 }
 
 // heldContains says whether the held virtual address v is a, or is a block holding it.
@@ -151,21 +153,11 @@ type claim struct {
 	first, last netip.Addr
 	message     string
 	served      bool
-	// whole: only a route taking the whole span is refused. A management source network may be as wide as
-	// 0.0.0.0/0; an entry inside it takes no more than its own addresses, not every admin's.
-	whole bool
 }
 
-// overlaps says whether first to last, of the claim's family, takes the claim: shares an address with it, or holds
-// all of it when the claim is whole.
+// overlaps says whether the claim shares an address with first to last, of the same family.
 func (c claim) overlaps(first, last netip.Addr) bool {
-	if c.first.Is4() != first.Is4() {
-		return false
-	}
-	if c.whole {
-		return !c.first.Less(first) && !last.Less(c.last)
-	}
-	return !c.last.Less(first) && !last.Less(c.first)
+	return c.first.Is4() == first.Is4() && !c.last.Less(first) && !last.Less(c.first)
 }
 
 // claims are the addresses the declaration names for hosts other than the firewall: a proxy ARP entry's route to
@@ -179,13 +171,13 @@ func claims(d *declaration) []claim {
 			a, e = ap.Addr(), e2
 		}
 		if e == nil && a.Zone() == "" {
-			out = append(out, claim{a.Unmap(), a.Unmap(), message, served, false})
+			out = append(out, claim{a.Unmap(), a.Unmap(), message, served})
 		}
 	}
 	one := func(raw, message string) { add(raw, message, false) }
 	server := func(raw, message string) { add(raw, message, true) }
 	span := func(p netip.Prefix, message string) {
-		out = append(out, claim{p.Masked().Addr(), lastOf(p), message, false, false})
+		out = append(out, claim{p.Masked().Addr(), lastOf(p), message, false})
 	}
 	for _, s := range d.Segments {
 		// Its route to andaru-vip would take the uplink's next hop with it.
@@ -201,9 +193,9 @@ func claims(d *declaration) []claim {
 		}
 		for _, raw := range s.Addressing.IPv4.Addresses {
 			if p, e := netip.ParsePrefix(raw); e == nil && p.Addr().Is4() && p.Bits() < 31 {
-				out = append(out, claim{p.Masked().Addr(), p.Masked().Addr(), "This range holds its subnet's network address.", false, false})
+				out = append(out, claim{p.Masked().Addr(), p.Masked().Addr(), "This range holds its subnet's network address.", false})
 				b := lastOf(p.Masked())
-				out = append(out, claim{b, b, "This range holds its subnet's broadcast address.", false, false})
+				out = append(out, claim{b, b, "This range holds its subnet's broadcast address.", false})
 			}
 		}
 	}
@@ -212,7 +204,7 @@ func claims(d *declaration) []claim {
 			first, e1 := netip.ParseAddr(r.First)
 			last, e2 := netip.ParseAddr(r.Last)
 			if e1 == nil && e2 == nil && first.Is4() && last.Is4() {
-				out = append(out, claim{first, last, "This range overlaps a DHCP range.", false, false})
+				out = append(out, claim{first, last, "This range overlaps a DHCP range.", false})
 			}
 		}
 		for _, l := range e.StaticLeases {
@@ -255,15 +247,15 @@ func claims(d *declaration) []claim {
 				case "host":
 					one(a.Address, message)
 				case "network":
-					if p, e := netip.ParsePrefix(a.Prefix); e == nil {
+					// A /0 is anyone, no host: nothing inside it is an admin's address in particular.
+					if p, e := netip.ParsePrefix(a.Prefix); e == nil && p.Bits() > 0 {
 						span(p, message)
-						out[len(out)-1].whole = true
 					}
 				case "range":
 					first, e1 := netip.ParseAddr(a.First)
 					last, e2 := netip.ParseAddr(a.Last)
 					if e1 == nil && e2 == nil && first.Is4() == last.Is4() {
-						out = append(out, claim{first.Unmap(), last.Unmap(), message, false, true})
+						out = append(out, claim{first.Unmap(), last.Unmap(), message, false})
 					}
 				}
 			}

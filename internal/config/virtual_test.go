@@ -561,13 +561,25 @@ func TestRoutedBlockValidation(t *testing.T) {
 		manage(d, map[string]any{"kind": "network", "prefix": "0.0.0.0/0"})
 		accepted(t, d)
 	})
+	// A single held address keeps the rules it had: a saved version with one on a management host still loads.
+	t.Run("a single address keeps its rules", func(t *testing.T) {
+		d := blockFixture(t)
+		manage(d, map[string]any{"kind": "host", "address": "172.16.53.53"})
+		accepted(t, d)
+	})
+	t.Run("an IPv6 block over the IPv4-mapped range", func(t *testing.T) {
+		d := blockFixture(t)
+		item(d["virtualAddresses"].([]any), 3)["address"] = "::ffc0:0:0/90"
+		refusedAt(t, d, "/virtualAddresses/3/address")
+	})
 	t.Run("a DHCPv6 delegation pool, both ways", func(t *testing.T) {
 		d := dhcp6Fixture(t, nil)
 		d["virtualAddresses"] = []any{map[string]any{"id": vipP, "name": "block6", "address": "fd00:beef:1:200::/56"}}
 		refusedWith(t, d, "/virtualAddresses/0/address", "This range overlaps a DHCPv6 prefix delegation pool.")
 		refusedWith(t, d, "/dhcp6/0/prefixDelegation/prefix", "The pool holds a virtual address.")
+		// A single held address keeps its old rules, so a saved version holding one in a pool still loads.
 		d["virtualAddresses"] = []any{map[string]any{"id": vipP, "name": "one", "address": "fd00:beef:1:200::1"}}
-		refusedWith(t, d, "/virtualAddresses/0/address", "This address is in a DHCPv6 prefix delegation pool.")
+		accepted(t, d)
 		d["virtualAddresses"] = []any{map[string]any{"id": vipP, "name": "block6", "address": "fd00:beef:2::/64"}}
 		accepted(t, d)
 	})

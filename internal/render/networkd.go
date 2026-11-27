@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -406,7 +407,8 @@ func (r *renderer) heldOnLearned() {
 			}
 		}
 	}
-	for _, w := range r.in.Facts.Delegated.WANs {
+	for _, name := range slices.Sorted(maps.Keys(r.in.Facts.Delegated.WANs)) { // in a stable order, as the finding names the first
+		w := r.in.Facts.Delegated.WANs[name]
 		if w.Current != nil {
 			learned = append(learned, w.Current.Prefix)
 		}
@@ -416,8 +418,12 @@ func (r *renderer) heldOnLearned() {
 	}
 	for i, v := range r.d.VirtualAddresses {
 		x := prefixOf(v.Address)
-		if j := slices.IndexFunc(learned, x.Overlaps); !v.proxied() && x.IsValid() && !x.IsSingleIP() && j >= 0 {
-			r.find("warning", "HELD_BLOCK_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This block overlaps "+learned[j].String()+", which the firewall learned by DHCP, PPP or prefix delegation, so its local route takes traffic for that subnet, the gateway's included. Name a block the provider routes to the firewall.")
+		if j := slices.IndexFunc(learned, x.Overlaps); !v.proxied() && x.IsValid() && j >= 0 {
+			what, fix := "This block overlaps ", "Name a block the provider routes to the firewall."
+			if x.IsSingleIP() {
+				what, fix = "This address is on ", "Choose an address on no subnet the firewall is on."
+			}
+			r.find("warning", "HELD_ADDRESS_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), what+learned[j].String()+", which the firewall learned by DHCP, PPP or prefix delegation, so its local route takes traffic for that subnet's host, or the whole subnet's, the gateway's included. "+fix)
 		}
 	}
 }
