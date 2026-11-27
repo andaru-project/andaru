@@ -5,6 +5,8 @@ import "slices"
 type Capability string
 
 const (
+	AddonsManage         Capability = "addons.manage"
+	AddonsRead           Capability = "addons.read"
 	AuditRead            Capability = "audit.read"
 	BackupsCreate        Capability = "backups.create"
 	BackupsExportSecrets Capability = "backups.exportSecrets"
@@ -23,6 +25,8 @@ const (
 )
 
 var catalog = []Capability{
+	AddonsManage,
+	AddonsRead,
 	AuditRead,
 	BackupsCreate,
 	BackupsExportSecrets,

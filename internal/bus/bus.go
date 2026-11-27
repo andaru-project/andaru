@@ -46,6 +46,9 @@ type Options struct {
 	PeerListeners map[string]net.Listener
 	// PeerUser names the user a peer user ID belongs to. Nil refuses every client on PeerListeners.
 	PeerUser func(uid uint32) (string, error)
+	// TokenListeners by ID, for dynamically registered add-on clients (SetClient/RemoveClient): isolated from
+	// Listeners and PeerListeners, accepting only addon.* principals authenticated by per-client runtime tokens.
+	TokenListeners map[string]net.Listener
 	// Retention is how long the log keeps an event, and how long a consumer nobody attaches is kept. Zero means
 	// seven days.
 	Retention time.Duration
@@ -95,6 +98,7 @@ type Bus struct {
 	wake      chan struct{}          // closed and replaced at each durable event
 	listeners []net.Listener
 	conns     map[*conn]struct{}
+	clients   map[string]dynamicClient // dynamic addon.* clients, guarded by mu
 
 	closed chan struct{}
 	done   sync.WaitGroup
@@ -131,7 +135,7 @@ func Open(o Options) (*Bus, error) {
 		return nil, fmt.Errorf("%w: %w", ErrStore, err)
 	}
 	b := &Bus{db: db, opt: o, log: o.Logger, subs: map[int]*subscriber{}, attached: map[string]*attachment{},
-		wake: make(chan struct{}), conns: map[*conn]struct{}{}, closed: make(chan struct{})}
+		wake: make(chan struct{}), conns: map[*conn]struct{}{}, clients: map[string]dynamicClient{}, closed: make(chan struct{})}
 	b.owners.Store(time.Now().UnixNano())
 	if o.LostHistory {
 		if _, err = db.Exec(`INSERT INTO meta (key, value) VALUES ('lost_until', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
@@ -147,18 +151,21 @@ func Open(o Options) (*Bus, error) {
 	b.done.Add(1)
 	go b.pruneEvery(pruneInterval)
 	for _, l := range o.Listeners {
-		b.listen(l, false)
+		b.listen(l, listenerAuth)
 	}
 	for _, l := range o.PeerListeners {
-		b.listen(l, true)
+		b.listen(l, listenerPeer)
+	}
+	for _, l := range o.TokenListeners {
+		b.listen(l, listenerToken)
 	}
 	return b, nil
 }
 
-func (b *Bus) listen(l net.Listener, peer bool) {
+func (b *Bus) listen(l net.Listener, kind listenerKind) {
 	b.listeners = append(b.listeners, l)
 	b.done.Add(1)
-	go b.serve(l, peer)
+	go b.serve(l, kind)
 }
 
 func openStore(path string) (*sql.DB, error) {

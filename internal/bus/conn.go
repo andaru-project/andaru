@@ -3,6 +3,7 @@ package bus
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net"
@@ -47,9 +48,9 @@ var writeTimeout = 10 * time.Second
 type conn struct {
 	b      *Bus
 	nc     net.Conn
-	peer   bool // on a PeerListener: known by its peer user ID, not its token
+	kind   listenerKind
 	grants Grants
-	user   string
+	user   string // set once under b.mu during hello authentication
 	out    chan []byte
 	gone   chan struct{}
 	once   sync.Once
@@ -100,7 +101,7 @@ func (r *reading) expectGap(token int64) {
 	r.mu.Unlock()
 }
 
-func (b *Bus) serve(l net.Listener, peer bool) {
+func (b *Bus) serve(l net.Listener, kind listenerKind) {
 	defer b.done.Done()
 	for {
 		nc, err := l.Accept()
@@ -112,7 +113,7 @@ func (b *Bus) serve(l net.Listener, peer bool) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		c := &conn{b: b, nc: nc, peer: peer, out: make(chan []byte, queued), gone: make(chan struct{}), reads: map[string]*reading{}}
+		c := &conn{b: b, nc: nc, kind: kind, out: make(chan []byte, queued), gone: make(chan struct{}), reads: map[string]*reading{}}
 		b.mu.Lock()
 		select {
 		case <-b.closed:
@@ -197,25 +198,50 @@ func (c *conn) reply(id int64, err error) {
 	c.send(frame{Op: "ok", ID: id})
 }
 
-// authorized says whether a hello's user name is the client's: by its token, or on a PeerListener by its peer user ID.
-func (c *conn) authorized(hello frame) bool {
-	if !c.peer {
-		return c.b.opt.Authenticate != nil && c.b.opt.Authenticate(hello.User, hello.Token)
-	}
-	if c.b.opt.PeerUser == nil {
+// authenticate verifies hello against this listener's isolated credential source and records c.user and c.grants
+// under b.mu so concurrent SetClient/RemoveClient calls observe c.user without races or TOCTOU gaps.
+func (c *conn) authenticate(hello frame) bool {
+	switch c.kind {
+	case listenerToken:
+		c.b.mu.Lock()
+		defer c.b.mu.Unlock()
+		dc, ok := c.b.clients[hello.User]
+		if !ok || dc.token == "" || subtle.ConstantTimeCompare([]byte(hello.Token), []byte(dc.token)) != 1 {
+			return false
+		}
+		c.user, c.grants = hello.User, dc.grants
+		return true
+	case listenerAuth:
+		grants, known := c.b.opt.Grants[hello.User]
+		if !known || c.b.opt.Authenticate == nil || !c.b.opt.Authenticate(hello.User, hello.Token) {
+			return false
+		}
+		c.b.mu.Lock()
+		c.user, c.grants = hello.User, grants
+		c.b.mu.Unlock()
+		return true
+	case listenerPeer:
+		grants, known := c.b.opt.Grants[hello.User]
+		if !known || c.b.opt.PeerUser == nil {
+			return false
+		}
+		uid, err := PeerUID(c.nc)
+		if err != nil {
+			c.b.log.Warn("bus peer credentials", "error", err)
+			return false
+		}
+		name, err := c.b.opt.PeerUser(uid)
+		if err != nil || name != hello.User {
+			c.b.log.Warn("bus client refused: its user name is not its peer's", "user", hello.User, "uid", uid, "error", err)
+			return false
+		}
+		c.b.mu.Lock()
+		c.user, c.grants = hello.User, grants
+		c.b.mu.Unlock()
+		return true
+	default:
 		return false
 	}
-	uid, err := PeerUID(c.nc)
-	if err != nil {
-		c.b.log.Warn("bus peer credentials", "error", err)
-		return false
-	}
-	name, err := c.b.opt.PeerUser(uid)
-	if err != nil || name != hello.User {
-		c.b.log.Warn("bus client refused: its user name is not its peer's", "user", hello.User, "uid", uid, "error", err)
-		return false
-	}
-	return true
 }
 
 func (c *conn) read() {
@@ -228,8 +254,7 @@ func (c *conn) read() {
 	if !scanner.Scan() || json.Unmarshal(scanner.Bytes(), &hello) != nil || hello.Op != "hello" {
 		return
 	}
-	grants, known := c.b.opt.Grants[hello.User]
-	if !known || !c.authorized(hello) {
+	if !c.authenticate(hello) {
 		// Written here, not queued: the connection closes next, and the client is owed the reason.
 		if line, err := json.Marshal(frame{Op: "error", ID: hello.ID, Message: "not authorized"}); err == nil {
 			_ = c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
@@ -237,10 +262,14 @@ func (c *conn) read() {
 		}
 		return
 	}
-	c.user, c.grants = hello.User, grants
 	_ = c.nc.SetReadDeadline(time.Time{})
 	c.reply(hello.ID, nil)
 	for scanner.Scan() {
+		select {
+		case <-c.gone:
+			return
+		default:
+		}
 		var f frame
 		if err := json.Unmarshal(scanner.Bytes(), &f); err != nil {
 			c.send(frame{Op: "error", Message: "not a frame"})
@@ -346,6 +375,14 @@ func (c *conn) consume(f frame) error {
 	}
 	r := &reading{a: a, signal: make(chan struct{}, 1)}
 	c.mu.Lock()
+	select {
+	case <-c.gone:
+		c.mu.Unlock()
+		c.b.release(a)
+		c.b.done.Done()
+		return errors.New("bus: connection closed")
+	default:
+	}
 	c.reads[f.Consumer] = r
 	c.mu.Unlock()
 	go c.deliver(r, f.Consumer, f.Filter, cursor, gap)

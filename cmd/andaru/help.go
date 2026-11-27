@@ -61,6 +61,7 @@ const realizeUsage = `usage: andaru realize [OPTIONS] activate|confirm N
        andaru realize [OPTIONS] addons-release-hold
        andaru realize [OPTIONS] addon-stage|addon-unstage SLUG
        andaru realize [OPTIONS] addon-ctl start|stop|restart SLUG
+       andaru realize [OPTIONS] addon-bus-tokens PATH
        andaru realize [OPTIONS] update-check|update-stage
        andaru realize [OPTIONS] update-rollback|update-reboot
        andaru realize [OPTIONS] set-hostname NAME
@@ -82,6 +83,7 @@ Verbs:
   addon-stage SLUG     Pull and verify a catalog add-on's pinned container image
   addon-unstage SLUG   Remove an unreferenced staged add-on container image
   addon-ctl ACT SLUG   Start, stop, or restart an applied add-on unit
+  addon-bus-tokens F   Sync runtime add-on event bus token files from file F
   factory-reset        Run or resume the factory reset ctl factory-reset planned
   update-check         Check for signed appliance image updates and cache status
   update-stage         Download and stage the next signed appliance image

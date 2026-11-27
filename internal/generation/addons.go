@@ -158,6 +158,9 @@ func (r Realizer) ensureAddonDirs(set []placed) error {
 				if err := os.MkdirAll(r.Root+addonBusSocketHostDir, 0o755); err != nil {
 					return fmt.Errorf("create add-on bus socket directory: %w", err)
 				}
+				if err := os.Chmod(r.Root+addonBusSocketHostDir, 0o755); err != nil {
+					return fmt.Errorf("chmod add-on bus socket directory: %w", err)
+				}
 			}
 		}
 	}
@@ -531,6 +534,150 @@ func (r Realizer) AddonControl(ctx context.Context, action, slug string) error {
 		return fmt.Errorf("%s add-on %s: %w", action, slug, err)
 	}
 	return nil
+}
+
+// SyncAddonBusTokens atomically writes /run/andaru-addons/<slug>/bus/token (mode 0400) for every slug in tokens
+// and removes stale bus token files for slugs not present in tokens (preserving /run/andaru-addons/bus-socket).
+// When Podman's :U/:Z mount options have already chowned and MCS-labeled the container's bus directory, the rotated
+// token file preserves that UID/GID via fd-based Chown and copies security.selinux when present.
+func (r Realizer) SyncAddonBusTokens(_ context.Context, tokens map[string]string) error {
+	for slug, tok := range tokens {
+		if !addon.ValidSlug(slug) {
+			return fmt.Errorf("invalid add-on slug %q", slug)
+		}
+		if tok == "" || len(tok) > 256 || strings.ContainsAny(tok, "\x00\r\n") {
+			return fmt.Errorf("invalid bus token for add-on %q", slug)
+		}
+	}
+	if r.StateDir != "" {
+		if _, err := os.Stat(r.dir()); err == nil {
+			unlock, err := r.lock()
+			if err != nil {
+				return err
+			}
+			defer unlock()
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	runBase := r.Root + strings.TrimSuffix(addonRuntimeDir, "/")
+	if len(tokens) > 0 {
+		if err := os.MkdirAll(runBase, 0o700); err != nil {
+			return fmt.Errorf("create add-on runtime directory: %w", err)
+		}
+		info, err := os.Lstat(runBase)
+		if err != nil {
+			return fmt.Errorf("inspect add-on runtime directory: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("add-on runtime path %s is not a directory", runBase)
+		}
+	}
+	var errs []error
+	for _, slug := range slices.Sorted(maps.Keys(tokens)) {
+		if err := r.writeAddonBusToken(runBase, slug, tokens[slug]); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	entries, err := os.ReadDir(runBase)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("scan add-on runtime directory: %w", err))
+		}
+		return errors.Join(errs...)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if name == "bus-socket" || !addon.ValidSlug(name) {
+			continue
+		}
+		if _, keep := tokens[name]; keep {
+			continue
+		}
+		tokenPath := filepath.Join(runBase, name, "bus", "token")
+		if rmErr := os.Remove(tokenPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove stale bus token for %s: %w", name, rmErr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func ensurePrivateDir(path string) (os.FileInfo, error) {
+	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", path)
+	}
+	return info, nil
+}
+
+func (r Realizer) writeAddonBusToken(runBase, slug, tok string) (err error) {
+	slugDir := filepath.Join(runBase, slug)
+	if _, err := ensurePrivateDir(slugDir); err != nil {
+		return fmt.Errorf("prepare add-on directory %s: %w", slug, err)
+	}
+	busDir := filepath.Join(slugDir, "bus")
+	busInfo, err := ensurePrivateDir(busDir)
+	if err != nil {
+		return fmt.Errorf("prepare add-on bus directory %s: %w", slug, err)
+	}
+
+	tokenPath := filepath.Join(busDir, "token")
+	uid, gid := 0, 0
+	if st, ok := busInfo.Sys().(*syscall.Stat_t); ok {
+		uid, gid = int(st.Uid), int(st.Gid)
+	}
+
+	f, err := os.CreateTemp(busDir, ".token-*")
+	if err != nil {
+		return fmt.Errorf("create temporary bus token for %s: %w", slug, err)
+	}
+	tmp := f.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err = f.WriteString(tok); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write bus token for %s: %w", slug, err)
+	}
+	if err = f.Chmod(0o400); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("chmod bus token for %s: %w", slug, err)
+	}
+	if err = f.Chown(uid, gid); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("chown bus token for %s: %w", slug, err)
+	}
+	copySELinuxLabel(busDir, tmp)
+	if err = f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sync bus token for %s: %w", slug, err)
+	}
+	if err = f.Close(); err != nil {
+		return fmt.Errorf("close bus token for %s: %w", slug, err)
+	}
+	if err = os.Rename(tmp, tokenPath); err != nil {
+		return fmt.Errorf("replace bus token for %s: %w", slug, err)
+	}
+	return nil
+}
+
+// copySELinuxLabel copies the security.selinux xattr (including any Podman :Z MCS category pair) from src to dst
+// when SELinux xattrs are active on the host, silently ignoring ENODATA/EOPNOTSUPP on hosts without SELinux.
+func copySELinuxLabel(src, dst string) {
+	buf := make([]byte, 256)
+	n, err := syscall.Getxattr(src, "security.selinux", buf)
+	if err != nil || n <= 0 {
+		return
+	}
+	_ = syscall.Setxattr(dst, "security.selinux", buf[:n], 0)
 }
 
 func sameRegularFile(path string, want []byte, mode fs.FileMode) bool {

@@ -192,7 +192,7 @@ func TestRenderAddonQuadletEnvSecretsAndNFTZone(t *testing.T) {
 		"Volume=/var/lib/andaru/addons/tailscale/state:/var/lib/tailscale:Z,U",
 		"Volume=/run/andaru-addons/tailscale/secrets:/run/andaru/secrets:ro,Z,U",
 		"Volume=/run/andaru-addons/tailscale/bus:/run/andaru/bus:ro,Z,U",
-		"Volume=/run/andaru-addons/bus-socket:/run/andaru/bus-socket:z",
+		"Volume=/run/andaru-addons/bus-socket:/run/andaru/bus-socket:ro,z",
 		"EnvironmentFile=/run/andaru-addons/tailscale/andaru-addon-tailscale.env",
 		`Exec="--accept-routes" "--tag" "tag:edge" "--tag" "tag:$$100%% \"quoted\""`,
 		"TimeoutStopSec=15",
@@ -326,7 +326,7 @@ func TestRenderAddonBlockingFindingsAndNoBusMountWhenDenied(t *testing.T) {
 	}
 	for _, f := range okRes.Files {
 		if strings.HasSuffix(f.Path, ".container") {
-			if strings.Contains(f.Content, "bus-socket") || strings.Contains(f.Content, "/run/andaru/bus") {
+			if strings.Contains(f.Content, "bus-socket") || strings.Contains(f.Content, "/run/andaru/bus") || strings.Contains(f.Content, "# andaru-bus-grants:") {
 				t.Fatalf("denied bus grants should not mount bus:\n%s", f.Content)
 			}
 			if strings.Contains(f.Content, "Exec=") {
@@ -338,6 +338,13 @@ func TestRenderAddonBlockingFindingsAndNoBusMountWhenDenied(t *testing.T) {
 				t.Fatalf("denied bus grants should not set ANDARU_BUS_*:\n%s", f.Content)
 			}
 		}
+	}
+
+	// Changing granted bus topics changes the rendered .container hash so apply restarts the add-on.
+	h1, ok1 := addonGrantedBusHash(addonBusGrants{Publish: map[string]string{"notification/addon.tailscale": "granted"}})
+	h2, ok2 := addonGrantedBusHash(addonBusGrants{Publish: map[string]string{"notification/addon.tailscale": "granted"}, Subscribe: map[string]string{"apply/+": "granted"}})
+	if !ok1 || !ok2 || h1 == h2 {
+		t.Fatalf("expected distinct non-empty bus grant hashes, got (%q,%v) vs (%q,%v)", h1, ok1, h2, ok2)
 	}
 }
 

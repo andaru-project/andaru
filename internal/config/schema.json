@@ -1182,6 +1182,8 @@
     },
     "capability": {
       "enum": [
+        "addons.manage",
+        "addons.read",
         "audit.read",
         "backups.create",
         "backups.exportSecrets",

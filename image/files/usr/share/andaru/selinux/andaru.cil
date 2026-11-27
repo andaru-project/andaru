@@ -4,3 +4,7 @@
 (filecon "/run/andaru-leases(/.*)?" any (system_u object_r named_conf_t ((s0) (s0))))
 ; pppd runs as pppd_t, which reads its configuration type. Andaru writes each PPPoE session's options here.
 (filecon "/run/andaru-ppp(/.*)?" any (system_u object_r pppd_etc_t ((s0) (s0))))
+; Add-on containers run as container_t and connect to the token-authenticated add-on event bus socket bind-mounted
+; from /run/andaru-addons/bus-socket. andaru-engine runs as unconfined_service_t.
+(filecon "/run/andaru-addons/bus-socket(/.*)?" any (system_u object_r container_file_t ((s0) (s0))))
+(allow container_t unconfined_service_t (unix_stream_socket (connectto)))

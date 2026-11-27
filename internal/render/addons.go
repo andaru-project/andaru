@@ -2,6 +2,8 @@ package render
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -40,18 +42,35 @@ func addonSecretHostPath(slug, name string) string {
 	return addonRuntimeDir + slug + "/secrets/" + addonSecretFileName(slug, name)
 }
 
-func addonHasBusGrants(g addonBusGrants) bool {
-	for _, state := range g.Publish {
+func addonGrantedBusHash(g addonBusGrants) (string, bool) {
+	var pub, sub []string
+	for topic, state := range g.Publish {
 		if state == "granted" {
-			return true
+			pub = append(pub, topic)
 		}
 	}
-	for _, state := range g.Subscribe {
+	for topic, state := range g.Subscribe {
 		if state == "granted" {
-			return true
+			sub = append(sub, topic)
 		}
 	}
-	return false
+	if len(pub) == 0 && len(sub) == 0 {
+		return "", false
+	}
+	slices.Sort(pub)
+	slices.Sort(sub)
+	h := sha256.New()
+	for _, topic := range pub {
+		h.Write([]byte("p:"))
+		h.Write([]byte(topic))
+		h.Write([]byte{0})
+	}
+	for _, topic := range sub {
+		h.Write([]byte("s:"))
+		h.Write([]byte(topic))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil)), true
 }
 
 // addons renders Quadlet .container, .env, and .secret files for enabled add-ons, and emits
@@ -186,7 +205,7 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		return
 	}
 
-	hasBus := addonHasBusGrants(a.BusGrants)
+	busGrantsHash, hasBus := addonGrantedBusHash(a.BusGrants)
 	if hasBus {
 		envMap["ANDARU_BUS_SOCKET"] = addonBusSocketCont
 		envMap["ANDARU_BUS_TOKEN_FILE"] = addonBusTokenCont
@@ -210,6 +229,11 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 
 	// Build Quadlet .container unit.
 	var header strings.Builder
+	if hasBus {
+		// Embed a deterministic digest of granted bus topics so changing any grant changes the rendered unit hash
+		// and restarts the add-on container cleanly on apply.
+		fmt.Fprintf(&header, "# andaru-bus-grants: %s\n", busGrantsHash)
+	}
 	if m.Health != nil && m.Health.Endpoint != "" {
 		if ei := slices.IndexFunc(m.Endpoints, func(ep addon.EndpointSpec) bool { return ep.Name == m.Health.Endpoint }); ei >= 0 {
 			ep := m.Endpoints[ei]
@@ -266,7 +290,7 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 	}
 	if hasBus {
 		containerLines = append(containerLines, fmt.Sprintf("Volume=%s%s/bus:%s:ro,Z,U", addonRuntimeDir, m.Slug, addonBusTokenContDir))
-		containerLines = append(containerLines, fmt.Sprintf("Volume=%s:%s:z", addonBusSocketHostDir, addonBusSocketContDir))
+		containerLines = append(containerLines, fmt.Sprintf("Volume=%s:%s:ro,z", addonBusSocketHostDir, addonBusSocketContDir))
 	}
 	containerLines = append(containerLines, "EnvironmentFile="+envPath)
 

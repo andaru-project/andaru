@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
+	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/bus"
 )
@@ -324,6 +325,7 @@ func path(link string) bool {
 }
 
 func validate(topic string, e bus.Event, r Raise) error {
+	slug, isAddon := strings.CutPrefix(e.Source, "addon.")
 	switch {
 	case e.ID == "" || len(e.ID) > 64:
 		return errors.New("invalid event ID")
@@ -331,6 +333,8 @@ func validate(topic string, e bus.Event, r Raise) error {
 		return errors.New("no time, or one before 1970")
 	case topic != "notification/"+e.Source:
 		return fmt.Errorf("source %q does not match the topic", e.Source)
+	case isAddon && !addon.ValidSlug(slug):
+		return fmt.Errorf("invalid add-on source %q", e.Source)
 	case r.Key == "" || !text(r.Key, 256, false):
 		return errors.New("invalid key")
 	case e.Type == ClearedType:
@@ -347,6 +351,10 @@ func validate(topic string, e bus.Event, r Raise) error {
 		return errors.New("a link must be a path in the web UI")
 	case r.Requires != "" && !slices.Contains(authz.Catalog(), authz.Capability(r.Requires)):
 		return fmt.Errorf("unknown capability %q", r.Requires)
+	case isAddon && r.Link != "" && r.Link != "/system/addons" && r.Link != "/system/addons/"+slug:
+		return fmt.Errorf("add-on link %q must be /system/addons or /system/addons/%s", r.Link, slug)
+	case isAddon && r.Requires != string(authz.AddonsRead):
+		return fmt.Errorf("add-on notifications must require %s", authz.AddonsRead)
 	}
 	return nil
 }

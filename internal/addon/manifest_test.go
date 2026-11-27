@@ -417,3 +417,13 @@ func TestEndpointPortSetting(t *testing.T) {
 		t.Fatalf("expected non-integer portSetting rejection, got %v", err)
 	}
 }
+
+func TestReservedBusSocketSlugRejected(t *testing.T) {
+	if ValidSlug("bus-socket") {
+		t.Fatal("ValidSlug accepted reserved slug bus-socket")
+	}
+	raw := strings.Replace(validTailscaleManifest, `"slug": "tailscale"`, `"slug": "bus-socket"`, 1)
+	if _, err := ParseManifest([]byte(raw)); err == nil {
+		t.Fatal("ParseManifest accepted reserved slug bus-socket")
+	}
+}
