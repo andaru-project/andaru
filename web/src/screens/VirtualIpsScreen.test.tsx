@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -469,25 +469,22 @@ describe('VirtualIpsScreen', () => {
     // Rejects non-zero host bits and duplicate name, focusing first invalid input.
     const nameInput = within(addDrawer).getByLabelText(/^Name/);
     const addrInput = within(addDrawer).getByRole('textbox', { name: /^Address or prefix/ });
-    await user.type(nameInput, 'DNS v4');
-    await user.type(addrInput, '198.51.100.1/29');
+    fireEvent.change(nameInput, { target: { value: 'DNS v4' } });
+    fireEvent.change(addrInput, { target: { value: '198.51.100.1/29' } });
     await user.click(within(addDrawer).getByRole('button', { name: 'Add virtual IP' }));
     expect(await within(addDrawer).findByText('Another virtual IP has this name.')).toBeInTheDocument();
     expect(within(addDrawer).getByText('Prefix host bits must be zero.')).toBeInTheDocument();
     expect(nameInput).toHaveFocus();
 
     // Rejects canonical IPv6 duplicate.
-    await user.clear(nameInput);
-    await user.type(nameInput, 'NTP v6');
-    await user.clear(addrInput);
-    await user.type(addrInput, 'FD00:0053::0053');
+    fireEvent.change(nameInput, { target: { value: 'NTP v6' } });
+    fireEvent.change(addrInput, { target: { value: 'FD00:0053::0053' } });
     await user.click(within(addDrawer).getByRole('button', { name: 'Add virtual IP' }));
     expect(await within(addDrawer).findByText('Another virtual IP already has this address.')).toBeInTheDocument();
 
     // Valid creation.
-    await user.clear(addrInput);
-    await user.type(addrInput, 'fd00:123::1');
-    await user.type(within(addDrawer).getByLabelText('Description'), 'Local NTP');
+    fireEvent.change(addrInput, { target: { value: 'fd00:123::1' } });
+    fireEvent.change(within(addDrawer).getByLabelText('Description'), { target: { value: 'Local NTP' } });
     await user.click(within(addDrawer).getByRole('button', { name: 'Add virtual IP' }));
 
     await waitFor(() => expect(postedBody).toEqual({
@@ -501,9 +498,8 @@ describe('VirtualIpsScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Edit virtual IP DNS v6' }));
     const editDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: DNS v6' });
     expect(within(editDrawer).getByText('Address in use by port forward')).toBeInTheDocument();
-    await user.clear(within(editDrawer).getByLabelText(/^Name/));
-    await user.type(within(editDrawer).getByLabelText(/^Name/), 'Resolver v6');
-    await user.clear(within(editDrawer).getByLabelText('Description'));
+    fireEvent.change(within(editDrawer).getByLabelText(/^Name/), { target: { value: 'Resolver v6' } });
+    fireEvent.change(within(editDrawer).getByLabelText('Description'), { target: { value: '' } });
     await user.click(within(editDrawer).getByRole('button', { name: 'Save virtual IP' }));
 
     await waitFor(() => expect(putBody).toEqual({
@@ -916,8 +912,8 @@ describe('VirtualIpsScreen', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Add virtual IP' }));
     const addDrawer = await screen.findByRole('dialog', { name: 'Add virtual IP' });
-    await user.type(within(addDrawer).getByLabelText(/^Name/), 'Routed v4 block');
-    await user.type(within(addDrawer).getByRole('textbox', { name: /^Address or prefix/ }), '198.51.100.0/29');
+    fireEvent.change(within(addDrawer).getByLabelText(/^Name/), { target: { value: 'Routed v4 block' } });
+    fireEvent.change(within(addDrawer).getByRole('textbox', { name: /^Address or prefix/ }), { target: { value: '198.51.100.0/29' } });
     await user.click(within(addDrawer).getByRole('button', { name: 'Add virtual IP' }));
 
     await waitFor(() => expect(postedBody).toEqual({
@@ -930,12 +926,10 @@ describe('VirtualIpsScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Edit virtual IP DNS v4' }));
     const editDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: DNS v4' });
     const addrInput = within(editDrawer).getByRole('textbox', { name: /^Address or prefix/ });
-    await user.clear(addrInput);
-    await user.type(addrInput, '198.51.100.0/29');
+    fireEvent.change(addrInput, { target: { value: '198.51.100.0/29' } });
     expect(within(editDrawer).getByText('Address in use by DNS service')).toBeInTheDocument();
     expect(within(editDrawer).getByText(/name one address, not a block/)).toBeInTheDocument();
-    await user.clear(addrInput);
-    await user.type(addrInput, '172.16.53.53/32');
+    fireEvent.change(addrInput, { target: { value: '172.16.53.53/32' } });
     expect(within(editDrawer).queryByText('Address in use by DNS service')).not.toBeInTheDocument();
     await user.click(within(editDrawer).getByRole('button', { name: 'Cancel' }));
 
@@ -1013,14 +1007,13 @@ describe('VirtualIpsScreen', () => {
 
     // Filter by "proxy ndp" and by host segment name ("lan").
     const filter = screen.getByLabelText('Filter virtual IPs');
-    await user.type(filter, 'proxy ndp');
+    fireEvent.change(filter, { target: { value: 'proxy ndp' } });
     expect(screen.getByText('Web server v6')).toBeInTheDocument();
     expect(screen.queryByText('DNS v4')).not.toBeInTheDocument();
-    await user.clear(filter);
-    await user.type(filter, 'lan');
+    fireEvent.change(filter, { target: { value: 'lan' } });
     expect(screen.getByText('Web server v6')).toBeInTheDocument();
     expect(screen.queryByText('DNS v4')).not.toBeInTheDocument();
-    await user.clear(filter);
+    fireEvent.change(filter, { target: { value: '' } });
 
     // Add a new Proxy NDP entry: verifies uplink/host pickers, /128 note (role="note"), /hostSegment 422 mapping, and payload.
     await user.click(screen.getByRole('button', { name: 'Add virtual IP' }));
@@ -1042,7 +1035,7 @@ describe('VirtualIpsScreen', () => {
     expect(hostOptions.some((t) => t.includes('IPv4 only'))).toBe(false);
     expect(hostOptions.some((t) => t.includes('Cable SLAAC'))).toBe(false);
     expect(hostOptions.some((t) => t.includes('Guest PD'))).toBe(true);
-    await user.type(within(drawer).getByLabelText(/^Name/), 'Mail v6');
+    fireEvent.change(within(drawer).getByLabelText(/^Name/), { target: { value: 'Mail v6' } });
     await user.selectOptions(uplinkSelect, 'seg_wan');
     await user.selectOptions(hostSelect, 'seg_lan');
 
@@ -1053,7 +1046,7 @@ describe('VirtualIpsScreen', () => {
     await user.selectOptions(within(drawer).getByLabelText(/^Uplink segment/), 'seg_wan');
     await user.selectOptions(within(drawer).getByLabelText(/^Host segment/), 'seg_lan');
 
-    await user.type(within(drawer).getByRole('textbox', { name: /^Address/ }), '2001:db8:1::60');
+    fireEvent.change(within(drawer).getByRole('textbox', { name: /^Address/ }), { target: { value: '2001:db8:1::60' } });
 
     rejectHostSegment = true;
     await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
@@ -1077,7 +1070,7 @@ describe('VirtualIpsScreen', () => {
     const inPlaceDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: Web server v6' });
     expect(within(inPlaceDrawer).getByLabelText(/^Uplink segment/)).toHaveValue('seg_wan');
     expect(within(inPlaceDrawer).getByLabelText(/^Host segment/)).toHaveValue('seg_lan');
-    await user.type(within(inPlaceDrawer).getByLabelText('Description'), 'DMZ web');
+    fireEvent.change(within(inPlaceDrawer).getByLabelText('Description'), { target: { value: 'DMZ web' } });
     await user.click(within(inPlaceDrawer).getByRole('button', { name: 'Save virtual IP' }));
     await waitFor(() => expect(putBody).toEqual({
       name: 'Web server v6',
@@ -1093,9 +1086,7 @@ describe('VirtualIpsScreen', () => {
     const editDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: Web server v6' });
     await user.selectOptions(within(editDrawer).getByLabelText(/^Kind/), 'address');
     expect(within(editDrawer).queryByLabelText(/^Host segment/)).not.toBeInTheDocument();
-    const editAddr = within(editDrawer).getByRole('textbox', { name: /^Address or prefix/ });
-    await user.clear(editAddr);
-    await user.type(editAddr, '2001:db8:53::1');
+    fireEvent.change(within(editDrawer).getByRole('textbox', { name: /^Address or prefix/ }), { target: { value: '2001:db8:53::1' } });
     await user.click(within(editDrawer).getByRole('button', { name: 'Save virtual IP' }));
     await waitFor(() => expect(putBody).toEqual({
       name: 'Web server v6',
