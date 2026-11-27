@@ -11,7 +11,6 @@ export interface VirtualIpUse {
 export interface StaticIpv4Subnet {
   cidr: string;
   prefix: ParsedPrefix;
-  bits: number;
 }
 
 export const maxVirtualAddresses = 64;
@@ -35,10 +34,8 @@ function prefixContainsPrefix(outer: ParsedPrefix, inner: ParsedPrefix): boolean
   return outer.family === inner.family && outer.bits <= inner.bits && (inner.network & outer.mask) === outer.network;
 }
 
-export function ipFamily(address: string): 'IPv4' | 'IPv6' | undefined {
-  const parsed = parseIp(address);
-  if (!parsed) return undefined;
-  return parsed.family === 4 ? 'IPv4' : 'IPv6';
+function isSinglePrefix(prefix: ParsedPrefix): boolean {
+  return prefix.bits === (prefix.family === 4 ? 32 : 128);
 }
 
 export function virtualAddressFamily(vip: Pick<VirtualAddress, 'address' | 'kind'>): 'IPv4' | 'IPv6' | undefined {
@@ -54,8 +51,7 @@ export function virtualAddressFamily(vip: Pick<VirtualAddress, 'address' | 'kind
 export function isSingleVirtualAddress(vip: Pick<VirtualAddress, 'address' | 'kind'>): boolean {
   if (virtualAddressKind(vip) !== 'address') return false;
   const parsed = parsePrefix(vip.address);
-  if (!parsed) return false;
-  return parsed.bits === (parsed.family === 4 ? 32 : 128);
+  return parsed !== null && isSinglePrefix(parsed);
 }
 
 export function staticIpv4Subnets(segment: Segment): StaticIpv4Subnet[] {
@@ -65,20 +61,13 @@ export function staticIpv4Subnets(segment: Segment): StaticIpv4Subnet[] {
     if (!raw.includes('/')) continue;
     const prefix = parsePrefix(raw);
     if (!prefix || prefix.family !== 4) continue;
-    out.push({ cidr: raw, prefix, bits: prefix.bits });
+    out.push({ cidr: raw, prefix });
   }
   return out;
 }
 
 function staticSegmentPrefixes(segment: Segment): ParsedPrefix[] {
-  const out: ParsedPrefix[] = [];
-  if (segment.addressing.ipv4.mode === 'static') {
-    for (const raw of segment.addressing.ipv4.addresses ?? []) {
-      if (!raw.includes('/')) continue;
-      const prefix = parsePrefix(raw);
-      if (prefix && prefix.family === 4) out.push(prefix);
-    }
-  }
+  const out = staticIpv4Subnets(segment).map((sub) => sub.prefix);
   if (segment.addressing.ipv6.mode === 'static' || segment.addressing.ipv6.mode === 'delegated') {
     for (const raw of segment.addressing.ipv6.addresses ?? []) {
       if (!raw.includes('/')) continue;
@@ -91,7 +80,7 @@ function staticSegmentPrefixes(segment: Segment): ParsedPrefix[] {
 
 // A /32 static address leaves no room for another address on the subnet (the only IP is the segment's own).
 export function isProxyArpEligibleSegment(segment: Segment): boolean {
-  return staticIpv4Subnets(segment).some((sub) => sub.bits < 32);
+  return staticIpv4Subnets(segment).some((sub) => sub.prefix.bits < 32);
 }
 
 function isAllowedIpv4Value(val: bigint): boolean {
@@ -108,6 +97,7 @@ function isAllowedIpv4Value(val: bigint): boolean {
 function isAllowedIpv6Value(val: bigint): boolean {
   if (val === 0n) return false; // :: unspecified
   if (val === 1n) return false; // ::1 loopback
+  if ((val >> 32n) === 0xffffn) return false; // ::ffff:0:0/96 IPv4-mapped
   if (((val >> 118n) & 0x3ffn) === 0x3fan) return false; // fe80::/10 link-local unicast
   if (((val >> 120n) & 0xffn) === 0xffn) return false; // ff00::/8 multicast
   return true;
@@ -121,14 +111,6 @@ function isAllowedVirtualPrefix(prefix: ParsedPrefix): boolean {
     return isAllowedIpv4Value(prefix.ip.value) && isAllowedIpv4Value(prefix.network) && isAllowedIpv4Value(last);
   }
   return isAllowedIpv6Value(prefix.ip.value) && isAllowedIpv6Value(prefix.network) && isAllowedIpv6Value(last);
-}
-
-// Compare two bare IP addresses regardless of IPv6 casing or zero compression.
-export function sameIpAddress(a: string, b: string): boolean {
-  const pa = parseIp(a);
-  if (!pa) return false;
-  const pb = parseIp(b);
-  return pb !== null && pa.family === pb.family && pa.value === pb.value;
 }
 
 // Where a saved virtual IP is referenced by DNS or targeted by NAT port forwards.
@@ -188,7 +170,7 @@ export function checkVirtualIp(
   if (kind === 'proxyArp') {
     const segmentId = (options?.segment ?? '').trim();
     const chosenSegment = segments?.find((s) => s.id === segmentId);
-    const chosenSubnets = chosenSegment ? staticIpv4Subnets(chosenSegment).filter((sub) => sub.bits < 32) : [];
+    const chosenSubnets = chosenSegment ? staticIpv4Subnets(chosenSegment).filter((sub) => sub.prefix.bits < 32) : [];
 
     if (!segmentId) {
       errors.set('segment', 'Choose a segment with a static IPv4 subnet.');
@@ -242,7 +224,7 @@ export function checkVirtualIp(
               'address',
               virtualAddressKind(other.value) === 'proxyArp'
                 ? 'This address or prefix overlaps another proxy ARP entry.'
-                : 'This prefix overlaps an existing held virtual IP.',
+                : 'This address or prefix overlaps an existing held virtual IP.',
             );
             duplicate = true;
             stale = true;
@@ -275,13 +257,13 @@ export function checkVirtualIp(
         stale = true;
       }
       if (!errors.has('address')) {
-        const parsedSingle = parsed.bits === (parsed.family === 4 ? 32 : 128);
+        const parsedSingle = isSinglePrefix(parsed);
         for (const other of others) {
           const otherPrefix = parsePrefix(other.value.address);
           if (!otherPrefix || !prefixesOverlap(parsed, otherPrefix)) continue;
           if (virtualAddressKind(other.value) === 'proxyArp') {
             errors.set('address', 'This address or prefix overlaps a proxy ARP virtual IP.');
-          } else if (parsedSingle && otherPrefix.bits === (otherPrefix.family === 4 ? 32 : 128)) {
+          } else if (parsedSingle && isSinglePrefix(otherPrefix)) {
             errors.set('address', 'Another virtual IP already has this address.');
           } else {
             errors.set('address', 'This address or prefix overlaps another virtual IP.');

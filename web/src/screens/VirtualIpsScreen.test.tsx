@@ -7,7 +7,7 @@ import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render } from '../test/render';
 import type { SavedObject, Snapshot, VirtualAddress } from '../types';
-import { checkVirtualIp, ipFamily, isProxyArpEligibleSegment, isSingleVirtualAddress, maxVirtualAddresses, sameIpAddress, virtualAddressFamily, virtualAddressKind, virtualAddressUses } from '../virtualIps';
+import { checkVirtualIp, isProxyArpEligibleSegment, isSingleVirtualAddress, maxVirtualAddresses, virtualAddressFamily, virtualAddressKind, virtualAddressUses } from '../virtualIps';
 import { VirtualIpsScreen } from './VirtualIpsScreen';
 
 afterEach(() => {
@@ -66,24 +66,23 @@ function renderVirtualIps(caps = ['configuration.read', 'configuration.write']) 
 }
 
 describe('VirtualIpsScreen helpers', () => {
-  it('classifies IPv4 and IPv6 addresses, rejects IPv4-mapped forms, and matches canonical IPv6', () => {
-    expect(ipFamily('172.16.53.53')).toBe('IPv4');
-    expect(ipFamily('fd00:53::53')).toBe('IPv6');
-    expect(ipFamily('172.16.53.53/32')).toBeUndefined();
-    expect(ipFamily('fe80::1%eth0')).toBeUndefined();
-    expect(ipFamily('010.0.0.1')).toBeUndefined();
-    expect(ipFamily('::ffff:1.2.3.4')).toBeUndefined();
-    expect(ipFamily('::ffff:102:304')).toBeUndefined();
-    expect(ipFamily('0:0:0:0:0:ffff:c000:280')).toBeUndefined();
+  it('classifies IPv4 and IPv6 addresses and blocks, rejects IPv4-mapped forms, and detects canonical IPv6 duplicates', () => {
+    expect(virtualAddressFamily({ address: '172.16.53.53' })).toBe('IPv4');
+    expect(virtualAddressFamily({ address: '172.16.53.53/32' })).toBe('IPv4');
+    expect(virtualAddressFamily({ address: 'fd00:53::53' })).toBe('IPv6');
+    expect(virtualAddressFamily({ address: 'fe80::1%eth0' })).toBeUndefined();
+    expect(virtualAddressFamily({ address: '010.0.0.1' })).toBeUndefined();
+    expect(virtualAddressFamily({ address: '::ffff:1.2.3.4' })).toBeUndefined();
+    expect(virtualAddressFamily({ address: '::ffff:102:304' })).toBeUndefined();
+    expect(virtualAddressFamily({ address: '0:0:0:0:0:ffff:c000:280' })).toBeUndefined();
 
-    expect(sameIpAddress('fd00:53::53', 'FD00:0053:0:0:0:0:0:0053')).toBe(true);
-    expect(sameIpAddress('172.16.53.53', '172.16.53.53')).toBe(true);
-    expect(sameIpAddress('172.16.53.53', '172.16.53.54')).toBe(false);
-    expect(sameIpAddress('fd00:53::53/128', 'fd00:53::53')).toBe(false);
+    expect(checkVirtualIp('Dup v6', 'FD00:0053:0:0:0:0:0:0053', fixtureVips).errors.get('address')).toMatch(/already has this address/);
+    expect(checkVirtualIp('Dup v6 /128', 'FD00:0053::0053/128', fixtureVips).errors.get('address')).toMatch(/already has this address/);
+    expect(checkVirtualIp('Distinct v4', '172.16.53.54', fixtureVips).errors.size).toBe(0);
   });
 
-  it('rejects non-unicast, loopback, link-local, multicast, broadcast, unspecified, and zone-scoped inputs', () => {
-    for (const bad of ['0.0.0.0', '0.0.0.0/24', '127.0.0.1', '127.0.0.0/24', '169.254.1.1', '169.254.1.0/24', '224.0.0.1', '224.0.0.0/24', '255.255.255.255', '255.255.255.0/24', '::', '::/64', '::1', '::1/128', 'fe80::1', 'fe80::/64', 'ff02::1', 'ff02::/64', '::ffff:102:304', '::ffff:0:0/96']) {
+  it('rejects non-unicast, loopback, link-local, multicast, broadcast, unspecified, IPv4-mapped, and zone-scoped inputs', () => {
+    for (const bad of ['0.0.0.0', '0.0.0.0/24', '127.0.0.1', '127.0.0.0/24', '169.254.1.1', '169.254.1.0/24', '224.0.0.1', '224.0.0.0/24', '255.255.255.255', '255.255.255.0/24', '::', '::/64', '::1', '::1/128', 'fe80::1', 'fe80::/64', 'ff02::1', 'ff02::/64', '::ffff:102:304', '::ffff:0:0/96', '0:0:0:0:0:fffe::/95', '::8000:0:0/81']) {
       expect(checkVirtualIp('test', bad, []).errors.get('address')).toMatch(/unicast/);
     }
     expect(checkVirtualIp('test', 'fe80::1%eth0', []).errors.get('address')).toMatch(/interface zone/);
@@ -120,14 +119,27 @@ describe('VirtualIpsScreen helpers', () => {
         ipv6: { mode: 'static' as const, addresses: ['2001:db8:1::1/64'] },
       },
     };
+    const host32Seg = {
+      id: 'seg_host32',
+      name: 'Host32',
+      link: 'lnk_2',
+      zone: 'zon_lan',
+      addressing: {
+        ipv4: { mode: 'static' as const, addresses: ['198.51.100.10/32'] },
+        ipv6: { mode: 'delegated' as const, addresses: ['2001:db8:2::1/64'] },
+      },
+    };
     expect(checkVirtualIp('On v4 subnet', '192.168.1.0/29', [], undefined, { kind: 'address', segments: [lanSeg] }).errors.get('address')).toMatch(/segment's subnet/);
     expect(checkVirtualIp('On v6 subnet', '2001:db8:1::/64', [], undefined, { kind: 'address', segments: [lanSeg] }).errors.get('address')).toMatch(/segment's subnet/);
+    expect(checkVirtualIp('Covers /32 static', '198.51.100.8/29', [], undefined, { kind: 'address', segments: [host32Seg] }).errors.get('address')).toMatch(/segment's subnet/);
+    expect(checkVirtualIp('Overlaps delegated v6', '2001:db8:2::/64', [], undefined, { kind: 'address', segments: [host32Seg] }).errors.get('address')).toMatch(/segment's subnet/);
 
     const existingBlocks: Array<SavedObject<VirtualAddress>> = [
       { value: { id: 'vip_b4', name: 'Routed v4', address: '198.51.100.0/29' }, version: '1' },
       { value: { id: 'vip_b6', name: 'Routed v6', address: '2001:db8:53::/64' }, version: '1' },
     ];
     expect(checkVirtualIp('Dup v4 inside block', '198.51.100.5', existingBlocks).errors.get('address')).toMatch(/overlaps another virtual IP/);
+    expect(checkVirtualIp('Overlap v4 block', '198.51.100.0/28', existingBlocks).errors.get('address')).toMatch(/overlaps another virtual IP/);
     expect(checkVirtualIp('Dup v6 inside block', '2001:db8:53::42', existingBlocks).errors.get('address')).toMatch(/overlaps another virtual IP/);
     expect(checkVirtualIp('Dup v4 /32', '172.16.53.53/32', fixtureVips).errors.get('address')).toMatch(/already has this address/);
     expect(checkVirtualIp('Proxy over held block', '198.51.100.4/30', existingBlocks, undefined, { kind: 'proxyArp', segment: 'seg_x' }).errors.get('address')).toMatch(/overlaps an existing held virtual IP/);
@@ -719,12 +731,40 @@ describe('VirtualIpsScreen', () => {
     expect(alert).toHaveFocus();
   });
 
-  it('creates a held routed block and warns when changing a DNS-referenced VIP to a block', async () => {
+  it('creates a held routed block, warns on DNS-to-block edits (not /32), and blocks deleting a block targeted by a port forward', async () => {
     const user = userEvent.setup();
     let postedBody: Record<string, unknown> | undefined;
+    const blockVip: SavedObject<VirtualAddress> = {
+      value: { id: 'vip_blk_used', name: 'Targeted block', address: '198.51.100.8/29' },
+      version: '4',
+    };
+    const snapshotWithBlockPf: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        virtualAddresses: [...sampleSnapshot.value.virtualAddresses!, blockVip.value],
+        nat: {
+          portForwards: [
+            ...sampleSnapshot.value.nat!.portForwards!,
+            {
+              id: 'pfw_blk',
+              name: 'Routed HTTPS',
+              enabled: true,
+              family: 'ipv4',
+              ingressZones: ['zon_wan'],
+              protocol: 'tcp',
+              from: [],
+              to: { self: true },
+              ports: '443',
+              target: { address: '198.51.100.12' },
+            },
+          ],
+        },
+      },
+    };
     fetchRoutes({
-      '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '9', items: fixtureVips },
-      '/api/v1/config': sampleSnapshot,
+      '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '9', items: [...fixtureVips, blockVip] },
+      '/api/v1/config': snapshotWithBlockPf,
       'POST /api/v1/config/virtualAddresses': (init) => {
         postedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
         return jsonResponse(201, { value: { id: 'vip_blk', ...postedBody }, version: '10' });
@@ -744,7 +784,7 @@ describe('VirtualIpsScreen', () => {
     }));
     expect(onSaved).toHaveBeenCalledTimes(1);
 
-    // Editing a DNS-referenced VIP to a block shows the single-address DNS warning.
+    // Editing a DNS-referenced VIP to a block shows the single-address DNS warning, while /32 does not.
     await user.click(screen.getByRole('button', { name: 'Edit virtual IP DNS v4' }));
     const editDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: DNS v4' });
     const addrInput = within(editDrawer).getByRole('textbox', { name: /^Address or prefix/ });
@@ -752,5 +792,15 @@ describe('VirtualIpsScreen', () => {
     await user.type(addrInput, '198.51.100.0/29');
     expect(within(editDrawer).getByText('Address in use by DNS service')).toBeInTheDocument();
     expect(within(editDrawer).getByText(/name one address, not a block/)).toBeInTheDocument();
+    await user.clear(addrInput);
+    await user.type(addrInput, '172.16.53.53/32');
+    expect(within(editDrawer).queryByText('Address in use by DNS service')).not.toBeInTheDocument();
+    await user.click(within(editDrawer).getByRole('button', { name: 'Cancel' }));
+
+    // Delete modal blocks deletion of a held block when a port forward targets an address inside it.
+    await user.click(screen.getByRole('button', { name: 'Delete virtual IP Targeted block' }));
+    const deleteModal = await screen.findByRole('dialog', { name: 'Delete virtual IP' });
+    expect(deleteModal).toHaveTextContent('Port forward 2 (Routed HTTPS)');
+    expect(within(deleteModal).queryByRole('button', { name: 'Delete virtual IP' })).not.toBeInTheDocument();
   });
 });

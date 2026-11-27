@@ -704,7 +704,6 @@ export function simulateTrafficFlow(
   }
 
   const localVirtualOwners: Array<{ prefix: ParsedPrefix; owner: LocalOwner }> = [];
-  const virtual4Prefixes: ParsedPrefix[] = [];
   const proxyArpRoutes: Array<{ vip: NonNullable<Snapshot['value']['virtualAddresses']>[number]; prefix: ParsedPrefix }> = [];
   for (const vip of snapshot.virtualAddresses ?? []) {
     const prefix = parsePrefix(vip.address);
@@ -716,9 +715,6 @@ export function simulateTrafficFlow(
       continue;
     }
     localVirtualOwners.push({ prefix, owner: { label: `Virtual IP ${vip.name}`, to: '/network/virtual-ips', isVirtual: true } });
-    if (prefix.family === 4) {
-      virtual4Prefixes.push(prefix);
-    }
   }
 
   const findLocalOwner = (ip: ParsedIp): LocalOwner | undefined =>
@@ -726,7 +722,7 @@ export function simulateTrafficFlow(
     ?? localVirtualOwners.find((o) => prefixContains(o.prefix, ip))?.owner;
 
   const isVirtual4 = (ip: ParsedIp): boolean =>
-    ip.family === 4 && virtual4Prefixes.some((p) => prefixContains(p, ip));
+    ip.family === 4 && localVirtualOwners.some((o) => prefixContains(o.prefix, ip));
   const isInternalOwn4 = (ip: ParsedIp): boolean =>
     ip.family === 4 && (internalOwn4.has(ip.value) || isVirtual4(ip));
 

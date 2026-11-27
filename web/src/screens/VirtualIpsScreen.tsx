@@ -90,7 +90,7 @@ function VirtualIpEditor({
   const segmentOptions = (() => {
     const items = eligibleSegments.map((s) => ({
       value: s.id,
-      label: `${s.name} (${staticIpv4Subnets(s).filter((sub) => sub.bits < 32).map((sub) => sub.cidr).join(', ')})`,
+      label: `${s.name} (${staticIpv4Subnets(s).filter((sub) => sub.prefix.bits < 32).map((sub) => sub.cidr).join(', ')})`,
     }));
     if (segment && !eligibleSegments.some((s) => s.id === segment)) {
       const found = segments.find((s) => s.id === segment);
@@ -259,7 +259,7 @@ function VirtualIpEditor({
                   role="status"
                   title={singleLock ? 'Address in use by port forward' : 'Address in use by port forwards'}
                 >
-                  {addressLocks.map((u) => u.label).join(', ')} {singleLock ? 'targets' : 'target'} this virtual IP. You can still rename or describe it, or keep the targeted address inside the block; removing it or switching kind requires updating or removing {singleLock ? 'the port forward' : 'those port forwards'} first.
+                  {addressLocks.map((u) => u.label).join(', ')} {singleLock ? 'targets' : 'target'} this virtual IP. You can still rename or describe it, or change the prefix while keeping {singleLock ? 'the targeted address' : 'the targeted addresses'} covered; moving {singleLock ? 'it' : 'them'} out of range or switching kind requires updating or removing {singleLock ? 'the port forward' : 'those port forwards'} first.
                 </Alert>
               )}
               <Textarea
@@ -426,7 +426,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                 <Alert role="status" title="No virtual IPs">
                   {sorted.length === 0
                     ? (canWrite
-                      ? 'No virtual IP is saved yet. Add a held address for services such as DNS and port forwards, or a proxy ARP entry for extra addresses on a static IPv4 segment.'
+                      ? 'No virtual IP is saved yet. Add a held address or block for services such as DNS and port forwards, or a proxy ARP entry for extra addresses on a static IPv4 segment.'
                       : 'No virtual IP is saved yet.')
                     : 'No virtual IP matches the filter.'}
                 </Alert>

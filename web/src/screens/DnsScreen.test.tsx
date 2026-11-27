@@ -332,6 +332,27 @@ describe('DnsScreen', () => {
     expect(screen.queryByRole('checkbox', { name: 'routed-v6' })).not.toBeInTheDocument();
     firstRender.unmount();
 
+    // Hides the virtual addresses listener section when only held blocks exist.
+    const onlyBlocksSnapshot: Snapshot = {
+      ...withBlocksSnapshot,
+      value: {
+        ...withBlocksSnapshot.value,
+        virtualAddresses: [
+          { id: 'vip_blk4', name: 'routed-v4', address: '198.51.100.0/29' },
+        ],
+        dns: { ...existingDns, virtualAddresses: [] },
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config': onlyBlocksSnapshot,
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: { ...existingDns, virtualAddresses: [] } },
+    });
+    const secondRender = renderDns();
+    expect(await screen.findByRole('checkbox', { name: /lan/i })).toBeInTheDocument();
+    expect(screen.queryByText('Optional firewall virtual addresses that the DNS service also listens on.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'routed-v4' })).not.toBeInTheDocument();
+    secondRender.unmount();
+
     const dnsWithBlock: DnsService = { ...existingDns, virtualAddresses: ['vip_blk4'] };
     let putBody: Record<string, unknown> | undefined;
     fetchRoutes({

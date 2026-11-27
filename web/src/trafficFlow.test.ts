@@ -1090,14 +1090,16 @@ describe('simulateTrafficFlow', () => {
       ],
     };
 
-    // Direct traffic to an IPv4 inside a held block enters input chain owned by the Virtual IP.
-    const directV4 = simulateTrafficFlow(
-      { ingressSegmentId: 'seg_wan', protocol: 'icmp', srcIp: '203.0.113.50', dstIp: '198.51.100.5' },
-      withRoutedBlocks,
-    );
-    expect(directV4.verdict).toBe('accept');
-    expect(directV4.chain).toBe('input');
-    expect(directV4.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Routed v4 /29', to: '/network/virtual-ips' });
+    // Direct traffic to network (.0), host (.5), and last (.7) addresses inside a held block enters input chain owned by the Virtual IP.
+    for (const dstIp of ['198.51.100.0', '198.51.100.5', '198.51.100.7']) {
+      const directV4 = simulateTrafficFlow(
+        { ingressSegmentId: 'seg_wan', protocol: 'icmp', srcIp: '203.0.113.50', dstIp },
+        withRoutedBlocks,
+      );
+      expect(directV4.verdict).toBe('accept');
+      expect(directV4.chain).toBe('input');
+      expect(directV4.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Routed v4 /29', to: '/network/virtual-ips' });
+    }
 
     // Direct traffic to an IPv6 inside a held block also enters input chain owned by the Virtual IP.
     const directV6 = simulateTrafficFlow(
@@ -1133,5 +1135,60 @@ describe('simulateTrafficFlow', () => {
     );
     expect(noReflectAlias.chain).toBe('input');
     expect(noReflectAlias.finalTuple).toBe('TCP 192.168.1.50 → 198.51.100.3:8080');
+
+    // toNegated + to.self skips addresses inside a held block, and IPv6 port forward into a held IPv6 block uses input auto-rule.
+    const negatedAndV6: Snapshot['value'] = {
+      ...withRoutedBlocks,
+      rules: baseConfig.rules ?? [],
+      nat: {
+        ...withRoutedBlocks.nat,
+        portForwards: [
+          {
+            id: 'pfw_neg_self',
+            name: 'Transparent proxy except self',
+            enabled: true,
+            family: 'ipv4',
+            ingressZones: ['zon_lan'],
+            protocol: 'tcp',
+            from: [],
+            to: { self: true },
+            toNegated: true,
+            ports: '80',
+            target: { address: '192.168.1.20' },
+            targetPort: 3128,
+            filterRule: 'auto',
+          },
+          {
+            id: 'pfw_v6_blk',
+            name: 'Forward v6 into held block',
+            enabled: true,
+            family: 'ipv6',
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: [],
+            to: { self: true },
+            ports: '8443',
+            target: { address: '2001:db8:53::99' },
+            targetPort: 443,
+            filterRule: 'auto',
+          },
+        ],
+      },
+    };
+    const negSkipped = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '198.51.100.3', dstPort: 80 },
+      negatedAndV6,
+    );
+    expect(negSkipped.chain).toBe('input');
+    expect(negSkipped.finalTuple).toBe('TCP 192.168.1.50 → 198.51.100.3:80');
+
+    const forwardedV6ToBlock = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:99::1', dstIp: '2001:db8:53::10', dstPort: 8443 },
+      negatedAndV6,
+    );
+    expect(forwardedV6ToBlock.verdict).toBe('accept');
+    expect(forwardedV6ToBlock.chain).toBe('input');
+    expect(forwardedV6ToBlock.finalTuple).toBe('TCP 2001:db8:99::1 → [2001:db8:53::99]:443');
+    expect(forwardedV6ToBlock.steps.find((s) => s.stage === 'filter')?.decidedBy).toEqual({ label: 'Port forward #2 auto rule (Forward v6 into held block)', to: '/firewall/nat' });
   });
 });
