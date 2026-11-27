@@ -354,7 +354,7 @@ func (a *addonsAPI) buildStaged(ctx context.Context, m *addon.Manifest, st addon
 			v.StagedAt = rec.StagedAt.UTC().Format(time.RFC3339)
 		}
 	}
-	if !staging && lastErr != "" {
+	if !staging && !v.Present && lastErr != "" {
 		v.Error = lastErr
 	}
 	return v
@@ -997,7 +997,7 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 		}
 		return len(p), nil
 	}
-	if len(p) >= t.limit {
+	if len(p) > t.limit {
 		t.data = append(t.data[:0], p[len(p)-t.limit:]...)
 		t.truncated = true
 		return len(p), nil

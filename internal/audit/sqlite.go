@@ -200,7 +200,7 @@ func migrateAuditV1(ctx context.Context, db *sql.DB) error {
 	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 		return err
 	}
-	defer func() { _, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON") }()
+	defer func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys=ON") }()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {

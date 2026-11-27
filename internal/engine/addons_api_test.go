@@ -358,6 +358,14 @@ func TestAddonsAPIAsyncStageAndConcurrentConflict(t *testing.T) {
 }
 
 func TestParseJournalOutputBoundsTailAndUTF8(t *testing.T) {
+	// Exact-limit write to tailBuffer must NOT mark truncated or drop the first line.
+	var exact tailBuffer
+	exact.limit = 11
+	_, _ = exact.Write([]byte("line1\nline2"))
+	if exact.Truncated() || string(exact.Bytes()) != "line1\nline2" {
+		t.Fatalf("exact-limit tailBuffer truncated=%v bytes=%q", exact.Truncated(), exact.Bytes())
+	}
+
 	// Edge case that previously panicked: raw length > limit before TrimRight, < limit after TrimRight.
 	trailingNewlines := append([]byte(strings.Repeat("a", maxAddonLogBytes-1)), '\n', '\n')
 	lines, cursor, truncated := parseJournalOutput(trailingNewlines, false, maxAddonLogBytes)
