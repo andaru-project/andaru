@@ -29,7 +29,9 @@ A /32 or /128 written with its length is stored bare, so each address has one fo
 **Validation:** a block follows the rules of a single held address.
 - It is not unspecified, multicast, loopback, link-local or IPv4-mapped.
 - It does not lie on any segment's subnet, holding none of a segment's static addresses.
-- It overlaps no other virtual address of either kind.
+- It overlaps no other virtual address of either kind. A block equal to another gets "Another virtual address already has this address."; an address inside a block, "This address is inside virtual address "<name>"."
+- It holds no host the declaration names, in either family: a segment's gateway, a DHCP range or static lease, a host in `management.allowedSources`; the messages are proxy ARP's, worded for a single address ("This address is a management source address."). A held address's local route would take their traffic, replies included, and a management source inside it would lock the operator out. Servers the declaration names (DNS and NTP servers, DNS upstreams, DHCP options) may be services on the firewall itself, so they bind only proxy ARP entries. This applies to single held addresses too.
+- It overlaps no `dhcp6` delegation pool ("This range overlaps a DHCPv6 prefix delegation pool."); the pool is refused too, at `/dhcp6/<i>/prefixDelegation/prefix` ("The pool holds a virtual address."). A static lease's prefix lies inside its pool, so the pool's check covers it.
 - `dns.virtualAddresses` may name only a single address: "The DNS service listens on single addresses; name one address, not a block."
 
 ## Realization
@@ -40,6 +42,8 @@ A /32 or /128 written with its length is stored bare, so each address has one fo
   - the virtual address sets of the filter, which take prefixes;
   - reflection's internal addresses;
   - port forward targets that the firewall holds, which may be any address inside a held block. Such a forward's rule goes to the input chain.
+- **A learned subnet:** validation cannot see what the firewall learns at run time. The renderer warns, `HELD_BLOCK_ON_LEARNED_SUBNET` at the block's `/address`, about a block overlapping a subnet on one of the firewall's interfaces (learned by DHCP or PPP) or a prefix delegated to a WAN; a learned gateway shows up only inside its learned subnet.
+- **IPv6 binding:** every address of an IPv6 block answers pings and port forwards, but Linux refuses to bind one address of an IPv6 local route (`EADDRNOTAVAIL`, kernel 6.12): a service there binds `::` or sets `IPV6_FREEBIND`. IPv4 binds one address of its block as usual.
 - **Deleting or narrowing:** as for a single address, a block that a port forward targets (an address inside it) cannot be deleted, nor changed so that the target falls outside it.
 
 ## API and UI
@@ -50,7 +54,7 @@ There are no new fields. `address` on `/api/v1/config/virtualAddresses` objects 
 
 - **Validation:** each refusal above, at its path. A /32 or /128 is stored bare. Existing declarations validate and render byte for byte as before.
 - **Render goldens:** `andaru-vip.network` with a `Type=local` route beside held addresses; the virtual address sets with a block; a port forward to an address inside a block, with its input rule.
-- **Namespace test:** the probe above, as a root integration test that CI runs: the neighbour reaches a service on an address of the block.
+- **Namespace test:** the probe above, as a root integration test that CI runs: the neighbour reaches a service on an address of the block, and pings an address of an IPv6 block. The test stands in for networkd: it applies the rendered routes with `ip route add local`. That networkd puts a `Type=local` route without `Table=` in the `local` table rests on `systemd.network(5)` and needs the lab.
 
 ## Calls made (author's, not the owner's)
 
