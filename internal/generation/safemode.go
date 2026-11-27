@@ -11,12 +11,12 @@ import (
 )
 
 const (
-	// SafeModeBootFile is written under /run at boot when one-boot safe mode or the kernel argument is active.
-	SafeModeBootFile = "/run/andaru/safe-mode"
+	// SafeModeBootFile is written under /run/andaru-boot at boot when one-boot safe mode or the kernel argument is active.
+	SafeModeBootFile = "/run/andaru-boot/safe-mode"
 	// SafeModeNextFile lives inside the state directory until the next boot consumes it into SafeModeBootFile.
 	SafeModeNextFile = "safe-mode-next"
 	// AddonsHeldFile is written fail-closed on every boot and removed once the engine verifies no upgrade hold is pending.
-	AddonsHeldFile = "/run/andaru/addons-held"
+	AddonsHeldFile = "/run/andaru-boot/addons-held"
 	// SafeModeKernelArg is the exact kernel command-line token that activates safe mode for one boot.
 	SafeModeKernelArg = "andaru.safe=1"
 )
@@ -66,8 +66,8 @@ func ScheduleSafeMode(stateDir string) error {
 
 func (r Realizer) applySafeModeOnBoot() {
 	runDir := filepath.Dir(r.Root + AddonsHeldFile)
-	// /run/andaru also holds root sockets (engine.sock, bus.sock) which require mode 0700.
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
+	// /run/andaru-boot holds boot-lifetime safe-mode markers outside andaru-engine's RuntimeDirectory.
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		slog.Error("create safe-mode runtime directory", "dir", runDir, "error", err)
 		return
 	}

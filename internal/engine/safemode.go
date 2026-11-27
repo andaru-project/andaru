@@ -16,7 +16,7 @@ const (
 	addonsHoldReleaseTimeout = 60 * time.Second
 )
 
-// addonsHold watches the fail-closed /run/andaru/addons-held flag and releases it through realize once the saved
+// addonsHold watches the fail-closed /run/andaru-boot/addons-held flag and releases it through realize once the saved
 // configuration has no pending upgrade decisions (at startup, after answering upgrade questions, or after restoring
 // a backup that clears them).
 type addonsHold struct {

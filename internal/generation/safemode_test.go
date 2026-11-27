@@ -20,13 +20,13 @@ func TestSafeModeBootConsumesNextFlagAndHoldsAddons(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !b.exists(SafeModeBootFile) {
-		t.Fatal("boot did not create /run/andaru/safe-mode")
+		t.Fatal("boot did not create /run/andaru-boot/safe-mode")
 	}
 	if !b.exists(AddonsHeldFile) {
-		t.Fatal("boot did not create /run/andaru/addons-held")
+		t.Fatal("boot did not create /run/andaru-boot/addons-held")
 	}
-	if fi, err := os.Stat(filepath.Dir(b.net.root + AddonsHeldFile)); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Fatalf("/run/andaru mode = %v, err = %v; want 0700", fi, err)
+	if fi, err := os.Stat(filepath.Dir(b.net.root + AddonsHeldFile)); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("/run/andaru-boot mode = %v, err = %v; want 0755", fi, err)
 	}
 	if _, err := os.Stat(filepath.Join(b.r.StateDir, SafeModeNextFile)); !os.IsNotExist(err) {
 		t.Fatalf("safe-mode-next was not removed after moving to /run: %v", err)
@@ -87,7 +87,7 @@ func TestSafeModeKernelArgExactTokenOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !b.exists(SafeModeBootFile) {
-		t.Fatal("kernel arg boot did not write /run/andaru/safe-mode")
+		t.Fatal("kernel arg boot did not write /run/andaru-boot/safe-mode")
 	}
 	if got := ReadSafeMode(b.net.root, b.r.StateDir); !got.Active || !slices.Equal(got.Reasons, []string{"kernelArg", "settingsHold"}) {
 		t.Fatalf("kernel arg reasons: %+v", got)

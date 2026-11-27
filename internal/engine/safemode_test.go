@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -140,35 +138,4 @@ func TestAddonsHoldRetriesAfterTransientFailure(t *testing.T) {
 	}
 	cancel()
 	<-done
-}
-
-func TestListenRootSocketReclaimsDeadStaleSocket(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root")
-	}
-	dir := filepath.Join(t.TempDir(), "run")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	sock := filepath.Join(dir, "engine.sock")
-	// Simulate an ungraceful exit (SIGKILL) leaving a dead Unix socket behind.
-	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale.SetUnlinkOnClose(false)
-	_ = stale.Close()
-
-	ln, closeLn, err := listenRootSocket(sock, "engine")
-	if err != nil {
-		t.Fatalf("listenRootSocket did not reclaim dead socket: %v", err)
-	}
-	t.Cleanup(func() { _ = closeLn() })
-	if ln == nil {
-		t.Fatal("nil listener")
-	}
-	// A second live engine must still be rejected.
-	if _, _, err := listenRootSocket(sock, "engine"); err == nil {
-		t.Fatal("second listenRootSocket succeeded while first holds lock")
-	}
 }

@@ -193,7 +193,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     if (upgradeError && read) refreshUpgrade();
   }, [read, upgradeError, refreshUpgrade]);
   const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
-  // Once upgrade decisions are confirmed clear, addons-release-hold removes /run/andaru/addons-held
+  // Once upgrade decisions are confirmed clear, addons-release-hold removes /run/andaru-boot/addons-held
   // asynchronously; refresh system status promptly until settingsHold disappears.
   const waitingHoldRelease = upgrade.data !== undefined && upgrade.data.questions.length === 0
     && (system.data?.info.safeMode?.reasons.includes('settingsHold') ?? false);
