@@ -795,6 +795,16 @@ func TestProxyNDPValidation(t *testing.T) {
 		item(d["virtualAddresses"].([]any), 2)["hostSegment"] = item(segmentsOf(d), 0)["id"]
 		refusedWith(t, d, "/virtualAddresses/2/hostSegment", "Only a proxy NDP entry names a host segment.")
 	})
+	// The original fixture's WAN is on a PPPoE link: as the host segment it is refused.
+	t.Run("a PPPoE host segment", func(t *testing.T) {
+		d := vipFixture(t)
+		item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"2001:db8:1::2/64"}}
+		item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"fd00:9::1/64"}}
+		d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": vipP, "name": "host", "kind": "proxyNdp",
+			"segment": item(segmentsOf(d), 1)["id"], "hostSegment": item(segmentsOf(d), 0)["id"], "address": "2001:db8:1::50"})
+		refusedWith(t, d, "/virtualAddresses/2/hostSegment", "Expected a segment on an Ethernet, VLAN, bridge or bond link")
+	})
+
 }
 
 // A batch can name the segments it creates in a proxy NDP entry by label.

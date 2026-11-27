@@ -362,6 +362,9 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken
 		bad(p+"/hostSegment", "Expected an existing segment.")
 	case v.HostSegment == v.Segment:
 		bad(p+"/hostSegment", "Expected a segment other than the one the firewall answers on.")
+	case slices.ContainsFunc(d.Links, func(l link) bool { return l.ID == d.Segments[host].Link && l.Kind == "pppoe" }):
+		// PPPoE links are not networkd's, so the host route would not be rendered; and a PPP peer is the provider.
+		bad(p+"/hostSegment", "Expected a segment on an Ethernet, VLAN, bridge or bond link: the host is on an inside link, not a PPPoE one.")
 	case d.Segments[host].Addressing.IPv6.Mode != "static" && d.Segments[host].Addressing.IPv6.Mode != "delegated":
 		// SLAAC and DHCPv6 segments face upstream: the firewall sends no router advertisements there.
 		bad(p+"/hostSegment", "Expected an inside segment with static or delegated IPv6: the host routes back by the firewall's link-local address, which the firewall's router advertisements there give it.")
