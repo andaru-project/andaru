@@ -1,6 +1,6 @@
 # The event bus
 
-Status: steps 1 and 2 built, 2026-11-23, for [#154](https://github.com/andaru-project/andaru/issues/154). The owner's decisions are under "Owner decisions".
+Status: steps 1 to 4 built, the add-on socket excepted, for [#154](https://github.com/andaru-project/andaru/issues/154). The owner's decisions are under "Owner decisions".
 
 The bus was first built on MQTT, with the mochi-mqtt broker embedded in the engine and a SQLite storage hook. The reviews of that build found about twenty ways a durable subscriber could lose events without being told (#165, #167). Nearly all came from the seam between the broker's sessions in memory and their copy in SQLite, and some needed a fork of mochi to close. The owner then chose a bus of Andaru's own, on 2026-11-23: a log in SQLite with cursors, which has no second copy of anything to keep in step.
 
@@ -144,8 +144,8 @@ A browser does not connect to the bus.
 
 ## What comes next
 
-3. **Notifications** ([#116](https://github.com/andaru-project/andaru/issues/116), [design](2026-11-23-notifications-design.md)): the notification subsystem as the first durable consumer.
-4. **The socket for unprivileged services** (done in #173), and later one for add-ons, with the grants from add-on manifests.
+3. **Notifications** ([#116](https://github.com/andaru-project/andaru/issues/116), [design](2026-11-23-notifications-design.md)): the notification subsystem as the first durable consumer (built).
+4. **The socket for unprivileged services** (built in #173). A socket for add-ons, with the grants from add-on manifests, comes with the add-on model.
 
 ## Risks
 

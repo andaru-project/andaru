@@ -1,6 +1,6 @@
 # Notifications
 
-Status: proposed, 2026-11-23, for [#116](https://github.com/andaru-project/andaru/issues/116). It builds on the event bus ([design](2026-11-23-event-bus-design.md), #154, #164): a SQLite log with durable consumers that read from a cursor and are told of gaps. The owner's decisions are under "Owner decisions"; the rest is proposed.
+Status: built, 2026-11-27, for [#116](https://github.com/andaru-project/andaru/issues/116). It builds on the event bus ([design](2026-11-23-event-bus-design.md), #154, #164): a SQLite log with durable consumers that read from a cursor and are told of gaps. The owner's decisions are under "Owner decisions".
 
 ## The problem
 
