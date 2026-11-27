@@ -31,8 +31,9 @@ LABEL org.opencontainers.image.title="Andaru" \
       org.opencontainers.image.source="https://github.com/andaru-project/andaru"
 
 # Add Andaru's services, Fedora's firewall packages and traceroute (the base has ping but not traceroute, which the
-# fleet's diagnostics run on the box) and ethtool, which reads and sets device offloads; drop Docker, whose own firewall
-# rules Andaru cannot own.
+# fleet's diagnostics run on the box), ethtool, which reads and sets device offloads, and man-db for Andaru's man pages
+# (man only: the whatis index goes with /var/cache below, so apropos finds no page on the box); drop Docker, whose own
+# firewall rules Andaru cannot own.
 # /run and /tmp are tmpfs here: since Fedora 45, the transaction runs systemd-tmpfiles --create, which fills them.
 # systemd and the boot stack stay at the base's versions: Fedora CoreOS removes or patches their files when composing
 # the base (fedora-coreos-config's manifests), and an upgrade would undo that, as systemd-gpt-auto-generator's return
@@ -40,7 +41,7 @@ LABEL org.opencontainers.image.title="Andaru" \
 # stays too: its os-release carries the Fedora CoreOS build and stream (OSTREE_VERSION, RELEASE_TYPE) the ISO build reads.
 RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
     dnf -y versionlock add $(rpm -qa --qf '%{NAME}\n' | grep -E '^(systemd|grub2|shim|dracut|kernel|fedora-release)') && \
-    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent traceroute ethtool && \
+    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent traceroute ethtool man-db && \
     dnf -y remove moby-engine containerd && \
     dnf clean all && \
     rm /etc/dnf/versionlock.toml && \
@@ -52,6 +53,7 @@ RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
 
 COPY --from=go /out/andaru /out/andaru-web /usr/bin/
 COPY --from=web /src/web/dist/ /usr/share/andaru/web/
+COPY packaging/man/ /usr/share/man/man8/
 COPY packaging/systemd/andaru-*.service packaging/systemd/andaru-*.path packaging/systemd/andaru-*.timer /usr/lib/systemd/system/
 COPY packaging/systemd/kea-dhcp4.service.d/ /usr/lib/systemd/system/kea-dhcp4.service.d/
 COPY packaging/systemd/kea-dhcp6.service.d/ /usr/lib/systemd/system/kea-dhcp6.service.d/
