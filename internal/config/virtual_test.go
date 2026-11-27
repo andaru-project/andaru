@@ -729,6 +729,10 @@ func TestProxyNDPValidation(t *testing.T) {
 			d["virtualAddresses"] = append(vips(d), map[string]any{"id": vipQ, "name": "twin", "kind": "proxyNdp", "segment": item(vips(d), 2)["segment"], "hostSegment": item(vips(d), 2)["hostSegment"], "address": "2001:db8:1::50"})
 		}, "/virtualAddresses/3/address", `This address overlaps virtual address \"host\".`}, // quoted as the JSON-encoded error shows it
 		"a held address": {func(d map[string]any) { item(vips(d), 1)["address"] = "2001:db8:1::50" }, p + "/address", `This address overlaps virtual address \"dns6\".`},
+		"a held address after it": {func(d map[string]any) {
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+			d["virtualAddresses"] = append(vips(d), map[string]any{"id": vipQ, "name": "late", "address": "2001:db8:1::50"})
+		}, p + "/address", `This address overlaps virtual address \"late\".`},
 		"a held block": {func(d map[string]any) {
 			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
 			item(vips(d), 1)["address"] = "2001:db8:1::/64"

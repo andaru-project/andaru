@@ -155,7 +155,9 @@ func TestProxyNDPOffSubnet(t *testing.T) {
 		{Family: "ipv6", Address: "fe80::1", PrefixLength: 64, Scope: "link"},
 		{Family: "ipv6", Address: "2001:db8:1::2", PrefixLength: 64, Scope: "global"},
 	}
-	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || findingAt(r, "PROXY_NDP_OFF_SUBNET", two) {
+	// Nor is it a held address on a learned subnet: the firewall does not hold it.
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || findingAt(r, "PROXY_NDP_OFF_SUBNET", two) ||
+		findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", one) || findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", two) {
 		t.Fatalf("on the learned subnet, yet %+v", r.Findings)
 	}
 }
