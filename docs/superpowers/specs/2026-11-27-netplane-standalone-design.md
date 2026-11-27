@@ -6,7 +6,9 @@ Part of [#172](https://github.com/andaru-project/andaru/issues/172), the last sl
 
 Not implemented behaviour until the slice lands. Contracts remain provisional until Andaru 1.0.
 
-## Where it stands
+## The starting point
+
+Before this slice:
 
 - **`cmd/netplane serve`** serves the fleet API (`/api/v1/...`), the poller, the event stream and the drivers from `internal/netplane`. It also serves the single-page app, built by `npm run build:netplane` into `web/dist-netplane` and embedded with `-tags embedui`.
 - **The standalone app has a shell of its own** (`web/src/netplane/Shell.tsx`). It differs from Andaru's in layout, header and navigation, its routes sit at the root (`/topology`), and it asks for the API token with `window.prompt`.
@@ -35,7 +37,12 @@ The shared frame is factored out of `Shell.tsx`, and Andaru's and Netplane's she
 | Account menu | session, password, appearance, time zone, sign out | appearance, time zone; sign out when signed in with a token |
 
 - **Routes** follow Andaru's: `/network/topology`, `/network/devices/:id` and the rest, with the Overview at `/`. A link copied from one product works in the other. The fleet screens render through `FleetWorkspace` in both, with the API prefix each product serves.
-- **Signing in.** A server started with a token asks for it on a sign-in page in the style of Andaru's (`LoginScreen`), not with `window.prompt`. The token is kept in the same `SameSite=Strict` cookie, which the event stream needs. Sign out clears it. A server without a token (loopback only, or `--allow-unauthenticated`) shows no sign-in and no sign out.
+- **Old paths.** The standalone app's former root paths (`/topology`, `/vlans`, `/vlans/flow`, `/devices`, `/devices/:id`, `/clients`, `/diagnostics`) redirect to their `/network/...` paths, keeping the query. Andaru has no such redirects.
+- **Signing in.** A server started with a token asks for it on a sign-in page in the style of Andaru's (`LoginScreen`, sharing its card), not with `window.prompt`. The token is kept in the same `SameSite=Strict` cookie, which the event stream needs, scoped to the app's base path and `Secure` on HTTPS. Sign out clears it. A server without a token (loopback only, or `--allow-unauthenticated`) shows no sign-in and no sign out.
+  - The app checks access on start (`GET api/v1/diagnostics?limit=1`, with the read timeout). Only a 401 asks for the token; any other answer counts as access, and an unreachable server opens the shell with its connection badge showing the loss.
+  - The token is trimmed before it is stored. A token the server refuses, or that could not be checked because the server was unreachable ("Could not reach the Netplane server."), is not kept.
+  - When the start-up check passes with a cookie present, the app checks once more without credentials. If that passes too, the server needs no token: the cookie is cleared and no sign out is shown. This also covers a cookie at a parent path, which signing out could not clear.
+  - A 401 later in the session clears the cookie and returns to sign-in, saying the stored token is no longer accepted, or, when none was stored, that the server requires one. A 401 to a request sent before the latest sign-in, or with another token than the one now stored (another tab signed in), is ignored.
 - **Targets** (the devices Netplane polls) stay in the YAML configuration, as today. Editing them in the interface is a later slice.
 
 ## The container
