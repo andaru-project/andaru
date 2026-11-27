@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/audit"
@@ -108,7 +110,7 @@ func managementOrigins(configured []string) (map[string]struct{}, map[string]str
 	hosts := make(map[string]struct{}, len(configured))
 	for _, raw := range configured {
 		parsed, err := url.Parse(raw)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != raw {
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != raw {
 			return nil, nil, errors.New("management origins must be exact HTTPS origins without paths, queries, fragments, or credentials")
 		}
 		if _, duplicate := origins[raw]; duplicate {
@@ -138,7 +140,7 @@ func reconcileManagementOrigins(ctx context.Context, stateDir string, identities
 	needRevoke := false
 	needWrite := false
 
-	raw, readErr := os.ReadFile(path)
+	raw, readErr := readFileNoFollow(path, 64<<10)
 	if errors.Is(readErr, fs.ErrNotExist) {
 		needWrite = true
 	} else if readErr != nil {
@@ -177,36 +179,20 @@ func reconcileManagementOrigins(ctx context.Context, stateDir string, identities
 		if mErr != nil {
 			return revoked, mErr
 		}
-		tmp, cErr := os.CreateTemp(stateDir, managementOriginsFile+".tmp-*")
-		if cErr != nil {
-			return revoked, cErr
-		}
-		tmpPath := tmp.Name()
-		if _, wErr := tmp.Write(data); wErr != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmpPath)
+		if wErr := writeFileAtomic(path, data, 0o600); wErr != nil {
 			return revoked, wErr
-		}
-		if cErr := tmp.Chmod(0o600); cErr != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmpPath)
-			return revoked, cErr
-		}
-		if sErr := tmp.Sync(); sErr != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmpPath)
-			return revoked, sErr
-		}
-		if clErr := tmp.Close(); clErr != nil {
-			_ = os.Remove(tmpPath)
-			return revoked, clErr
-		}
-		if rErr := os.Rename(tmpPath, path); rErr != nil {
-			_ = os.Remove(tmpPath)
-			return revoked, rErr
 		}
 	}
 	return revoked, nil
+}
+
+func readFileNoFollow(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, maxBytes))
 }
 
 func (h *webAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {

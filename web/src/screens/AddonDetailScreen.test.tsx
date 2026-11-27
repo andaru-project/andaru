@@ -23,7 +23,7 @@ function makeDetail(overrides: Partial<AddonDetailResponse> = {}): AddonDetailRe
     installed: true,
     hasWebUI: true,
     unreviewedBusCount: 1,
-    staged: { present: true, digest: sampleDigest },
+    staged: { present: true, staging: false, digest: sampleDigest },
     runtime: { applied: true, activeState: 'active', subState: 'running', health: 'healthy', appliedImage: sampleDigest, updateAvailable: false },
     safeMode: { active: false, reasons: [] },
     saved: {
@@ -195,7 +195,7 @@ it('renders all declarative property types, aria-describedby markdown, write-onl
   });
 });
 
-it('suppresses WebUI link on server multi-origin conflict or window.location.hostname match', async () => {
+it('suppresses WebUI link on server multi-origin conflict', async () => {
   const conflictDetail = makeDetail({
     webui: {
       title: 'Sample Admin',
@@ -231,6 +231,96 @@ it('suppresses WebUI link on server multi-origin conflict or window.location.hos
 
   expect(await screen.findByText('Separate origin required')).toBeInTheDocument();
   expect(screen.queryByRole('link', { name: /Open Sample Admin/ })).not.toBeInTheDocument();
+});
+
+it('suppresses WebUI link client-side when URL hostname matches window.location.hostname', async () => {
+  const sameHostDetail = makeDetail({
+    webui: {
+      title: 'Sample Admin',
+      path: '/app',
+      hostname: window.location.hostname,
+      url: `https://${window.location.hostname}:8443/app`,
+      originConflict: false,
+    },
+  });
+
+  fetchRoutes({
+    '/api/v1/addons/sample': sameHostDetail,
+    '/api/v1/addons/sample/logs/runtime?lines=200': { name: 'runtime', format: 'text', lines: [], truncated: false },
+  });
+
+  render(
+    <MemoryRouter initialEntries={['/system/addons/sample']}>
+      <Routes>
+        <Route
+          path="/system/addons/:slug"
+          element={
+            <AddonDetailScreen
+              api={new ApiClient('csrf-tok')}
+              session={session(['addons.read'])}
+              onSaved={() => {}}
+              onSessionLost={noopSessionLost}
+            />
+          }
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText('Separate origin required')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /Open Sample Admin/ })).not.toBeInTheDocument();
+});
+
+it('sends expectedVersion "0" for unconfigured secrets and invokes onSessionLost on 401 save', async () => {
+  const freshDetail = makeDetail({ installed: false, saved: undefined });
+  const createBodies: unknown[] = [];
+  const onSessionLost = vi.fn();
+
+  fetchRoutes({
+    '/api/v1/addons/sample': freshDetail,
+    '/api/v1/config/zones': {
+      items: [{ value: { id: 'zone-lan', name: 'LAN', inputDefault: 'drop', forwardDefault: 'drop' }, version: '1' }],
+    },
+    '/api/v1/addons/sample/logs/runtime?lines=200': { name: 'runtime', format: 'text', lines: [], truncated: false },
+    'POST /api/v1/config/addons': (init) => {
+      createBodies.push(JSON.parse(String(init?.body ?? '{}')));
+      return new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Session expired.' } }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+
+  render(
+    <MemoryRouter initialEntries={['/system/addons/sample']}>
+      <Routes>
+        <Route
+          path="/system/addons/:slug"
+          element={
+            <AddonDetailScreen
+              api={new ApiClient('csrf-tok')}
+              session={session(['addons.read', 'configuration.read', 'configuration.write'])}
+              onSaved={() => {}}
+              onSessionLost={onSessionLost}
+            />
+          }
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  const secretInput = await screen.findByLabelText('Auth Key');
+  await userEvent.type(secretInput, 'brand-new-secret');
+  await userEvent.click(screen.getByRole('button', { name: 'Install and save' }));
+
+  expect(createBodies).toHaveLength(1);
+  expect(createBodies[0]).toMatchObject({
+    id: 'org.andaru.sample',
+    settings: {
+      authKey: { secret: 'authKey', set: 'brand-new-secret', expectedVersion: '0' },
+    },
+  });
+  expect(onSessionLost).toHaveBeenCalledTimes(1);
 });
 
 it('allows addons.read-only users to view detail and logs with zero /api/v1/config calls', async () => {

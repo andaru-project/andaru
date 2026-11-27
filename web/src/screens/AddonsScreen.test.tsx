@@ -33,7 +33,7 @@ const listFixture: AddonListResponse = {
       installed: false,
       hasWebUI: false,
       unreviewedBusCount: 0,
-      staged: { present: false, digest: sampleDigest },
+      staged: { present: false, staging: false, digest: sampleDigest },
       runtime: { applied: false, activeState: 'not-applied', health: 'none', updateAvailable: false },
     },
     {
@@ -47,7 +47,7 @@ const listFixture: AddonListResponse = {
       installed: true,
       hasWebUI: true,
       unreviewedBusCount: 2,
-      staged: { present: false, digest: newDigest },
+      staged: { present: false, staging: false, digest: newDigest },
       runtime: { applied: true, activeState: 'active', health: 'healthy', appliedImage: oldDigest, updateAvailable: true },
       saved: { id: 'org.andaru.sample', enabled: true },
     },
@@ -63,8 +63,8 @@ it('stages image and navigates on Install, and confirms Uninstall with optimisti
     '/api/v1/addons': listFixture,
     'POST /api/v1/addons/tailscale/stage': (init) => {
       stageCalls.push(new Headers(init?.headers).get('X-Andaru-CSRF') ?? '');
-      return new Response(JSON.stringify({ present: true, digest: sampleDigest }), {
-        status: 200,
+      return new Response(JSON.stringify({ present: false, staging: true, digest: sampleDigest }), {
+        status: 202,
         headers: { 'Content-Type': 'application/json' },
       });
     },

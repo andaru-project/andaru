@@ -6,7 +6,6 @@ import {
   Card,
   Divider,
   Group,
-  Modal,
   Select,
   Stack,
   Switch,
@@ -19,14 +18,17 @@ import { AddonMarkdown } from '../addonMarkdown';
 import {
   addonText,
   buildSettingsPayload,
+  healthBadgeColor,
+  healthLabel,
   initialPropertyDraft,
   normalizeHostname,
   safeExternalHttpUrl,
   type AddonPropertyDraft,
 } from '../addons';
-import { ApiClient, fieldErrors, reportError, saveFailure } from '../api';
+import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
 import { formatSafeModeReasons } from './SystemWidget';
 import { AddonPropertyForm } from './AddonPropertyForm';
+import { UninstallAddonModal } from './UninstallAddonModal';
 import type {
   AddonBusGrantDecision,
   AddonDetailResponse,
@@ -37,7 +39,7 @@ import type {
   Session,
   Zone,
 } from '../types';
-import { useResource } from '../useResource';
+import { useResource, useVisiblePoll } from '../useResource';
 import { Loaded } from './Loaded';
 
 interface AddonDetailScreenProps {
@@ -53,16 +55,6 @@ interface LoadedAddonDetail {
   zones: Zone[];
 }
 
-const healthBadgeColor: Record<string, string> = {
-  healthy: 'green',
-  starting: 'blue',
-  stopped: 'gray',
-  held: 'orange',
-  unhealthy: 'red',
-  none: 'gray',
-  unknown: 'gray',
-};
-
 const busGrantOptions = [
   { value: 'unreviewed', label: 'Unreviewed (denied)' },
   { value: 'granted', label: 'Granted' },
@@ -74,6 +66,12 @@ const logLineOptions = [
   { value: '200', label: '200 lines' },
   { value: '500', label: '500 lines' },
   { value: '1000', label: '1000 lines' },
+];
+
+const lifecycleActions: Array<{ action: 'start' | 'stop' | 'restart'; label: string }> = [
+  { action: 'start', label: 'Start' },
+  { action: 'stop', label: 'Stop' },
+  { action: 'restart', label: 'Restart' },
 ];
 
 export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: AddonDetailScreenProps) {
@@ -104,6 +102,8 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
   const detail = loaded?.detail;
   const manifest = detail?.manifest;
 
+  useVisiblePoll(resource.refresh, 2_000, Boolean(detail?.staged.staging));
+
   const [enabled, setEnabled] = useState(true);
   const [propDraft, setPropDraft] = useState<AddonPropertyDraft>(() => initialPropertyDraft([], undefined));
   const [ifaceZones, setIfaceZones] = useState<Record<string, string>>({});
@@ -124,6 +124,16 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
 
   const [selectedLog, setSelectedLog] = useState('');
   const [logLinesCount, setLogLinesCount] = useState('200');
+  const [seenSlug, setSeenSlug] = useState(slug);
+  if (seenSlug !== slug) {
+    setSeenSlug(slug);
+    setSelectedLog('');
+    setSaveNotice('');
+    setSaveError('');
+    setLifecycleError('');
+    setLifecycleNotice('');
+    setPropErrors(new Map());
+  }
 
   const initializedKey = useRef('');
   useEffect(() => {
@@ -169,43 +179,13 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
   );
   const logsResource = useResource(loadLogs, onSessionLost);
 
-  async function runStage() {
+  async function runLifecycle(key: string, fn: () => Promise<unknown>, notice: string) {
     setLifecycleError('');
     setLifecycleNotice('');
-    setLifecycleBusy('stage');
+    setLifecycleBusy(key);
     try {
-      await api.stageAddon(slug);
-      setLifecycleNotice('Container image pulled and digest verified.');
-      await resource.reload();
-    } catch (err) {
-      reportError(err, onSessionLost, setLifecycleError);
-    } finally {
-      setLifecycleBusy(null);
-    }
-  }
-
-  async function runUnstage() {
-    setLifecycleError('');
-    setLifecycleNotice('');
-    setLifecycleBusy('unstage');
-    try {
-      await api.unstageAddon(slug);
-      setLifecycleNotice('Staged container image removed.');
-      await resource.reload();
-    } catch (err) {
-      reportError(err, onSessionLost, setLifecycleError);
-    } finally {
-      setLifecycleBusy(null);
-    }
-  }
-
-  async function runControl(action: 'start' | 'stop' | 'restart') {
-    setLifecycleError('');
-    setLifecycleNotice('');
-    setLifecycleBusy(action);
-    try {
-      await api.controlAddon(slug, action);
-      setLifecycleNotice(`Add-on ${action} completed.`);
+      await fn();
+      setLifecycleNotice(notice);
       await resource.reload();
     } catch (err) {
       reportError(err, onSessionLost, setLifecycleError);
@@ -217,12 +197,18 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
   async function handleSave(event: FormEvent) {
     event.preventDefault();
     if (!detail || !manifest || !canWriteConfig) return;
-    setSaving(true);
     setSaveError('');
     setSaveNotice('');
-    setPropErrors(new Map());
 
-    const settings = buildSettingsPayload(manifest.properties, propDraft);
+    const { settings, clientErrors } = buildSettingsPayload(manifest.properties, propDraft);
+    if (clientErrors.size > 0) {
+      setPropErrors(clientErrors);
+      setSaveError('Some of the fields below need attention.');
+      return;
+    }
+
+    setSaving(true);
+    setPropErrors(new Map());
 
     const interfaces: AddonSavedInterface[] = [];
     for (const spec of manifest.interfaces ?? []) {
@@ -268,12 +254,20 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
       onSaved();
       await resource.reload();
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionLost();
+        return;
+      }
       const mapped = fieldErrors(err, (path) => {
         const match = /^\/(?:addons\/\d+\/)?settings\/([^/]+)/.exec(path);
         return match ? match[1] : '';
       });
       setPropErrors(mapped);
-      setSaveError(saveFailure(err, mapped, 'add-on'));
+      if (err instanceof ApiError && err.status === 412) {
+        setSaveError('This add-on was changed by someone else while it was open here. Refresh this page to load the latest saved settings, then make your change again.');
+      } else {
+        setSaveError(saveFailure(err, mapped, 'add-on'));
+      }
     } finally {
       setSaving(false);
     }
@@ -292,6 +286,7 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
       onSaved();
       await resource.reload();
     } catch (err) {
+      setUninstallOpen(false);
       reportError(err, onSessionLost, setSaveError);
     } finally {
       setUninstalling(false);
@@ -301,49 +296,41 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
   const webuiState = useMemo(() => {
     const webui = detail?.webui;
     if (!webui) return null;
+    const title = addonText(webui.title) || 'Web interface';
     if (webui.originConflict) {
       return {
         suppressed: true,
         reason: webui.conflictReason || 'The configured add-on web interface hostname matches an Andaru management origin. Configure a separate hostname to open it.',
-        title: addonText(webui.title) || 'Web interface',
+        title,
         url: null,
       };
     }
     const safeUrl = webui.url ? safeExternalHttpUrl(webui.url) : null;
     if (!safeUrl) {
+      return { suppressed: false, reason: '', title, url: null };
+    }
+    const targetHost = normalizeHostname(new URL(safeUrl).hostname);
+    const currentHost = normalizeHostname(window.location.hostname);
+    if (targetHost && currentHost && targetHost === currentHost) {
       return {
-        suppressed: false,
-        reason: '',
-        title: addonText(webui.title) || 'Web interface',
+        suppressed: true,
+        reason: 'This add-on web interface shares the current Andaru management hostname and has been suppressed for browser origin isolation.',
+        title,
         url: null,
       };
     }
-    try {
-      const targetHost = normalizeHostname(new URL(safeUrl).hostname);
-      const currentHost = normalizeHostname(window.location.hostname);
-      if (targetHost && currentHost && targetHost === currentHost) {
-        return {
-          suppressed: true,
-          reason: 'This add-on web interface shares the current Andaru management hostname and has been suppressed for browser origin isolation.',
-          title: addonText(webui.title) || 'Web interface',
-          url: null,
-        };
-      }
-    } catch {
-      return null;
-    }
-    return {
-      suppressed: false,
-      reason: '',
-      title: addonText(webui.title) || 'Web interface',
-      url: safeUrl,
-    };
+    return { suppressed: false, reason: '', title, url: safeUrl };
   }, [detail?.webui]);
 
   const zoneOptions = useMemo(
     () => (loaded?.zones ?? []).map((z) => ({ value: z.id, label: z.name })),
     [loaded?.zones],
   );
+
+  const busSections = [
+    { key: 'pub', label: 'Publish', color: 'blue', specs: manifest?.bus?.publish ?? [], grants: pubGrants, setGrants: setPubGrants },
+    { key: 'sub', label: 'Subscribe', color: 'grape', specs: manifest?.bus?.subscribe ?? [], grants: subGrants, setGrants: setSubGrants },
+  ];
 
   return (
     <Stack>
@@ -384,13 +371,13 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                   <Title order={3} size="h4">Runtime &amp; image</Title>
                   <Group gap="xs" wrap="wrap">
                     <Badge color={healthBadgeColor[detail.runtime.health] ?? 'gray'} variant="light">
-                      {detail.runtime.health}
+                      {healthLabel(detail.runtime.health)}
                     </Badge>
                     <Badge color="gray" variant="outline">
                       unit: {detail.runtime.activeState}{detail.runtime.subState ? ` (${detail.runtime.subState})` : ''}
                     </Badge>
-                    <Badge color={detail.staged.present ? 'teal' : 'gray'} variant="dot">
-                      {detail.staged.present ? 'Image staged' : 'Image not staged'}
+                    <Badge color={detail.staged.staging ? 'blue' : detail.staged.present ? 'teal' : 'gray'} variant="dot">
+                      {detail.staged.staging ? 'Staging image…' : detail.staged.present ? 'Image staged' : 'Image not staged'}
                     </Badge>
                     {detail.runtime.updateAvailable && (
                       <Badge color="yellow" variant="filled">Update available</Badge>
@@ -407,6 +394,10 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                   </Text>
                 )}
 
+                {detail.staged.error && (
+                  <Alert color="red" role="alert" title="Image staging error">{detail.staged.error}</Alert>
+                )}
+
                 {detail.runtime.updateAvailable && (
                   <Alert color="yellow" role="status" title="Newer image available in catalog">
                     Stage the new catalog digest and apply configuration changes in <Anchor component={Link} to="/changes">Review and apply</Anchor> to update this add-on.
@@ -419,42 +410,38 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                 {canManage && (
                   <Group gap="xs" wrap="wrap">
                     {!detail.staged.present && (
-                      <Button size="xs" loading={lifecycleBusy === 'stage'} onClick={() => void runStage()}>
-                        Stage image
+                      <Button
+                        size="xs"
+                        loading={lifecycleBusy === 'stage' || detail.staged.staging}
+                        disabled={lifecycleBusy !== null || detail.staged.staging}
+                        onClick={() => void runLifecycle('stage', () => api.stageAddon(slug), 'Image staging started.')}
+                      >
+                        {detail.staged.staging ? 'Staging image…' : 'Stage image'}
                       </Button>
                     )}
-                    {!detail.installed && !detail.runtime.applied && detail.staged.present && (
-                      <Button size="xs" variant="default" loading={lifecycleBusy === 'unstage'} onClick={() => void runUnstage()}>
+                    {!detail.installed && !detail.runtime.applied && detail.staged.present && !detail.staged.staging && (
+                      <Button
+                        size="xs"
+                        variant="default"
+                        loading={lifecycleBusy === 'unstage'}
+                        disabled={lifecycleBusy !== null}
+                        onClick={() => void runLifecycle('unstage', () => api.unstageAddon(slug), 'Staged container image removed.')}
+                      >
                         Unstage image
                       </Button>
                     )}
-                    <Button
-                      size="xs"
-                      variant="default"
-                      loading={lifecycleBusy === 'start'}
-                      disabled={!detail.runtime.applied || detail.safeMode.active || lifecycleBusy !== null}
-                      onClick={() => void runControl('start')}
-                    >
-                      Start
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="default"
-                      loading={lifecycleBusy === 'stop'}
-                      disabled={!detail.runtime.applied || detail.safeMode.active || lifecycleBusy !== null}
-                      onClick={() => void runControl('stop')}
-                    >
-                      Stop
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="default"
-                      loading={lifecycleBusy === 'restart'}
-                      disabled={!detail.runtime.applied || detail.safeMode.active || lifecycleBusy !== null}
-                      onClick={() => void runControl('restart')}
-                    >
-                      Restart
-                    </Button>
+                    {lifecycleActions.map(({ action, label }) => (
+                      <Button
+                        key={action}
+                        size="xs"
+                        variant="default"
+                        loading={lifecycleBusy === action}
+                        disabled={!detail.runtime.applied || detail.safeMode.active || lifecycleBusy !== null}
+                        onClick={() => void runLifecycle(action, () => api.controlAddon(slug, action), `Add-on ${action} completed.`)}
+                      >
+                        {label}
+                      </Button>
+                    ))}
                   </Group>
                 )}
               </Stack>
@@ -501,7 +488,7 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                       )}
                     </Group>
 
-                    {!detail.staged.present && !detail.installed && (
+                    {!detail.staged.present && !detail.staged.staging && !detail.installed && (
                       <Alert color="blue" role="status" title="Image not yet staged">
                         Stage the pinned container image before applying so image download completes outside the apply rollback window.
                       </Alert>
@@ -559,70 +546,43 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                       </>
                     )}
 
-                    {manifest.bus && ((manifest.bus.publish?.length ?? 0) > 0 || (manifest.bus.subscribe?.length ?? 0) > 0) && (
+                    {busSections.some((s) => s.specs.length > 0) && (
                       <>
                         <Divider label="Event bus permissions" labelPosition="left" />
                         <Text size="xs" c="dimmed">
                           Unreviewed topics are denied by default. Grant or deny each requested topic explicitly.
                         </Text>
                         <Stack gap="sm">
-                          {(manifest.bus.publish ?? []).map((spec) => {
-                            const decision = pubGrants[spec.topic] ?? 'unreviewed';
-                            return (
-                              <Card key={`pub:${spec.topic}`} withBorder padding="sm">
-                                <Stack gap={6}>
-                                  <Group justify="space-between" align="center" wrap="wrap" gap="xs">
-                                    <Group gap="xs" wrap="wrap">
-                                      <Badge size="xs" color="blue" variant="light">Publish</Badge>
-                                      <Text size="sm" fw={600}>{addonText(spec.title) || spec.topic}</Text>
-                                      <Text size="xs" c="dimmed" className="tabular">{spec.topic}</Text>
+                          {busSections.flatMap((section) =>
+                            section.specs.map((spec) => {
+                              const decision = section.grants[spec.topic] ?? 'unreviewed';
+                              return (
+                                <Card key={`${section.key}:${spec.topic}`} withBorder padding="sm">
+                                  <Stack gap={6}>
+                                    <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+                                      <Group gap="xs" wrap="wrap">
+                                        <Badge size="xs" color={section.color} variant="light">{section.label}</Badge>
+                                        <Text size="sm" fw={600}>{addonText(spec.title) || spec.topic}</Text>
+                                        <Text size="xs" c="dimmed" className="tabular">{spec.topic}</Text>
+                                      </Group>
+                                      {decision === 'unreviewed' && (
+                                        <Badge size="xs" color="orange" variant="light">Needs review</Badge>
+                                      )}
                                     </Group>
-                                    {decision === 'unreviewed' && (
-                                      <Badge size="xs" color="orange" variant="light">Needs review</Badge>
-                                    )}
-                                  </Group>
-                                  {spec.description && <AddonMarkdown source={spec.description} />}
-                                  <Select
-                                    aria-label={`Publish permission for ${spec.topic}`}
-                                    disabled={!canWriteConfig}
-                                    data={busGrantOptions}
-                                    value={decision}
-                                    allowDeselect={false}
-                                    onChange={(val) => setPubGrants((prev) => ({ ...prev, [spec.topic]: val ?? 'unreviewed' }))}
-                                  />
-                                </Stack>
-                              </Card>
-                            );
-                          })}
-
-                          {(manifest.bus.subscribe ?? []).map((spec) => {
-                            const decision = subGrants[spec.topic] ?? 'unreviewed';
-                            return (
-                              <Card key={`sub:${spec.topic}`} withBorder padding="sm">
-                                <Stack gap={6}>
-                                  <Group justify="space-between" align="center" wrap="wrap" gap="xs">
-                                    <Group gap="xs" wrap="wrap">
-                                      <Badge size="xs" color="grape" variant="light">Subscribe</Badge>
-                                      <Text size="sm" fw={600}>{addonText(spec.title) || spec.topic}</Text>
-                                      <Text size="xs" c="dimmed" className="tabular">{spec.topic}</Text>
-                                    </Group>
-                                    {decision === 'unreviewed' && (
-                                      <Badge size="xs" color="orange" variant="light">Needs review</Badge>
-                                    )}
-                                  </Group>
-                                  {spec.description && <AddonMarkdown source={spec.description} />}
-                                  <Select
-                                    aria-label={`Subscribe permission for ${spec.topic}`}
-                                    disabled={!canWriteConfig}
-                                    data={busGrantOptions}
-                                    value={decision}
-                                    allowDeselect={false}
-                                    onChange={(val) => setSubGrants((prev) => ({ ...prev, [spec.topic]: val ?? 'unreviewed' }))}
-                                  />
-                                </Stack>
-                              </Card>
-                            );
-                          })}
+                                    {spec.description && <AddonMarkdown source={spec.description} />}
+                                    <Select
+                                      aria-label={`${section.label} permission for ${spec.topic}`}
+                                      disabled={!canWriteConfig}
+                                      data={busGrantOptions}
+                                      value={decision}
+                                      allowDeselect={false}
+                                      onChange={(val) => section.setGrants((prev) => ({ ...prev, [spec.topic]: val ?? 'unreviewed' }))}
+                                    />
+                                  </Stack>
+                                </Card>
+                              );
+                            }),
+                          )}
                         </Stack>
                       </>
                     )}
@@ -685,27 +645,13 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
         )}
       </Loaded>
 
-      <Modal
+      <UninstallAddonModal
         opened={uninstallOpen}
-        onClose={() => { if (!uninstalling) setUninstallOpen(false); }}
-        title={detail ? `Uninstall ${detail.name}` : 'Uninstall add-on'}
-        centered
-        lockScroll={false}
-        closeButtonProps={{ 'aria-label': 'Close' }}
-      >
-        <Stack>
-          <Text size="sm">
-            Uninstalling removes <strong>{detail?.name}</strong> and its saved configuration from the appliance declaration.
-          </Text>
-          <Text size="sm" c="dimmed">
-            The running add-on unit is only stopped and removed when you apply changes in <strong>Review and apply</strong>, protected by Andaru&apos;s automatic rollback timer until confirmed.
-          </Text>
-          <Group justify="flex-end" gap="xs">
-            <Button variant="default" disabled={uninstalling} onClick={() => setUninstallOpen(false)}>Cancel</Button>
-            <Button color="red" loading={uninstalling} onClick={() => void confirmUninstall()}>Uninstall</Button>
-          </Group>
-        </Stack>
-      </Modal>
+        name={detail?.name ?? ''}
+        loading={uninstalling}
+        onClose={() => setUninstallOpen(false)}
+        onConfirm={() => void confirmUninstall()}
+      />
     </Stack>
   );
 }

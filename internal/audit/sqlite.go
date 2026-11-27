@@ -179,6 +179,15 @@ func normalizeDDL(ddl string) string {
 	return strings.Join(strings.Fields(ddl), " ")
 }
 
+func layoutDDL(name string) string {
+	for _, object := range layoutObjects {
+		if object.name == name {
+			return object.ddl
+		}
+	}
+	panic("audit: missing layout DDL for " + name)
+}
+
 // migrateAuditV1 upgrades a v1 audit database to LayoutVersion 2 by expanding the events.action CHECK constraint
 // to include add-on lifecycle actions while preserving all existing events and metadata rows.
 func migrateAuditV1(ctx context.Context, db *sql.DB) error {
@@ -207,12 +216,12 @@ func migrateAuditV1(ctx context.Context, db *sql.DB) error {
 	stmts := []string{
 		`CREATE TEMP TABLE events_bak AS SELECT id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count FROM events`,
 		`DROP TABLE events`,
-		layoutObjects[0].ddl,
+		layoutDDL("events"),
 		`INSERT INTO events(id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count)
 		 SELECT id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count FROM events_bak`,
 		`DROP TABLE events_bak`,
-		`CREATE INDEX events_category_at ON events(category,at,id)`,
-		`CREATE INDEX events_coalesce ON events(action,source,result,at)`,
+		layoutDDL("events_category_at"),
+		layoutDDL("events_coalesce"),
 		fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion),
 	}
 	for _, stmt := range stmts {
@@ -228,19 +237,22 @@ func migrateAuditV1(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate audit v1: restore sequence: %w", err)
 		}
 	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
-		return err
-	}
-	rows, err := conn.QueryContext(ctx, "PRAGMA foreign_key_check")
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	if rows.Next() {
+	hasFKViolation := rows.Next()
+	fkErr := rows.Err()
+	_ = rows.Close()
+	if fkErr != nil {
+		return fkErr
+	}
+	if hasFKViolation {
 		return errors.New("audit v1 migration violated foreign key integrity")
 	}
-	return rows.Err()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON")
+	return err
 }

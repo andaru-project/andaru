@@ -1,15 +1,14 @@
 import { Anchor, Code } from '@mantine/core';
-import { Fragment, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { addonText, safeExternalHttpUrl } from './addons';
 import type { AddonText } from './types';
+
+const bulletPrefix = /^[-*]\s+/;
 
 function renderInline(line: string, keyPrefix: string): ReactNode[] {
   const out: ReactNode[] = [];
   let cursor = 0;
   let token = 0;
-  const pushText = (text: string) => {
-    if (text) out.push(<Fragment key={`${keyPrefix}-t-${token++}`}>{text}</Fragment>);
-  };
 
   while (cursor < line.length) {
     const ch = line[cursor];
@@ -23,7 +22,7 @@ function renderInline(line: string, keyPrefix: string): ReactNode[] {
       }
     }
 
-    if (ch === '[' ) {
+    if (ch === '[') {
       const closeBracket = line.indexOf(']', cursor + 1);
       if (closeBracket > cursor + 1 && line[closeBracket + 1] === '(') {
         const closeParen = line.indexOf(')', closeBracket + 2);
@@ -42,8 +41,8 @@ function renderInline(line: string, keyPrefix: string): ReactNode[] {
                 {label}
               </Anchor>,
             );
-          } else {
-            pushText(label);
+          } else if (label) {
+            out.push(label);
           }
           cursor = closeParen + 1;
           continue;
@@ -73,7 +72,7 @@ function renderInline(line: string, keyPrefix: string): ReactNode[] {
     while (next < line.length && line[next] !== '`' && line[next] !== '[' && line[next] !== '*') {
       next++;
     }
-    pushText(line.slice(cursor, next));
+    out.push(line.slice(cursor, next));
     cursor = next;
   }
 
@@ -86,7 +85,7 @@ interface AddonMarkdownProps {
   className?: string;
 }
 
-// Renders trusted-or-untrusted manifest prose safely as React nodes without raw HTML evaluation.
+// Renders manifest prose safely as React nodes without raw HTML evaluation.
 // Only paragraphs, bullet lists, inline code, emphasis, and http(s) links are supported.
 export function AddonMarkdown({ source, id, className }: AddonMarkdownProps) {
   const raw = addonText(source).trim();
@@ -102,17 +101,17 @@ export function AddonMarkdown({ source, id, className }: AddonMarkdownProps) {
       i++;
       continue;
     }
-    if (/^[-*]\s+/.test(trimmed)) {
+    if (bulletPrefix.test(trimmed)) {
       const items: string[] = [];
-      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^[-*]\s+/, ''));
+      while (i < lines.length && bulletPrefix.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(bulletPrefix, ''));
         i++;
       }
       blocks.push({ kind: 'ul', items });
       continue;
     }
     const paragraph: string[] = [];
-    while (i < lines.length && lines[i].trim() !== '' && !/^[-*]\s+/.test(lines[i].trim())) {
+    while (i < lines.length && lines[i].trim() !== '' && !bulletPrefix.test(lines[i].trim())) {
       paragraph.push(lines[i].trim());
       i++;
     }

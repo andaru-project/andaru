@@ -1078,6 +1078,7 @@ export interface AddonSavedEntry {
 
 export interface AddonStagedView {
   present: boolean;
+  staging: boolean;
   digest: string;
   stagedAt?: string;
   error?: string;

@@ -7653,6 +7653,9 @@
       }
     },
     "/api/v1/addons/{slug}": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
       "get": {
         "operationId": "getAddon",
         "x-required-capability": "addons.read",
@@ -7674,16 +7677,19 @@
       }
     },
     "/api/v1/addons/{slug}/stage": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
       "post": {
         "operationId": "stageAddonImage",
         "x-required-capability": "addons.manage",
-        "summary": "Pull and verify a catalog add-on's pinned container image digest",
+        "summary": "Start pulling and verifying a catalog add-on's pinned container image digest asynchronously",
         "responses": {
-          "200": { "description": "Add-on image staged" },
+          "202": { "description": "Add-on image staging started" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "description": "Add-on not found" },
           "409": { "description": "Image staging already in progress" },
-          "502": { "description": "Image pull failed" }
+          "503": { "description": "Staging or audit storage unavailable" }
         }
       },
       "delete": {
@@ -7694,11 +7700,16 @@
           "204": { "description": "Staged image removed" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "description": "Add-on not found" },
-          "409": { "description": "Image still referenced or staging in progress" }
+          "409": { "description": "Image still referenced or staging in progress" },
+          "502": { "description": "Image removal failed" },
+          "503": { "description": "Staging, configuration, or audit storage unavailable" }
         }
       }
     },
     "/api/v1/addons/{slug}/start": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
       "post": {
         "operationId": "startAddon",
         "x-required-capability": "addons.manage",
@@ -7712,6 +7723,9 @@
       }
     },
     "/api/v1/addons/{slug}/stop": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
       "post": {
         "operationId": "stopAddon",
         "x-required-capability": "addons.manage",
@@ -7725,6 +7739,9 @@
       }
     },
     "/api/v1/addons/{slug}/restart": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
       "post": {
         "operationId": "restartAddon",
         "x-required-capability": "addons.manage",
@@ -7738,6 +7755,12 @@
       }
     },
     "/api/v1/addons/{slug}/logs/{name}": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "lines", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 1000 } },
+        { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" } }
+      ],
       "get": {
         "operationId": "getAddonLogs",
         "x-required-capability": "addons.read",
@@ -7746,7 +7769,8 @@
           "200": { "description": "Log lines" },
           "400": { "description": "Invalid query parameters" },
           "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "description": "Add-on or log stream not found" }
+          "404": { "description": "Add-on or log stream not found" },
+          "503": { "description": "Logs unavailable" }
         }
       },
       "head": {
@@ -7756,7 +7780,8 @@
           "200": { "description": "Log lines; no body" },
           "400": { "description": "Invalid query parameters" },
           "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "description": "Add-on or log stream not found" }
+          "404": { "description": "Add-on or log stream not found" },
+          "503": { "description": "Logs unavailable" }
         }
       }
     },
@@ -9073,7 +9098,17 @@
                   "UNSUPPORTED_ARCHIVE",
                   "SECRET_ENCRYPTION_REQUIRED",
                   "ENCRYPTION_FAILED",
-                  "UNSUPPORTED_SCHEMA"
+                  "UNSUPPORTED_SCHEMA",
+                  "AUDIT_UNAVAILABLE",
+                  "ADDON_UNAVAILABLE",
+                  "STAGE_IN_PROGRESS",
+                  "ADDON_STAGE_FAILED",
+                  "ADDON_IMAGE_IN_USE",
+                  "ADDON_UNSTAGE_FAILED",
+                  "SAFE_MODE_ACTIVE",
+                  "ADDON_NOT_APPLIED",
+                  "ADDON_CONTROL_FAILED",
+                  "LOGS_UNAVAILABLE"
                 ]
               },
               "message": {
@@ -9636,7 +9671,8 @@
               "DNS_NOT_APPLIED",
               "FOREIGN_FILTER",
               "MANAGEMENT_REQUIRED",
-              "DHCP_WITHOUT_DNS"
+              "DHCP_WITHOUT_DNS",
+              "ADDON_IMAGE_NOT_STAGED"
             ]
           },
           "path": {
@@ -9921,7 +9957,8 @@
               "NETDEV_CHANGE_UNSUPPORTED",
               "FOREIGN_FILTER",
               "MANAGEMENT_REQUIRED",
-              "DHCP_WITHOUT_DNS"
+              "DHCP_WITHOUT_DNS",
+              "ADDON_IMAGE_NOT_STAGED"
             ]
           },
           "path": {

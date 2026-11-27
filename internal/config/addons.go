@@ -172,12 +172,7 @@ func validateAddons(d *declaration) []FieldError {
 			}
 		}
 		// Reject dangling zone references and null values in settings for both enabled and disabled add-ons.
-		settingKeys := make([]string, 0, len(a.Settings))
-		for k := range a.Settings {
-			settingKeys = append(settingKeys, k)
-		}
-		slices.Sort(settingKeys)
-		for _, k := range settingKeys {
+		for _, k := range slices.Sorted(maps.Keys(a.Settings)) {
 			v := a.Settings[k]
 			sp := p + "/settings/" + escapeJSONPointer(k)
 			if s, ok := v.(string); ok && zoneIDPattern.MatchString(s) && !zones[s] {
@@ -187,12 +182,7 @@ func validateAddons(d *declaration) []FieldError {
 				bad(sp, "Null setting values are not allowed.")
 			}
 			if obj, ok := v.(map[string]any); ok {
-				objKeys := make([]string, 0, len(obj))
-				for fk := range obj {
-					objKeys = append(objKeys, fk)
-				}
-				slices.Sort(objKeys)
-				for _, fk := range objKeys {
+				for _, fk := range slices.Sorted(maps.Keys(obj)) {
 					fv := obj[fk]
 					switch fk {
 					case "secret":
@@ -212,26 +202,15 @@ func validateAddons(d *declaration) []FieldError {
 				}
 			}
 		}
-		pubTopics := make([]string, 0, len(a.BusGrants.Publish))
-		for topic := range a.BusGrants.Publish {
-			pubTopics = append(pubTopics, topic)
-		}
-		slices.Sort(pubTopics)
-		for _, topic := range pubTopics {
-			state := a.BusGrants.Publish[topic]
-			if state != "granted" && state != "denied" {
-				bad(p+"/busGrants/publish/"+escapeJSONPointer(topic), "Invalid bus grant state.")
-			}
-		}
-		subTopics := make([]string, 0, len(a.BusGrants.Subscribe))
-		for topic := range a.BusGrants.Subscribe {
-			subTopics = append(subTopics, topic)
-		}
-		slices.Sort(subTopics)
-		for _, topic := range subTopics {
-			state := a.BusGrants.Subscribe[topic]
-			if state != "granted" && state != "denied" {
-				bad(p+"/busGrants/subscribe/"+escapeJSONPointer(topic), "Invalid bus grant state.")
+		for _, dir := range []struct {
+			name   string
+			grants map[string]string
+		}{{"publish", a.BusGrants.Publish}, {"subscribe", a.BusGrants.Subscribe}} {
+			for _, topic := range slices.Sorted(maps.Keys(dir.grants)) {
+				state := dir.grants[topic]
+				if state != "granted" && state != "denied" {
+					bad(p+"/busGrants/"+dir.name+"/"+escapeJSONPointer(topic), "Invalid bus grant state.")
+				}
 			}
 		}
 	}
@@ -309,24 +288,18 @@ func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written ma
 					subAllowed[t.Topic] = true
 				}
 			}
-			pubKeys := make([]string, 0, len(a.BusGrants.Publish))
-			for topic := range a.BusGrants.Publish {
-				pubKeys = append(pubKeys, topic)
-			}
-			slices.Sort(pubKeys)
-			for _, topic := range pubKeys {
-				if !pubAllowed[topic] {
-					bad(p+"/busGrants/publish/"+escapeJSONPointer(topic), fmt.Sprintf("Publish topic %q is not requested by %s.", topic, m.ID))
-				}
-			}
-			subKeys := make([]string, 0, len(a.BusGrants.Subscribe))
-			for topic := range a.BusGrants.Subscribe {
-				subKeys = append(subKeys, topic)
-			}
-			slices.Sort(subKeys)
-			for _, topic := range subKeys {
-				if !subAllowed[topic] {
-					bad(p+"/busGrants/subscribe/"+escapeJSONPointer(topic), fmt.Sprintf("Subscribe topic %q is not requested by %s.", topic, m.ID))
+			for _, dir := range []struct {
+				name, label string
+				grants      map[string]string
+				allowed     map[string]bool
+			}{
+				{"publish", "Publish", a.BusGrants.Publish, pubAllowed},
+				{"subscribe", "Subscribe", a.BusGrants.Subscribe, subAllowed},
+			} {
+				for _, topic := range slices.Sorted(maps.Keys(dir.grants)) {
+					if !dir.allowed[topic] {
+						bad(p+"/busGrants/"+dir.name+"/"+escapeJSONPointer(topic), fmt.Sprintf("%s topic %q is not requested by %s.", dir.label, topic, m.ID))
+					}
 				}
 			}
 		}
@@ -416,10 +389,8 @@ func matchesManagementHost(d *declaration, managementHosts []string, candidate s
 	if norm == "" {
 		return false
 	}
-	for _, mh := range managementHosts {
-		if norm == mh {
-			return true
-		}
+	if slices.Contains(managementHosts, norm) {
+		return true
 	}
 	if h, err := os.Hostname(); err == nil && h != "" {
 		host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
@@ -434,28 +405,19 @@ func matchesManagementHost(d *declaration, managementHosts []string, candidate s
 			}
 		}
 	}
-	candAddr, isIP := parseHostAddr(norm)
-	if !isIP || d == nil || d.Management == nil || d.Management.Segment == "" {
+	candAddr, err := netip.ParseAddr(norm)
+	if err != nil || d == nil || d.Management == nil || d.Management.Segment == "" {
 		return false
 	}
 	for _, seg := range d.Segments {
 		if seg.ID != d.Management.Segment {
 			continue
 		}
-		for _, cidr := range append(slices.Clone(seg.Addressing.IPv4.Addresses), seg.Addressing.IPv6.Addresses...) {
+		for _, cidr := range slices.Concat(seg.Addressing.IPv4.Addresses, seg.Addressing.IPv6.Addresses) {
 			if pfx, err := netip.ParsePrefix(cidr); err == nil && pfx.Addr() == candAddr {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-func parseHostAddr(s string) (netip.Addr, bool) {
-	trimmed := strings.TrimPrefix(strings.TrimSuffix(s, "]"), "[")
-	a, err := netip.ParseAddr(trimmed)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	return a.Unmap(), true
 }

@@ -57,15 +57,19 @@ func TestAuditV1MigratesToV2AndAcceptsAddonActions(t *testing.T) {
 		db.Close()
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO events(at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count) VALUES(?,'system','root','local','setup.completed','','success','','protected',1)`, time.Now().UnixMilli()); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO events(id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count) VALUES(40,?,'system','root','local','setup.completed','','success','','protected',1)`, time.Now().UnixMilli()); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE retention SET total_inserted_protected=1 WHERE id=1`); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE retention SET watermark_id=42,total_pruned_general=41,total_inserted_general=41,total_inserted_protected=1 WHERE id=1`); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO event_metadata(event_id,key,value) VALUES(1,'reasonCode',?)`, ReasonFactoryResetBackupWritten); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE sqlite_sequence SET seq=42 WHERE name='events'`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO event_metadata(event_id,key,value) VALUES(40,'reasonCode',?)`, ReasonFactoryResetBackupWritten); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
@@ -93,15 +97,19 @@ func TestAuditV1MigratesToV2AndAcceptsAddonActions(t *testing.T) {
 	}
 	defer s.Close()
 
-	if _, err := s.Append(ctx, Event{
+	appended, err := s.Append(ctx, Event{
 		Actor:    authz.Actor{Kind: authz.ActorSystem, ID: "root"},
 		Source:   "local",
 		Action:   ActionAddonStaged,
 		Target:   "tailscale",
 		Result:   ResultSuccess,
 		Category: CategoryGeneral,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Append addon.staged after migration: %v", err)
+	}
+	if appended.ID != 43 {
+		t.Fatalf("expected post-prune sqlite_sequence preserved (next id=43), got %d", appended.ID)
 	}
 	items, err := s.ListEvents(ctx, 0, 10)
 	if err != nil {
@@ -109,6 +117,9 @@ func TestAuditV1MigratesToV2AndAcceptsAddonActions(t *testing.T) {
 	}
 	if len(items) != 2 {
 		t.Fatalf("expected 2 events (migrated + addon.staged), got %d", len(items))
+	}
+	if items[0].ID != 40 || items[0].Metadata[MetadataReasonCode] != ReasonFactoryResetBackupWritten {
+		t.Fatalf("expected preserved event 40 metadata reasonCode=%q, got id=%d meta=%v", ReasonFactoryResetBackupWritten, items[0].ID, items[0].Metadata)
 	}
 	report, err := s.Verify(ctx)
 	if err != nil || !report.Valid {

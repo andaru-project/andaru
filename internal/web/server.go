@@ -117,7 +117,7 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, er
 	}
 	for _, origin := range config.Origins {
 		parsed, err := url.Parse(origin)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != origin {
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != origin {
 			return nil, nil, errors.New("management origins must be exact HTTPS origins without paths, queries, fragments, or credentials")
 		}
 		if _, duplicate := origins[origin]; duplicate {

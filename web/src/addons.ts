@@ -19,6 +19,38 @@ export function normalizeHostname(host: string): string {
   return host.trim().replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '').toLowerCase();
 }
 
+export const healthBadgeColor: Record<string, string> = {
+  healthy: 'green',
+  running: 'green',
+  starting: 'blue',
+  stopped: 'gray',
+  held: 'orange',
+  unhealthy: 'red',
+  none: 'gray',
+  unknown: 'gray',
+};
+
+export function healthLabel(health: string): string {
+  switch (health) {
+    case 'healthy':
+      return 'Healthy';
+    case 'running':
+      return 'Running';
+    case 'starting':
+      return 'Starting';
+    case 'stopped':
+      return 'Stopped';
+    case 'held':
+      return 'Held (safe mode)';
+    case 'unhealthy':
+      return 'Unhealthy';
+    case 'none':
+      return 'Not running';
+    default:
+      return health || 'Unknown';
+  }
+}
+
 export interface AddonPropertyDraft {
   values: Record<string, unknown>;
   secretInputs: Record<string, string>;
@@ -34,6 +66,11 @@ function isSecretView(value: unknown): value is SecretView {
   );
 }
 
+function stringArray(raw: unknown, fallback: unknown): string[] {
+  const source = Array.isArray(raw) ? raw : Array.isArray(fallback) ? fallback : [];
+  return source.filter((item): item is string => typeof item === 'string');
+}
+
 export function initialPropertyDraft(
   properties: AddonProperty[] | undefined,
   savedSettings: Record<string, unknown> | undefined,
@@ -44,7 +81,7 @@ export function initialPropertyDraft(
   const existingSecrets: Record<string, SecretView> = {};
 
   for (const prop of properties ?? []) {
-    const raw = savedSettings && Object.prototype.hasOwnProperty.call(savedSettings, prop.name)
+    const raw = savedSettings && Object.hasOwn(savedSettings, prop.name)
       ? savedSettings[prop.name]
       : undefined;
 
@@ -57,24 +94,12 @@ export function initialPropertyDraft(
         else if (typeof prop.default === 'number' && Number.isInteger(prop.default)) values[prop.name] = prop.default;
         else values[prop.name] = '';
         break;
-      case 'enum': {
-        const list = Array.isArray(raw)
-          ? raw.filter((item): item is string => typeof item === 'string')
-          : Array.isArray(prop.default)
-            ? prop.default.filter((item): item is string => typeof item === 'string')
-            : [];
-        values[prop.name] = list;
+      case 'enum':
+        values[prop.name] = stringArray(raw, prop.default);
         break;
-      }
-      case 'string-list': {
-        const list = Array.isArray(raw)
-          ? raw.filter((item): item is string => typeof item === 'string')
-          : Array.isArray(prop.default)
-            ? prop.default.filter((item): item is string => typeof item === 'string')
-            : [];
-        values[prop.name] = list.join('\n');
+      case 'string-list':
+        values[prop.name] = stringArray(raw, prop.default).join('\n');
         break;
-      }
       case 'zone-reference':
         values[prop.name] = typeof raw === 'string' ? raw : '';
         break;
@@ -98,8 +123,9 @@ export function initialPropertyDraft(
 export function buildSettingsPayload(
   properties: AddonProperty[] | undefined,
   draft: AddonPropertyDraft,
-): Record<string, unknown> | undefined {
+): { settings?: Record<string, unknown>; clientErrors: Map<string, string> } {
   const settings: Record<string, unknown> = {};
+  const clientErrors = new Map<string, string>();
 
   for (const prop of properties ?? []) {
     switch (prop.type) {
@@ -108,11 +134,22 @@ export function buildSettingsPayload(
         break;
       case 'integer': {
         const raw = draft.values[prop.name];
-        if (typeof raw === 'number' && Number.isFinite(raw)) {
-          settings[prop.name] = Math.trunc(raw);
-        } else if (typeof raw === 'string' && raw.trim() !== '') {
-          const parsed = Number(raw);
-          if (Number.isInteger(parsed)) settings[prop.name] = parsed;
+        if (raw === '' || raw === undefined || raw === null) {
+          break;
+        }
+        if (typeof raw === 'number' && Number.isSafeInteger(raw)) {
+          settings[prop.name] = raw;
+        } else if (typeof raw === 'string') {
+          const trimmed = raw.trim();
+          if (trimmed === '') break;
+          const parsed = Number(trimmed);
+          if (/^-?\d+$/.test(trimmed) && Number.isSafeInteger(parsed)) {
+            settings[prop.name] = parsed;
+          } else {
+            clientErrors.set(prop.name, 'Enter a valid whole number.');
+          }
+        } else {
+          clientErrors.set(prop.name, 'Enter a valid whole number.');
         }
         break;
       }
@@ -120,7 +157,8 @@ export function buildSettingsPayload(
         const list = Array.isArray(draft.values[prop.name])
           ? (draft.values[prop.name] as string[]).filter(Boolean)
           : [];
-        if (list.length > 0 || prop.required) {
+        const keepEmpty = prop.default !== undefined && (prop.minItems ?? 0) === 0;
+        if (list.length > 0 || prop.required || keepEmpty) {
           settings[prop.name] = list;
         }
         break;
@@ -128,7 +166,8 @@ export function buildSettingsPayload(
       case 'string-list': {
         const text = typeof draft.values[prop.name] === 'string' ? (draft.values[prop.name] as string) : '';
         const list = text.split('\n').map((line) => line.trim()).filter(Boolean);
-        if (list.length > 0 || prop.required) {
+        const keepEmpty = prop.default !== undefined && (prop.minItems ?? 0) === 0;
+        if (list.length > 0 || prop.required || keepEmpty) {
           settings[prop.name] = list;
         }
         break;
@@ -147,8 +186,8 @@ export function buildSettingsPayload(
           const write: SecretWrite = {
             secret: existing?.secret || prop.name,
             set: typed,
+            expectedVersion: existing?.version || '0',
           };
-          if (existing?.version) write.expectedVersion = existing.version;
           settings[prop.name] = write;
         } else if (existing) {
           const keep: SecretWrite = { secret: existing.secret };
@@ -160,7 +199,8 @@ export function buildSettingsPayload(
       case 'string':
       default: {
         const text = typeof draft.values[prop.name] === 'string' ? (draft.values[prop.name] as string) : '';
-        if (text !== '' || prop.required) {
+        const keepEmpty = prop.default !== undefined && !prop.format && (prop.minLength ?? 0) === 0;
+        if (text !== '' || prop.required || keepEmpty) {
           settings[prop.name] = text;
         }
         break;
@@ -168,5 +208,8 @@ export function buildSettingsPayload(
     }
   }
 
-  return Object.keys(settings).length > 0 ? settings : undefined;
+  return {
+    settings: Object.keys(settings).length > 0 ? settings : undefined,
+    clientErrors,
+  };
 }

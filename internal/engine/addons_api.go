@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,6 +20,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/audit"
@@ -35,9 +37,11 @@ const (
 	addonControlTimeout  = 45 * time.Second
 	addonStatusTimeout   = 3 * time.Second
 	addonLogTimeout      = 5 * time.Second
+	addonAuditTimeout    = 5 * time.Second
 	defaultAddonLogLines = 200
 	maxAddonLogLines     = 1000
 	maxAddonLogBytes     = 256 << 10
+	maxAddonStderrBytes  = 4 << 10
 )
 
 var addonLogCursorPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_;:=-]{0,255}$`)
@@ -57,8 +61,9 @@ type addonsAPI struct {
 	readUnit    func(ctx context.Context, unit string) (activeState, subState string, err error)
 	readJournal func(ctx context.Context, unit string, lines int, cursor string) ([]string, string, bool, error)
 
-	mu      sync.Mutex
-	staging map[string]bool
+	mu       sync.Mutex
+	staging  map[string]bool
+	stageErr map[string]string
 }
 
 func newAddonsAPI(catalog *addon.Catalog, store addonSnapshotReader, stateDir, root string, origins []string, runner realizeRunner, coordinator *securityCoordinator) *addonsAPI {
@@ -73,15 +78,16 @@ func newAddonsAPI(catalog *addon.Catalog, store addonSnapshotReader, stateDir, r
 		readUnit:    defaultReadSystemdUnit,
 		readJournal: defaultReadSystemdJournal,
 		staging:     map[string]bool{},
+		stageErr:    map[string]string{},
 	}
 }
 
 type addonSavedEntry struct {
-	ID         string                 `json:"id"`
-	Enabled    bool                   `json:"enabled"`
-	Settings   map[string]any         `json:"settings,omitempty"`
-	Interfaces []addonSavedInterface  `json:"interfaces,omitempty"`
-	BusGrants  addonSavedBusGrants    `json:"busGrants,omitzero"`
+	ID         string                `json:"id"`
+	Enabled    bool                  `json:"enabled"`
+	Settings   map[string]any        `json:"settings,omitempty"`
+	Interfaces []addonSavedInterface `json:"interfaces,omitempty"`
+	BusGrants  addonSavedBusGrants   `json:"busGrants,omitzero"`
 }
 
 type addonSavedInterface struct {
@@ -96,6 +102,7 @@ type addonSavedBusGrants struct {
 
 type addonStagedView struct {
 	Present  bool   `json:"present"`
+	Staging  bool   `json:"staging"`
 	Digest   string `json:"digest"`
 	StagedAt string `json:"stagedAt,omitempty"`
 	Error    string `json:"error,omitempty"`
@@ -187,19 +194,31 @@ func (a *addonsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !noQuery(w, r) || !requireNoBody(w, r) {
 			return
 		}
-		a.handleDetail(w, r, slug)
+		m, ok := a.lookupManifest(w, r, slug)
+		if !ok {
+			return
+		}
+		a.handleDetail(w, r, m)
 	case len(parts) == 2 && parts[1] == "stage":
 		switch r.Method {
 		case http.MethodPost:
 			if !noQuery(w, r) || !requireNoBody(w, r) {
 				return
 			}
-			a.handleStage(w, r, slug)
+			m, ok := a.lookupManifest(w, r, slug)
+			if !ok {
+				return
+			}
+			a.handleStage(w, r, m)
 		case http.MethodDelete:
 			if !noQuery(w, r) || !requireNoBody(w, r) {
 				return
 			}
-			a.handleUnstage(w, r, slug)
+			m, ok := a.lookupManifest(w, r, slug)
+			if !ok {
+				return
+			}
+			a.handleUnstage(w, r, m)
 		default:
 			methodNotAllowed(w, r, "POST, DELETE")
 		}
@@ -211,7 +230,11 @@ func (a *addonsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !noQuery(w, r) || !requireNoBody(w, r) {
 			return
 		}
-		a.handleControl(w, r, slug, parts[1])
+		m, ok := a.lookupManifest(w, r, slug)
+		if !ok {
+			return
+		}
+		a.handleControl(w, r, m, parts[1])
 	case len(parts) == 3 && parts[1] == "logs" && parts[2] != "":
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			methodNotAllowed(w, r, "GET, HEAD")
@@ -220,35 +243,55 @@ func (a *addonsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !requireNoBody(w, r) {
 			return
 		}
-		a.handleLogs(w, r, slug, parts[2])
+		m, ok := a.lookupManifest(w, r, slug)
+		if !ok {
+			return
+		}
+		a.handleLogs(w, r, m, parts[2])
 	default:
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 	}
 }
 
-func (a *addonsAPI) readSavedMap(ctx context.Context) (map[string]addonSavedEntry, []byte) {
+func (a *addonsAPI) lookupManifest(w http.ResponseWriter, r *http.Request, slug string) (*addon.Manifest, bool) {
+	if a.catalog == nil {
+		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
+		return nil, false
+	}
+	m, ok := a.catalog.BySlug(slug)
+	if !ok {
+		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
+		return nil, false
+	}
+	return m, true
+}
+
+func (a *addonsAPI) readSavedMap(ctx context.Context) (map[string]addonSavedEntry, []byte, error) {
 	out := map[string]addonSavedEntry{}
 	if a.store == nil {
-		return out, nil
+		return out, nil, nil
 	}
 	snap, err := a.store.Snapshot(ctx)
 	if err != nil {
-		if !errors.Is(err, config.ErrUpgradePending) {
-			slog.WarnContext(ctx, "addons: read saved snapshot", "error", err)
-		}
-		return out, nil
+		return out, nil, err
 	}
 	var doc struct {
 		Addons []addonSavedEntry `json:"addons"`
 	}
 	if err := json.Unmarshal(snap.Value, &doc); err != nil {
-		slog.WarnContext(ctx, "addons: decode saved addons", "error", err)
-		return out, snap.Value
+		return out, snap.Value, err
 	}
 	for _, entry := range doc.Addons {
 		out[entry.ID] = entry
 	}
-	return out, snap.Value
+	return out, snap.Value, nil
+}
+
+func (a *addonsAPI) readStagedState() (addon.StagedState, error) {
+	if a.stateDir == "" {
+		return addon.StagedState{}, nil
+	}
+	return addon.ReadStagedState(a.stateDir)
 }
 
 func (a *addonsAPI) readLiveAppliedImages() map[string]string {
@@ -290,10 +333,19 @@ func (a *addonsAPI) readLiveAppliedImages() map[string]string {
 	return out
 }
 
-func (a *addonsAPI) buildStaged(m *addon.Manifest, st addon.StagedState, stErr error) addonStagedView {
-	v := addonStagedView{Digest: m.Runtime.Image}
+func (a *addonsAPI) buildStaged(ctx context.Context, m *addon.Manifest, st addon.StagedState, stErr error) addonStagedView {
+	a.mu.Lock()
+	staging := a.staging[m.Slug]
+	lastErr := a.stageErr[m.Slug]
+	a.mu.Unlock()
+
+	v := addonStagedView{
+		Digest:  m.Runtime.Image,
+		Staging: staging,
+	}
 	if stErr != nil {
-		v.Error = stErr.Error()
+		slog.WarnContext(ctx, "addons: read staged state", "slug", m.Slug, "error", stErr)
+		v.Error = "Staged image state is unavailable."
 		return v
 	}
 	if rec, ok := st.Images[m.Runtime.Image]; ok {
@@ -301,6 +353,9 @@ func (a *addonsAPI) buildStaged(m *addon.Manifest, st addon.StagedState, stErr e
 		if !rec.StagedAt.IsZero() {
 			v.StagedAt = rec.StagedAt.UTC().Format(time.RFC3339)
 		}
+	}
+	if !staging && lastErr != "" {
+		v.Error = lastErr
 	}
 	return v
 }
@@ -336,7 +391,11 @@ func (a *addonsAPI) buildRuntime(ctx context.Context, m *addon.Manifest, applied
 	case safeMode.Active && v.ActiveState != "active":
 		v.Health = "held"
 	case v.ActiveState == "active":
-		v.Health = "healthy"
+		if m.Health != nil {
+			v.Health = "healthy"
+		} else {
+			v.Health = "running"
+		}
 	case v.ActiveState == "activating" || v.ActiveState == "reloading":
 		v.Health = "starting"
 	case v.ActiveState == "failed":
@@ -387,7 +446,7 @@ func (a *addonsAPI) buildSummary(
 		Installed:          installed,
 		HasWebUI:           m.WebUI != nil,
 		UnreviewedBusCount: countUnreviewedBusGrants(m, saved, installed),
-		Staged:             a.buildStaged(m, st, stErr),
+		Staged:             a.buildStaged(ctx, m, st, stErr),
 		Runtime:            a.buildRuntime(ctx, m, appliedImages, safeMode),
 	}
 	if canReadConfig && installed {
@@ -415,6 +474,11 @@ func (a *addonsAPI) buildWebUI(m *addon.Manifest, saved addonSavedEntry, install
 		return view
 	}
 	view.Hostname = hostname
+	if !addon.ValidHostname(hostname) {
+		view.OriginConflict = true
+		view.ConflictReason = "Configured WebUI hostname is invalid and was suppressed."
+		return view
+	}
 	if config.MatchesManagementOrigin(a.origins, snapRaw, hostname) {
 		view.OriginConflict = true
 		view.ConflictReason = "Configured WebUI hostname matches an Andaru management host and was suppressed to protect your session."
@@ -432,15 +496,23 @@ func (a *addonsAPI) buildWebUI(m *addon.Manifest, saved addonSavedEntry, install
 	if !ok {
 		return view
 	}
-	host := hostname
-	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
-		host = "[" + host + "]"
-	}
-	authority := host
+	authority := hostname
 	if !(ep.Protocol == "https" && port == 443) && !(ep.Protocol == "http" && port == 80) {
-		authority = net.JoinHostPort(strings.Trim(hostname, "[]"), strconv.Itoa(port))
+		authority = net.JoinHostPort(hostname, strconv.Itoa(port))
 	}
-	view.URL = fmt.Sprintf("%s://%s%s", ep.Protocol, authority, m.WebUI.Path)
+	assembled := fmt.Sprintf("%s://%s%s", ep.Protocol, authority, m.WebUI.Path)
+	parsed, err := url.Parse(assembled)
+	if err != nil || parsed.User != nil || parsed.Hostname() == "" {
+		view.OriginConflict = true
+		view.ConflictReason = "Configured WebUI URL is invalid and was suppressed."
+		return view
+	}
+	if config.MatchesManagementOrigin(a.origins, snapRaw, parsed.Hostname()) {
+		view.OriginConflict = true
+		view.ConflictReason = "Configured WebUI hostname matches an Andaru management host and was suppressed to protect your session."
+		return view
+	}
+	view.URL = parsed.String()
 	return view
 }
 
@@ -448,12 +520,13 @@ func (a *addonsAPI) handleList(w http.ResponseWriter, r *http.Request) {
 	actor, _ := actorFromRequest(r)
 	canReadConfig := hasCapability(actor, authz.ConfigurationRead)
 	safeMode := generation.ReadSafeMode(a.systemRoot, a.stateDir)
-	savedMap, _ := a.readSavedMap(r.Context())
-	var st addon.StagedState
-	var stErr error
-	if a.stateDir != "" {
-		st, stErr = addon.ReadStagedState(a.stateDir)
+	savedMap, _, err := a.readSavedMap(r.Context())
+	if err != nil && !errors.Is(err, config.ErrUpgradePending) {
+		slog.WarnContext(r.Context(), "addons: read saved snapshot", "error", err)
+		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on configuration state is temporarily unavailable.")
+		return
 	}
+	st, stErr := a.readStagedState()
 	appliedImages := a.readLiveAppliedImages()
 	items := []addonSummary{}
 	if a.catalog != nil {
@@ -464,25 +537,17 @@ func (a *addonsAPI) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, addonListResponse{Items: items, SafeMode: safeMode})
 }
 
-func (a *addonsAPI) handleDetail(w http.ResponseWriter, r *http.Request, slug string) {
-	if a.catalog == nil {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
-	m, ok := a.catalog.BySlug(slug)
-	if !ok {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
+func (a *addonsAPI) handleDetail(w http.ResponseWriter, r *http.Request, m *addon.Manifest) {
 	actor, _ := actorFromRequest(r)
 	canReadConfig := hasCapability(actor, authz.ConfigurationRead)
 	safeMode := generation.ReadSafeMode(a.systemRoot, a.stateDir)
-	savedMap, snapRaw := a.readSavedMap(r.Context())
-	var st addon.StagedState
-	var stErr error
-	if a.stateDir != "" {
-		st, stErr = addon.ReadStagedState(a.stateDir)
+	savedMap, snapRaw, err := a.readSavedMap(r.Context())
+	if err != nil && !errors.Is(err, config.ErrUpgradePending) {
+		slog.WarnContext(r.Context(), "addons: read saved snapshot", "error", err)
+		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on configuration state is temporarily unavailable.")
+		return
 	}
+	st, stErr := a.readStagedState()
 	appliedImages := a.readLiveAppliedImages()
 	summary := a.buildSummary(r.Context(), m, canReadConfig, savedMap, st, stErr, appliedImages, safeMode)
 	saved, installed := savedMap[m.ID]
@@ -494,29 +559,45 @@ func (a *addonsAPI) handleDetail(w http.ResponseWriter, r *http.Request, slug st
 	})
 }
 
-func (a *addonsAPI) claimStage(slug string) (release func(), ok bool) {
+func (a *addonsAPI) claimStage(slug string) (release func(stageErrMsg string), ok bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.staging[slug] {
 		return nil, false
 	}
 	a.staging[slug] = true
-	return func() {
+	delete(a.stageErr, slug)
+	return func(stageErrMsg string) {
 		a.mu.Lock()
 		delete(a.staging, slug)
+		if stageErrMsg != "" {
+			a.stageErr[slug] = stageErrMsg
+		} else {
+			delete(a.stageErr, slug)
+		}
 		a.mu.Unlock()
 	}, true
 }
 
-func (a *addonsAPI) recordAudit(ctx context.Context, r *http.Request, action audit.Action, slug string, result audit.Result) {
+func (a *addonsAPI) requireAuditReady(w http.ResponseWriter, r *http.Request) bool {
 	if a.coordinator == nil || a.coordinator.audits == nil {
+		return true
+	}
+	health, err := a.coordinator.audits.Health(r.Context())
+	if err != nil || health.StorageFailure || health.IntegrityFailure || health.GeneralSaturated {
+		writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Security audit storage is unavailable.")
+		return false
+	}
+	return true
+}
+
+func (a *addonsAPI) recordAuditActor(actor requestActor, ok bool, action audit.Action, slug string, result audit.Result) {
+	if !ok || a.coordinator == nil || a.coordinator.audits == nil {
 		return
 	}
-	actor, ok := actorFromRequest(r)
-	if !ok {
-		return
-	}
-	if _, err := a.coordinator.audits.Append(ctx, audit.Event{
+	auditCtx, cancel := context.WithTimeout(context.Background(), addonAuditTimeout)
+	defer cancel()
+	if _, err := a.coordinator.audits.Append(auditCtx, audit.Event{
 		Actor:    actor.Actor,
 		Source:   actor.Source,
 		Action:   action,
@@ -524,74 +605,82 @@ func (a *addonsAPI) recordAudit(ctx context.Context, r *http.Request, action aud
 		Result:   result,
 		Category: audit.CategoryGeneral,
 	}); err != nil {
-		slog.WarnContext(ctx, "addons: append audit event", "action", action, "slug", slug, "error", err)
+		slog.Warn("addons: append audit event", "action", action, "slug", slug, "error", err)
 	}
 }
 
-func (a *addonsAPI) handleStage(w http.ResponseWriter, r *http.Request, slug string) {
-	if a.catalog == nil {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
-	m, ok := a.catalog.BySlug(slug)
-	if !ok {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
+// handleStage runs `addon-stage` asynchronously so slow image downloads never hit the 180s web
+// proxy timeout or orphan the staging lock when a browser disconnects.
+func (a *addonsAPI) handleStage(w http.ResponseWriter, r *http.Request, m *addon.Manifest) {
 	if a.runner == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on image staging is unavailable.")
 		return
 	}
-	release, ok := a.claimStage(slug)
+	if !a.requireAuditReady(w, r) {
+		return
+	}
+	release, ok := a.claimStage(m.Slug)
 	if !ok {
 		writeError(w, r, http.StatusConflict, "STAGE_IN_PROGRESS", "Image staging is already running for this add-on.")
 		return
 	}
-	defer release()
-
-	stageCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), addonStageTimeout)
-	defer cancel()
-	if err := a.runner.Realize(stageCtx, "addon-stage", 0, slug); err != nil {
-		a.recordAudit(stageCtx, r, audit.ActionAddonStaged, slug, audit.ResultFailure)
-		slog.WarnContext(r.Context(), "addons: stage image failed", "slug", slug, "error", err)
-		writeError(w, r, http.StatusBadGateway, "ADDON_STAGE_FAILED", "Failed to pull and verify the add-on container image.")
-		return
-	}
-	a.recordAudit(stageCtx, r, audit.ActionAddonStaged, slug, audit.ResultSuccess)
-	var st addon.StagedState
-	var stErr error
-	if a.stateDir != "" {
-		st, stErr = addon.ReadStagedState(a.stateDir)
-	}
-	writeJSON(w, r, http.StatusOK, a.buildStaged(m, st, stErr))
+	actor, hasActor := actorFromRequest(r)
+	go func() {
+		stageCtx, cancel := context.WithTimeout(context.Background(), addonStageTimeout)
+		defer cancel()
+		if err := a.runner.Realize(stageCtx, "addon-stage", 0, m.Slug); err != nil {
+			a.recordAuditActor(actor, hasActor, audit.ActionAddonStaged, m.Slug, audit.ResultFailure)
+			slog.Warn("addons: stage image failed", "slug", m.Slug, "error", err)
+			release("Failed to pull and verify the add-on container image.")
+			return
+		}
+		a.recordAuditActor(actor, hasActor, audit.ActionAddonStaged, m.Slug, audit.ResultSuccess)
+		release("")
+	}()
+	st, stErr := a.readStagedState()
+	writeJSON(w, r, http.StatusAccepted, a.buildStaged(r.Context(), m, st, stErr))
 }
 
-func (a *addonsAPI) handleUnstage(w http.ResponseWriter, r *http.Request, slug string) {
-	if a.catalog == nil {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
-	m, ok := a.catalog.BySlug(slug)
-	if !ok {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
+func (a *addonsAPI) handleUnstage(w http.ResponseWriter, r *http.Request, m *addon.Manifest) {
 	if a.runner == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on image staging is unavailable.")
 		return
 	}
-	release, ok := a.claimStage(slug)
+	if !a.requireAuditReady(w, r) {
+		return
+	}
+	release, ok := a.claimStage(m.Slug)
 	if !ok {
 		writeError(w, r, http.StatusConflict, "STAGE_IN_PROGRESS", "Image staging is already running for this add-on.")
 		return
 	}
-	defer release()
+	defer release("")
 
-	// Refuse removing an image referenced by the saved head or retained generations.
-	savedMap, _ := a.readSavedMap(r.Context())
+	// Fail closed if saved configuration cannot be verified, and block removing an image
+	// referenced by any saved add-on sharing this digest or by any retained generation.
+	savedMap, _, err := a.readSavedMap(r.Context())
+	if err != nil {
+		if errors.Is(err, config.ErrUpgradePending) {
+			writeError(w, r, http.StatusConflict, "ADDON_IMAGE_IN_USE", "Saved configuration awaits upgrade decisions; staged images cannot be removed yet.")
+			return
+		}
+		slog.WarnContext(r.Context(), "addons: read saved snapshot for unstage", "error", err)
+		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Could not verify saved add-on configuration.")
+		return
+	}
 	if _, installed := savedMap[m.ID]; installed {
 		writeError(w, r, http.StatusConflict, "ADDON_IMAGE_IN_USE", "This add-on image is still referenced by the saved configuration.")
 		return
+	}
+	if a.catalog != nil {
+		for _, other := range a.catalog.All() {
+			if other.Runtime.Image == m.Runtime.Image {
+				if _, installed := savedMap[other.ID]; installed {
+					writeError(w, r, http.StatusConflict, "ADDON_IMAGE_IN_USE", "This add-on image is still referenced by the saved configuration.")
+					return
+				}
+			}
+		}
 	}
 	if a.stateDir != "" {
 		refs, err := generation.ReferencedAddonImages(a.stateDir)
@@ -606,34 +695,29 @@ func (a *addonsAPI) handleUnstage(w http.ResponseWriter, r *http.Request, slug s
 		}
 	}
 
+	actor, hasActor := actorFromRequest(r)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), addonControlTimeout)
 	defer cancel()
-	if err := a.runner.Realize(ctx, "addon-unstage", 0, slug); err != nil {
-		a.recordAudit(ctx, r, audit.ActionAddonUnstaged, slug, audit.ResultFailure)
+	if err := a.runner.Realize(ctx, "addon-unstage", 0, m.Slug); err != nil {
+		a.recordAuditActor(actor, hasActor, audit.ActionAddonUnstaged, m.Slug, audit.ResultFailure)
 		if strings.Contains(err.Error(), "still referenced") {
 			writeError(w, r, http.StatusConflict, "ADDON_IMAGE_IN_USE", "This add-on image is still referenced by a retained generation.")
 			return
 		}
-		slog.WarnContext(r.Context(), "addons: unstage image failed", "slug", slug, "error", err)
+		slog.WarnContext(r.Context(), "addons: unstage image failed", "slug", m.Slug, "error", err)
 		writeError(w, r, http.StatusBadGateway, "ADDON_UNSTAGE_FAILED", "Failed to remove the staged add-on container image.")
 		return
 	}
-	a.recordAudit(ctx, r, audit.ActionAddonUnstaged, slug, audit.ResultSuccess)
+	a.recordAuditActor(actor, hasActor, audit.ActionAddonUnstaged, m.Slug, audit.ResultSuccess)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *addonsAPI) handleControl(w http.ResponseWriter, r *http.Request, slug, action string) {
-	if a.catalog == nil {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
-	m, ok := a.catalog.BySlug(slug)
-	if !ok {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
+func (a *addonsAPI) handleControl(w http.ResponseWriter, r *http.Request, m *addon.Manifest, action string) {
 	if a.runner == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "ADDON_UNAVAILABLE", "Add-on lifecycle control is unavailable.")
+		return
+	}
+	if !a.requireAuditReady(w, r) {
 		return
 	}
 	safeMode := generation.ReadSafeMode(a.systemRoot, a.stateDir)
@@ -642,7 +726,7 @@ func (a *addonsAPI) handleControl(w http.ResponseWriter, r *http.Request, slug, 
 		return
 	}
 	appliedImages := a.readLiveAppliedImages()
-	if _, applied := appliedImages[slug]; !applied {
+	if _, applied := appliedImages[m.Slug]; !applied {
 		writeError(w, r, http.StatusConflict, "ADDON_NOT_APPLIED", "This add-on is not enabled in the applied generation.")
 		return
 	}
@@ -652,10 +736,11 @@ func (a *addonsAPI) handleControl(w http.ResponseWriter, r *http.Request, slug, 
 		"restart": audit.ActionAddonRestarted,
 	}[action]
 
+	actor, hasActor := actorFromRequest(r)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), addonControlTimeout)
 	defer cancel()
-	if err := a.runner.Realize(ctx, "addon-ctl", 0, action, slug); err != nil {
-		a.recordAudit(ctx, r, auditAction, slug, audit.ResultFailure)
+	if err := a.runner.Realize(ctx, "addon-ctl", 0, action, m.Slug); err != nil {
+		a.recordAuditActor(actor, hasActor, auditAction, m.Slug, audit.ResultFailure)
 		if strings.Contains(err.Error(), "SAFE_MODE_ACTIVE") {
 			writeError(w, r, http.StatusConflict, "SAFE_MODE_ACTIVE", "Add-ons cannot be controlled while safe mode or settings hold is active.")
 			return
@@ -664,24 +749,15 @@ func (a *addonsAPI) handleControl(w http.ResponseWriter, r *http.Request, slug, 
 			writeError(w, r, http.StatusConflict, "ADDON_NOT_APPLIED", "This add-on is not enabled in the applied generation.")
 			return
 		}
-		slog.WarnContext(r.Context(), "addons: lifecycle control failed", "action", action, "slug", slug, "error", err)
+		slog.WarnContext(r.Context(), "addons: lifecycle control failed", "action", action, "slug", m.Slug, "error", err)
 		writeError(w, r, http.StatusBadGateway, "ADDON_CONTROL_FAILED", "Failed to "+action+" add-on unit.")
 		return
 	}
-	a.recordAudit(ctx, r, auditAction, slug, audit.ResultSuccess)
+	a.recordAuditActor(actor, hasActor, auditAction, m.Slug, audit.ResultSuccess)
 	writeJSON(w, r, http.StatusOK, a.buildRuntime(r.Context(), m, appliedImages, generation.ReadSafeMode(a.systemRoot, a.stateDir)))
 }
 
-func (a *addonsAPI) handleLogs(w http.ResponseWriter, r *http.Request, slug, logName string) {
-	if a.catalog == nil {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
-	m, ok := a.catalog.BySlug(slug)
-	if !ok {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
-		return
-	}
+func (a *addonsAPI) handleLogs(w http.ResponseWriter, r *http.Request, m *addon.Manifest, logName string) {
 	idx := slices.IndexFunc(m.Logs, func(l addon.LogSpec) bool { return l.Name == logName })
 	if idx < 0 {
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
@@ -726,10 +802,10 @@ func (a *addonsAPI) handleLogs(w http.ResponseWriter, r *http.Request, slug, log
 			readJournal = defaultReadSystemdJournal
 		}
 		jCtx, cancel := context.WithTimeout(r.Context(), addonLogTimeout)
-		entries, nextCursor, truncated, err := readJournal(jCtx, "andaru-addon-"+slug+".service", lines, cursor)
+		entries, nextCursor, truncated, err := readJournal(jCtx, "andaru-addon-"+m.Slug+".service", lines, cursor)
 		cancel()
 		if err != nil {
-			slog.WarnContext(r.Context(), "addons: read runtime journal", "slug", slug, "log", logName, "error", err)
+			slog.WarnContext(r.Context(), "addons: read runtime journal", "slug", m.Slug, "log", logName, "error", err)
 			writeError(w, r, http.StatusServiceUnavailable, "LOGS_UNAVAILABLE", "Add-on logs are temporarily unavailable.")
 			return
 		}
@@ -744,9 +820,9 @@ func (a *addonsAPI) handleLogs(w http.ResponseWriter, r *http.Request, slug, log
 			Truncated: truncated,
 		})
 	case "file":
-		entries, truncated, err := readBoundedAddonLogFile(a.stateDir, slug, spec.Source.Storage, spec.Source.Path, lines)
+		entries, truncated, err := readBoundedAddonLogFile(a.stateDir, m.Slug, spec.Source.Storage, spec.Source.Path, lines)
 		if err != nil {
-			slog.WarnContext(r.Context(), "addons: read file log", "slug", slug, "log", logName, "error", err)
+			slog.WarnContext(r.Context(), "addons: read file log", "slug", m.Slug, "log", logName, "error", err)
 			writeError(w, r, http.StatusServiceUnavailable, "LOGS_UNAVAILABLE", "Add-on log file is unavailable.")
 			return
 		}
@@ -761,27 +837,36 @@ func (a *addonsAPI) handleLogs(w http.ResponseWriter, r *http.Request, slug, log
 	}
 }
 
+// readBoundedAddonLogFile opens a manifest-declared log file inside the add-on's storage directory using
+// openat2(RESOLVE_IN_ROOT|RESOLVE_NO_SYMLINKS) with O_NOFOLLOW|O_NONBLOCK so symlinks and container-created
+// FIFOs can neither escape the storage directory nor hang the engine.
 func readBoundedAddonLogFile(stateDir, slug, storage, relPath string, maxLines int) ([]string, bool, error) {
 	if stateDir == "" || !addon.ValidSlug(slug) || !filepath.IsLocal(relPath) {
 		return nil, false, errors.New("invalid log file path")
 	}
 	storageDir := filepath.Join(stateDir, "addons", slug, storage)
-	root, err := os.OpenRoot(storageDir)
-	if errors.Is(err, fs.ErrNotExist) {
+	dirFD, err := unix.Open(storageDir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if errors.Is(err, unix.ENOENT) {
 		return []string{}, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	defer root.Close()
-	f, err := root.Open(relPath)
-	if errors.Is(err, fs.ErrNotExist) {
+	defer unix.Close(dirFD)
+
+	fd, err := unix.Openat2(dirFD, relPath, &unix.OpenHow{
+		Flags:   unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_SYMLINKS,
+	})
+	if errors.Is(err, unix.ENOENT) {
 		return []string{}, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
+	f := os.NewFile(uintptr(fd), relPath)
 	defer f.Close()
+
 	info, err := f.Stat()
 	if err != nil {
 		return nil, false, err
@@ -842,36 +927,93 @@ func defaultReadSystemdJournal(ctx context.Context, unit string, lines int, curs
 		args = append(args, "--after-cursor="+cursor)
 	}
 	cmd := exec.CommandContext(ctx, "/usr/bin/journalctl", args...)
-	var buf bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &limitedBuffer{buf: &buf, limit: maxAddonLogBytes + 4096}
-	cmd.Stderr = &stderr
+	stdout := &tailBuffer{limit: maxAddonLogBytes + 512}
+	var stderrBuf bytes.Buffer
+	cmd.Stdout = stdout
+	cmd.Stderr = &limitedBuffer{buf: &stderrBuf, limit: maxAddonStderrBytes}
 	if err := cmd.Run(); err != nil {
 		// journalctl exits 0 even with empty matches, so non-zero is a real failure.
-		return nil, "", false, fmt.Errorf("journalctl: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return nil, "", false, fmt.Errorf("journalctl: %w: %s", err, strings.TrimSpace(stderrBuf.String()))
 	}
-	raw := strings.TrimRight(buf.String(), "\n")
-	if raw == "" {
-		return []string{}, "", false, nil
+	entries, nextCursor, truncated := parseJournalOutput(stdout.Bytes(), stdout.Truncated(), maxAddonLogBytes)
+	return entries, nextCursor, truncated, nil
+}
+
+// parseJournalOutput extracts the trailing "-- cursor: ..." line, preserves the newest bytes up to limit
+// without splitting a UTF-8 rune, and strips any leading partial line when truncated.
+func parseJournalOutput(rawBytes []byte, droppedHead bool, limit int) ([]string, string, bool) {
+	truncated := droppedHead
+	data := bytes.TrimRight(rawBytes, "\n")
+	if len(data) == 0 {
+		return []string{}, "", truncated
 	}
-	truncated := buf.Len() > maxAddonLogBytes
-	if truncated {
-		raw = raw[:maxAddonLogBytes]
-	}
-	all := strings.Split(raw, "\n")
+	// Extract the trailing cursor line before enforcing the byte budget on log lines.
 	nextCursor := ""
-	if len(all) > 0 {
-		if c, ok := strings.CutPrefix(all[len(all)-1], "-- cursor: "); ok {
+	if nl := bytes.LastIndexByte(data, '\n'); nl >= 0 {
+		if c, ok := strings.CutPrefix(string(data[nl+1:]), "-- cursor: "); ok {
 			nextCursor = strings.TrimSpace(c)
-			all = all[:len(all)-1]
+			data = data[:nl]
+		}
+	} else if c, ok := strings.CutPrefix(string(data), "-- cursor: "); ok {
+		return []string{}, strings.TrimSpace(c), truncated
+	}
+	if len(data) > limit {
+		data = data[len(data)-limit:]
+		truncated = true
+	}
+	if truncated {
+		// Advance past any partial leading UTF-8 rune or partial leading line.
+		for len(data) > 0 && !utf8.RuneStart(data[0]) {
+			data = data[1:]
+		}
+		if nl := bytes.IndexByte(data, '\n'); nl >= 0 {
+			data = data[nl+1:]
 		}
 	}
+	text := strings.TrimRight(string(data), "\n")
+	if text == "" {
+		return []string{}, nextCursor, truncated
+	}
+	all := strings.Split(text, "\n")
 	// journalctl prints "-- No entries --" when empty.
 	if len(all) == 1 && all[0] == "-- No entries --" {
-		all = []string{}
+		return []string{}, nextCursor, truncated
 	}
-	return all, nextCursor, truncated, nil
+	return all, nextCursor, truncated
 }
+
+// tailBuffer retains the most recent `limit` bytes written to it so large journal outputs keep their
+// newest lines and trailing "-- cursor: ..." marker.
+type tailBuffer struct {
+	data      []byte
+	limit     int
+	truncated bool
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	if t.limit <= 0 {
+		if len(p) > 0 {
+			t.truncated = true
+		}
+		return len(p), nil
+	}
+	if len(p) >= t.limit {
+		t.data = append(t.data[:0], p[len(p)-t.limit:]...)
+		t.truncated = true
+		return len(p), nil
+	}
+	if len(t.data)+len(p) > t.limit {
+		drop := len(t.data) + len(p) - t.limit
+		copy(t.data, t.data[drop:])
+		t.data = t.data[:len(t.data)-drop]
+		t.truncated = true
+	}
+	t.data = append(t.data, p...)
+	return len(p), nil
+}
+
+func (t *tailBuffer) Bytes() []byte   { return t.data }
+func (t *tailBuffer) Truncated() bool { return t.truncated }
 
 type limitedBuffer struct {
 	buf   *bytes.Buffer

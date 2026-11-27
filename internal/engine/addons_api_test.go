@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/authz"
@@ -166,11 +168,36 @@ func TestAddonsAPICapabilityGatingWebUIOriginAndLogs(t *testing.T) {
 	if !detail.Installed || detail.UnreviewedBusCount != 1 {
 		t.Fatalf("installed=%v unreviewed=%d", detail.Installed, detail.UnreviewedBusCount)
 	}
-	if detail.Runtime.ActiveState != "active" || detail.Runtime.Health != "healthy" {
+	if detail.Runtime.ActiveState != "active" || detail.Runtime.Health != "running" {
 		t.Fatalf("runtime = %+v", detail.Runtime)
 	}
 	if detail.WebUI == nil || !detail.WebUI.OriginConflict || detail.WebUI.URL != "" {
 		t.Fatalf("expected multi-origin conflict suppression for admin.corp, got %+v", detail.WebUI)
+	}
+
+	// 1b. GET /api/v1/addons list endpoint respects capability gating.
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, withActor(httptest.NewRequest(http.MethodGet, "/api/v1/addons", nil), authz.AddonsRead))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/addons = %d: %s", rec.Code, rec.Body.String())
+	}
+	var listResp addonListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil || len(listResp.Items) != 1 || listResp.Items[0].Saved != nil {
+		t.Fatalf("listResp = %+v, err=%v", listResp, err)
+	}
+
+	// 1c. Authority injection / alternate IPv4 WebUI hostname is suppressed.
+	for _, evilHost := range []string{"x@admin.corp", "0xc0a80101", "3232235777", "0177.0.0.1"} {
+		api.store = fakeSnapshotStore{raw: []byte(`{"schemaVersion":4,"addons":[{"id":"org.andaru.sample","enabled":true,"settings":{"uiHost":"` + evilHost + `"}}]}`)}
+		rec = httptest.NewRecorder()
+		api.ServeHTTP(rec, withActor(httptest.NewRequest(http.MethodGet, "/api/v1/addons/sample", nil), authz.AddonsRead))
+		var evilDetail addonDetailResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &evilDetail); err != nil {
+			t.Fatal(err)
+		}
+		if evilDetail.WebUI == nil || !evilDetail.WebUI.OriginConflict || evilDetail.WebUI.URL != "" {
+			t.Fatalf("host %q was not suppressed: %+v", evilHost, evilDetail.WebUI)
+		}
 	}
 
 	// 2. With distinct WebUI hostname and configuration.read: saved IS included and WebUI URL is populated.
@@ -213,7 +240,14 @@ func TestAddonsAPICapabilityGatingWebUIOriginAndLogs(t *testing.T) {
 		t.Fatalf("runner calls = %v", runner.calls)
 	}
 
-	// 4. DELETE /stage refused while saved head or generation references the image.
+	// 4. DELETE /stage fails closed on snapshot errors AND refuses while saved head or generation references the image.
+	api.store = fakeSnapshotStore{err: config.ErrUpgradePending}
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, withActor(httptest.NewRequest(http.MethodDelete, "/api/v1/addons/sample/stage", nil), authz.AddonsManage))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ADDON_IMAGE_IN_USE") {
+		t.Fatalf("expected fail-closed 409 on ErrUpgradePending, got %d: %s", rec.Code, rec.Body.String())
+	}
+	api.store = fakeSnapshotStore{raw: []byte(`{"schemaVersion":4,"addons":[{"id":"org.andaru.sample","enabled":true,"settings":{"uiHost":"sample.lan"}}]}`)}
 	rec = httptest.NewRecorder()
 	api.ServeHTTP(rec, withActor(httptest.NewRequest(http.MethodDelete, "/api/v1/addons/sample/stage", nil), authz.AddonsManage))
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ADDON_IMAGE_IN_USE") {
@@ -245,7 +279,7 @@ func TestAddonsAPICapabilityGatingWebUIOriginAndLogs(t *testing.T) {
 		t.Fatalf("expected 400 for invalid cursor, got %d", rec.Code)
 	}
 
-	// 6. Symlink escape in file log directory is blocked by os.OpenRoot.
+	// 6. Symlink escape, intra-root symlink, and FIFO are all rejected with 503 LOGS_UNAVAILABLE (never hanging).
 	outside := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(outside, []byte("SECRET\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -256,7 +290,98 @@ func TestAddonsAPICapabilityGatingWebUIOriginAndLogs(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	api.ServeHTTP(rec, withActor(httptest.NewRequest(http.MethodGet, "/api/v1/addons/sample/logs/appfile", nil), authz.AddonsRead))
-	if rec.Code == http.StatusOK && strings.Contains(rec.Body.String(), "SECRET") {
-		t.Fatalf("file log followed symlink outside storage dir: %s", rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "LOGS_UNAVAILABLE") {
+		t.Fatalf("external symlink expected 503 LOGS_UNAVAILABLE, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Intra-root symlink must also be rejected by RESOLVE_NO_SYMLINKS / O_NOFOLLOW.
+	if err := os.WriteFile(filepath.Join(logDir, "other.log"), []byte("OTHER\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(logDir, "app.log"))
+	if err := os.Symlink("other.log", filepath.Join(logDir, "app.log")); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, withActor(httptest.NewRequest(http.MethodGet, "/api/v1/addons/sample/logs/appfile", nil), authz.AddonsRead))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "LOGS_UNAVAILABLE") {
+		t.Fatalf("intra-root symlink expected 503 LOGS_UNAVAILABLE, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// FIFO must fail immediately without blocking.
+	_ = os.Remove(filepath.Join(logDir, "app.log"))
+	if err := syscall.Mkfifo(filepath.Join(logDir, "app.log"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, withActor(httptest.NewRequest(http.MethodGet, "/api/v1/addons/sample/logs/appfile", nil), authz.AddonsRead))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "LOGS_UNAVAILABLE") {
+		t.Fatalf("FIFO expected 503 LOGS_UNAVAILABLE, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+type blockingAddonRunner struct {
+	started chan struct{}
+	unblock chan struct{}
+}
+
+func (b *blockingAddonRunner) Arm(context.Context, int, int) error { return nil }
+func (b *blockingAddonRunner) Disarm(context.Context, int)         {}
+func (b *blockingAddonRunner) Realize(_ context.Context, _ string, _ int, _ ...string) error {
+	close(b.started)
+	<-b.unblock
+	return nil
+}
+
+func TestAddonsAPIAsyncStageAndConcurrentConflict(t *testing.T) {
+	cat := testAPIAddonCatalog(t)
+	runner := &blockingAddonRunner{started: make(chan struct{}), unblock: make(chan struct{})}
+	api := newAddonsAPI(cat, fakeSnapshotStore{raw: []byte(`{"schemaVersion":4}`)}, t.TempDir(), t.TempDir(), nil, runner, nil)
+
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, withActor(httptest.NewRequest(http.MethodPost, "/api/v1/addons/sample/stage", nil), authz.AddonsManage))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST /stage = %d: %s", rec.Code, rec.Body.String())
+	}
+	var st addonStagedView
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil || !st.Staging {
+		t.Fatalf("expected staging=true, got %+v (%v)", st, err)
+	}
+	<-runner.started
+
+	rec2 := httptest.NewRecorder()
+	api.ServeHTTP(rec2, withActor(httptest.NewRequest(http.MethodPost, "/api/v1/addons/sample/stage", nil), authz.AddonsManage))
+	if rec2.Code != http.StatusConflict || !strings.Contains(rec2.Body.String(), "STAGE_IN_PROGRESS") {
+		t.Fatalf("concurrent POST /stage = %d: %s", rec2.Code, rec2.Body.String())
+	}
+	close(runner.unblock)
+}
+
+func TestParseJournalOutputBoundsTailAndUTF8(t *testing.T) {
+	// Edge case that previously panicked: raw length > limit before TrimRight, < limit after TrimRight.
+	trailingNewlines := append([]byte(strings.Repeat("a", maxAddonLogBytes-1)), '\n', '\n')
+	lines, cursor, truncated := parseJournalOutput(trailingNewlines, false, maxAddonLogBytes)
+	if len(lines) != 1 || cursor != "" || truncated {
+		t.Fatalf("unexpected trailing-newline result: lines=%d cursor=%q truncated=%v", len(lines), cursor, truncated)
+	}
+
+	// Oversized multi-byte UTF-8 output preserves newest lines, valid UTF-8, and trailing cursor.
+	var tb tailBuffer
+	tb.limit = 128
+	_, _ = tb.Write([]byte(strings.Repeat("é", 100) + "\nnewest-line\n-- cursor: s=999\n"))
+	lines, cursor, truncated = parseJournalOutput(tb.Bytes(), tb.Truncated(), 64)
+	if !truncated || cursor != "s=999" || !slices.Contains(lines, "newest-line") {
+		t.Fatalf("oversized journal parse: lines=%v cursor=%q truncated=%v", lines, cursor, truncated)
+	}
+	for _, line := range lines {
+		if !utf8.ValidString(line) {
+			t.Fatalf("invalid UTF-8 in journal line: %q", line)
+		}
+	}
+}
+
+func TestManagementOriginsRejectsEmptyHostname(t *testing.T) {
+	if _, _, err := managementOrigins([]string{"https://:8443"}); err == nil {
+		t.Fatal("expected https://:8443 to be rejected")
 	}
 }

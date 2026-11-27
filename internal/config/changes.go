@@ -543,10 +543,13 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 				}
 				reference := map[string]any{"secret": name}
 				if pw["unresolved"] == true && !setting { // a set resolves it
-					// Only a restore leaves a channel's secret unresolved, which a client may echo back unchanged; a new
-					// unresolved one would skip the channel's checks.
+					// Only a restore leaves a channel's or add-on's secret unresolved, which a client may echo back
+					// unchanged; a new unresolved one would skip secret checks.
 					if op.Collection == "notifications.channels" && !heldUnresolved(before[key], f.path, name) {
 						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A notification channel's secret must be set or exist.")
+					}
+					if op.Collection == "addons" && !heldUnresolved(before[key], f.path, name) {
+						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "An add-on secret must be set or exist.")
 					}
 					reference["unresolved"] = true
 				}
@@ -593,6 +596,34 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 	}
 	if d.Addons, e = rewrite(d.Addons, "addons", writes, deleted, createKeys, func(x addonConfig) string { return x.ID }); e != nil {
 		return empty, e
+	}
+	// Prune optional add-on secrets dropped from settings so they do not linger in secrets.db or block re-adding.
+	for i := range d.Addons {
+		a := d.Addons[i]
+		if _, wasWritten := writes[objectKey{"addons", a.ID}]; !wasWritten {
+			continue
+		}
+		scope := addonSecretScope(a.ID)
+		entries := current.Secrets.Scopes[scope]
+		if len(entries) == 0 {
+			continue
+		}
+		referenced := map[string]bool{}
+		for _, v := range a.Settings {
+			if ref, ok := v.(map[string]any); ok {
+				if name, ok := ref["secret"].(string); ok {
+					referenced[name] = true
+				}
+			}
+		}
+		for name := range entries {
+			if !referenced[name] {
+				delete(entries, name)
+			}
+		}
+		if len(entries) == 0 {
+			delete(current.Secrets.Scopes, scope)
+		}
 	}
 	if d.DHCP6, e = rewrite(d.DHCP6, "dhcp6", writes, deleted, createKeys, func(x dhcp6Entry) string { return x.ID }); e != nil {
 		return empty, e
@@ -1047,14 +1078,25 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 
 // heldUnresolved says whether old, a channel before the batch, holds name unresolved at path.
 func heldUnresolved(old any, path, name string) bool {
-	c, ok := old.(*channel)
-	if !ok {
-		return false
-	}
-	for _, s := range c.secrets() {
-		if s.path == path {
-			return s.ref != nil && s.ref.Secret == name && s.ref.Unresolved
+	switch obj := old.(type) {
+	case *channel:
+		for _, s := range obj.secrets() {
+			if s.path == path {
+				return s.ref != nil && s.ref.Secret == name && s.ref.Unresolved
+			}
 		}
+	case *addonConfig:
+		propName, ok := strings.CutPrefix(path, "/settings/")
+		if !ok {
+			return false
+		}
+		ref, ok := obj.Settings[propName].(map[string]any)
+		if !ok {
+			return false
+		}
+		sec, _ := ref["secret"].(string)
+		unres, _ := ref["unresolved"].(bool)
+		return sec == name && unres
 	}
 	return false
 }
