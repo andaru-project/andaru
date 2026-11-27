@@ -225,6 +225,21 @@ func TestProxyARPWarning(t *testing.T) {
 	}
 }
 
+// A proxy ARP entry on the uplink answers for the 1:1 externals it covers, and only those.
+func TestProxyARPCovers(t *testing.T) {
+	r := render(t, fixture(t, "proxy-arp"))
+	if findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/1/external") || findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/2/external") || !findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/3/external") {
+		t.Fatalf("findings %+v", r.Findings)
+	}
+	// On another segment, the entry covers nothing.
+	r = render(t, change(t, fixture(t, "proxy-arp"), func(d map[string]any) {
+		d["virtualAddresses"].([]any)[0].(map[string]any)["segment"] = "seg_00000002-0000-4000-8000-000000000002"
+	}))
+	if !findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/1/external") {
+		t.Fatalf("findings %+v", r.Findings)
+	}
+}
+
 // A WAN address learned by DHCP inside a 1:1 range would hand the firewall's own traffic to the inside host.
 func TestOneToOneLearnedAddress(t *testing.T) {
 	in := fixture(t, "nat-one-to-one")
@@ -329,5 +344,16 @@ func TestForwardToALearnedFirewallAddress(t *testing.T) {
 	script := table(t, render(t, in))
 	if strings.Contains(chainOf(t, script, "forward"), pfwWeb) || !strings.Contains(chainOf(t, script, "input"), pfwWeb) {
 		t.Fatalf("learned address target:\n%s", script)
+	}
+}
+
+// A proxy ARP entry is not the firewall's own: reflection may take it.
+func TestProxyARPNotOwn(t *testing.T) {
+	r := render(t, change(t, fixture(t, "virtual"), func(d map[string]any) {
+		d["virtualAddresses"] = append(d["virtualAddresses"].([]any), map[string]any{"id": "vip_00000003-0000-4000-8000-000000000003", "name": "proxied",
+			"kind": "proxyArp", "segment": "seg_00000002-0000-4000-8000-000000000002", "address": "192.0.2.50"})
+	}))
+	if script := table(t, r); !strings.Contains(script, "set virtual_4 { type ipv4_addr; elements = { 172.16.53.53 }; }") {
+		t.Fatalf("virtual set:\n%s", script)
 	}
 }

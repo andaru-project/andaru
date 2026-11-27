@@ -347,6 +347,11 @@ func (r *renderer) networkd(i int) {
 		// Forwarding only together with the filter: nothing may route unfiltered.
 		network = append(network, "IPv4Forwarding=yes", "IPv6Forwarding=yes")
 	}
+	if i, segmented := r.segment[l.ID]; segmented && r.proxiesARP(r.d.Segments[i].ID) {
+		// Scoped by medium_id (packaging/sysctl.d) to the routes on andaru-vip.
+		network = append(network, "IPv4ProxyARP=yes")
+		sources = append(sources, "/virtualAddresses")
+	}
 	sections[0].lines = append(network, sections[0].lines...)
 	r.file(networkDir+name+".network", "0644", ini(append([]section{{"Match", []string{match}}, {"Link", settings}}, sections...)...), append(sources, self))
 }
@@ -366,7 +371,13 @@ func (r *renderer) virtualAddresses() {
 		return
 	}
 	var addresses []string
+	var routes []section
 	for _, v := range r.d.VirtualAddresses {
+		if v.proxied() {
+			// The route that leaves by another interface, without which the kernel proxies no ARP for it.
+			routes = append(routes, section{"Route", []string{"Destination=" + prefixOf(v.Address).String()}})
+			continue
+		}
 		a, err := netip.ParseAddr(v.Address)
 		if err != nil {
 			continue
@@ -376,7 +387,12 @@ func (r *renderer) virtualAddresses() {
 	sources := []string{"/virtualAddresses"}
 	r.file(networkDir+vipDevice+".netdev", "0644", ini(section{"NetDev", []string{"Name=" + vipDevice, "Kind=dummy"}}), sources)
 	network := append([]string{"LinkLocalAddressing=no", "LLDP=no"}, addresses...)
-	r.file(networkDir+vipDevice+".network", "0644", ini(section{"Match", []string{"Name=" + vipDevice}}, section{"Link", []string{"RequiredForOnline=no"}}, section{"Network", network}), sources)
+	r.file(networkDir+vipDevice+".network", "0644", ini(append([]section{{"Match", []string{"Name=" + vipDevice}}, {"Link", []string{"RequiredForOnline=no"}}, {"Network", network}}, routes...)...), sources)
+}
+
+// proxiesARP says whether a proxy ARP entry names the segment with this ID.
+func (r *renderer) proxiesARP(segment string) bool {
+	return slices.ContainsFunc(r.d.VirtualAddresses, func(v virtualAddress) bool { return v.proxied() && v.Segment == segment })
 }
 
 // vipDevice is the dummy interface that holds the virtual addresses.

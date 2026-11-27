@@ -20,7 +20,7 @@ func (r *renderer) ownStatic() []netip.Addr {
 	}
 	// Also declared, since the device may not exist yet or may still hold an address a change just removed.
 	for _, v := range r.d.VirtualAddresses {
-		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() && !v.proxied() {
 			out = append(out, a)
 		}
 	}
@@ -372,6 +372,11 @@ func (f *filter) checkExternal(external netip.Prefix, path string) {
 				held = true
 			}
 		}
+		// A proxy ARP entry on this segment covering the whole range answers for it.
+		held = held || slices.ContainsFunc(r.d.VirtualAddresses, func(v virtualAddress) bool {
+			x := prefixOf(v.Address)
+			return v.proxied() && v.Segment == s.ID && x.IsValid() && x.Bits() <= external.Bits() && x.Contains(external.Addr())
+		})
 		if subnet.IsValid() && !held {
 			r.find("warning", "PROXY_ARP_REQUIRED", path, "This address is on the "+subnet.String()+" uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP is tracked in #43.")
 		}
@@ -382,7 +387,7 @@ func (f *filter) checkExternal(external netip.Prefix, path string) {
 func (f *filter) virtual4() []string {
 	var out []string
 	for _, v := range f.r.d.VirtualAddresses {
-		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() && !v.proxied() {
 			out = append(out, a.String())
 		}
 	}
