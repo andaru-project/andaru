@@ -11,7 +11,7 @@ The owner approved this prerequisite order after mapping the code:
 - Build manual backup/restore for the existing configuration and configuration-secret stores, through the root-local engine API and CLI.
 - For this console-only stage, verified OS-root access authorizes secret export instead of re-entering an Andaru account password: no Andaru account/credential store or password authentication exists yet.
 - Future network/web secret export still requires the approved administrator permission, fresh password reauthentication and auditing. This exception does not authorize a network listener or a password-bypass endpoint.
-- Users, user credentials, extension manifests/data/secrets, remote destinations and scheduled jobs remain separate planned stages. They are not represented by fake empty stores, stub backends or claims of full issue completion.
+- Extension manifests/data/secrets, remote destinations and scheduled jobs remain separate planned stages. Users and user credentials came later, in manifest format 2. They are not represented by fake empty stores, stub backends or claims of full issue completion.
 
 This is not the cold local package-recovery set from PR #56. Portable backups contain logical documents, not database copies, executables, rendered generations, runtime sessions, audit logs, usage statistics or local configuration history. They do not revert Debian packages or install extensions.
 
@@ -172,7 +172,7 @@ Use failing consumer-visible tests for uncertain edges and focused real round tr
 - Real root-local CLI/API tests verify non-root denial, no passphrase/secret logging, no generic extraction, no destination overwrite, no archive mode/owner restoration and no plaintext scratch files. Do not claim secure memory erasure.
 - Package-level smoke and both Debian baseline VMs verify export, altered saved configuration, inspect/restore, engine restart, unresolved-secret repair and ordinary reviewed apply/rollback. Capture evidence that backup and saved-only restore do not restart network services or mutate live rules. Do not execute a management-disrupting apply without the established VM safety snapshot/console procedure.
 
-Before calling this stage complete: update OpenAPI, CLI help, backup/restore and release-compatibility docs, include the new dependency in normal security review, and run the affected suites plus existing required gates. Do not claim users, extensions, schedules, remote retention or full issue #13 completion.
+Before calling this stage complete: update OpenAPI, CLI help, backup/restore and release-compatibility docs, include the new dependency in normal security review, and run the affected suites plus existing required gates. Do not claim extensions, schedules, remote retention or full issue #13 completion; users and their credentials are in format 2.
 
 ## Remaining issue stages, not part of this implementation
 
