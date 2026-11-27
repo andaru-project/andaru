@@ -29,9 +29,9 @@ export function Bell() {
 // Person silhouette for the header account menu.
 export function UserMark() {
   return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="8" cy="5.2" r="2.7" />
-      <path d="M2.8 13.5a5.2 5.2 0 0 1 10.4 0" />
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="8" cy="4.8" r="2.4" />
+      <path d="M2.8 14c.6-2.5 2.7-4 5.2-4s4.6 1.5 5.2 4" />
     </svg>
   );
 }

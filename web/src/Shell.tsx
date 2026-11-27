@@ -336,17 +336,22 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
             {canReadNotifications && <HeaderNotifications notifications={notifications} />}
             <Menu position="bottom-end" floatingStrategy="fixed" width={220} middlewares={{ flip: false, shift: true }} transitionProps={{ duration: 0 }}>
               <Menu.Target>
-                <ActionIcon className="account-button" variant="default" size={30} aria-label="Account" title={session.account.login}>
+                <ActionIcon className="account-button" variant="default" size={30} aria-label={`Account (${session.account.login})`} title={session.account.login}>
                   <UserMark />
                 </ActionIcon>
               </Menu.Target>
-              <Menu.Dropdown>
-                <div className="account-menu-header">
-                  <Text size="sm" fw={600} truncate="end">{session.account.login}</Text>
-                  {session.account.displayName && session.account.displayName !== session.account.login && (
-                    <Text size="xs" c="dimmed" truncate="end">{session.account.displayName}</Text>
-                  )}
-                </div>
+              <Menu.Dropdown className="account-menu-dropdown">
+                {(() => {
+                  const display = session.account.displayName?.trim() ?? '';
+                  return (
+                    <div className="account-menu-header" role="presentation">
+                      <Text component="div" size="sm" fw={600} truncate="end" title={session.account.login}>{session.account.login}</Text>
+                      {display && display !== session.account.login && (
+                        <Text component="div" size="xs" c="dimmed" truncate="end" title={display}>{display}</Text>
+                      )}
+                    </div>
+                  );
+                })()}
                 <Menu.Divider />
                 <Menu.Item onClick={() => void navigate('/system/session')}>Session details</Menu.Item>
                 {capabilities.has('users.read') && <Menu.Item onClick={() => void changePassword()}>Change password</Menu.Item>}

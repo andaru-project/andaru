@@ -611,7 +611,7 @@ it('lets the user pick a display time zone from the account menu and updates tim
   mount('/system/session');
   // The header button uses an icon instead of printing the display name; user details appear at the top of the menu.
   expect(screen.queryByRole('button', { name: 'Administrator' })).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Account' }));
+  await user.click(screen.getByRole('button', { name: 'Account (admin)' }));
   const menu = await screen.findByRole('menu');
   expect(within(menu).getByText('admin')).toBeInTheDocument();
   expect(within(menu).getByText('Administrator')).toBeInTheDocument();
@@ -623,6 +623,20 @@ it('lets the user pick a display time zone from the account menu and updates tim
   await user.click(screen.getByRole('button', { name: 'Done' }));
   expect(screen.getByText('2026-11-16 13:00:00 +01:00')).toBeInTheDocument();
 }, 15_000);
+
+it('does not repeat the login in the account menu when displayName matches login or is blank', async () => {
+  const user = userEvent.setup();
+  routes();
+  const sameName = { ...reader, account: { ...reader.account, login: 'admin', displayName: ' admin ' } };
+  render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={sameName} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  await user.click(screen.getByRole('button', { name: 'Account (admin)' }));
+  const menu = await screen.findByRole('menu');
+  expect(within(menu).getAllByText('admin')).toHaveLength(1);
+});
 
 const notification = (id: number, severity: 'info' | 'warning' | 'critical', subject = `Notice ${id}`) => ({
   id,
