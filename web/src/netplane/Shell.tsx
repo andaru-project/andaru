@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Stack } from '@mantine/core';
 import { useState } from 'react';
-import { Route, Routes } from 'react-router';
 import { AppFrame, type NavGroup } from '../AppFrame';
 import { FleetWorkspace } from './FleetWorkspace';
 
@@ -41,7 +40,6 @@ export function Shell({ onSignOut, onSessionLost }: ShellProps) {
   return (
     <AppFrame
       product="Netplane"
-      baseTitle="Netplane"
       pageTitles={pageTitles}
       connected={connected}
       accountLabel="Account"
@@ -51,9 +49,7 @@ export function Shell({ onSignOut, onSessionLost }: ShellProps) {
       groups={groups}
     >
       <Stack>
-        <Routes>
-          <Route path="/*" element={<FleetWorkspace apiPrefix="api/v1" overview csrfToken="" canReadTargets canWrite onSessionLost={onSessionLost} onConnection={setConnected} />} />
-        </Routes>
+        <FleetWorkspace apiPrefix="api/v1" overview csrfToken="" canReadTargets canWrite onSessionLost={onSessionLost} onConnection={setConnected} />
       </Stack>
     </AppFrame>
   );

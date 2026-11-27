@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import './styles.css';
 import { Alert, Badge, Button, Group, Stack } from '@mantine/core';
-import { Link, Navigate, Route, Routes } from 'react-router';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router';
 import { consumeUserActivity } from '../api';
 import { configureNetplaneApi } from './api';
 import { setRoutePrefix, vlanFlowPath } from './routing';
@@ -24,10 +24,18 @@ export interface FleetWorkspaceProps {
   apiPrefix?: string;
   /**
    * Mounts the workspace at the app's root rather than under `/network`: the Overview at `/`, the fleet screens
-   * under `network/`, as standalone Netplane does.
+   * under `network/`, and the old root paths sent there, as standalone Netplane does.
    */
   overview?: boolean;
   onConnection?: (connected: boolean) => void;
+}
+
+// Standalone Netplane's paths from before its routes followed Andaru's.
+const oldPaths = ['topology', 'vlans', 'vlans/flow', 'devices', 'devices/:id', 'clients', 'diagnostics'];
+
+function ToNetwork() {
+  const { pathname, search } = useLocation();
+  return <Navigate to={`/network${pathname}${search}`} replace />;
 }
 
 export function FleetWorkspace({
@@ -109,6 +117,7 @@ export function FleetWorkspace({
       )}
 
       <Routes>
+        {overview && oldPaths.map((path) => <Route key={path} path={path} element={<ToNetwork />} />)}
         {overview && (
           <Route
             index

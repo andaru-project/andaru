@@ -17,8 +17,8 @@ interface AppFrameProps {
   product: string;
   /** Shown beside the product name in the header and the document title, such as Andaru's host name. */
   subtitle?: string;
-  /** The document title while the frame is not mounted. */
-  baseTitle: string;
+  /** The document title while the frame is not mounted; the product name by default. */
+  baseTitle?: string;
   pageTitles: Record<string, string>;
   connected: boolean;
   /** Header controls between the connection badge and the account menu. */
@@ -42,7 +42,7 @@ const schemes: Array<{ value: MantineColorScheme; label: string }> = [
   { value: 'dark', label: 'Dark' },
 ];
 
-export function AppFrame({ product, subtitle, baseTitle, pageTitles, connected, headerActions, accountLabel, accountTitle, accountItems, timeZoneNote, onSignOut, homeLabel, groups, navBadges = {}, children }: AppFrameProps) {
+export function AppFrame({ product, subtitle, baseTitle = product, pageTitles, connected, headerActions, accountLabel, accountTitle, accountItems, timeZoneNote, onSignOut, homeLabel, groups, navBadges = {}, children }: AppFrameProps) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const timeZone = useTimeZone();
   const [timeZoneAt, setTimeZoneAt] = useState<number | null>(null);
