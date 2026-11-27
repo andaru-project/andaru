@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, apiUrl, configureNetplaneApi } from './api';
 import { apiBasePath, deviceIdFromPath, devicePath, getRouterBasename, netplanePath, pinAppRoot, resetPinnedRoot, setRoutePrefix, vlanFlowPath } from './routing';
 import { Shell } from './Shell';
+import { emptyFlow, emptyState, emptyTopology } from '../test/fleet';
 
 const testTheme = createTheme({ primaryColor: 'teal', defaultRadius: 'sm' });
 
@@ -27,26 +28,11 @@ afterEach(() => {
   window.history.replaceState({}, '', '/');
 });
 
-const emptyState = {
-  devices: [],
-  links: [],
-  lag_groups: [],
-  segments: [],
-  zones: [],
-  gateways: [],
-  routes: [],
-  vpns: [],
-  firewalls: [],
-  radios: [],
-  wireless_uplinks: [],
-  clients: [],
-};
-
 // The shell reads the fleet itself; these answers keep it on the screens under test.
 function mockFleet() {
   vi.spyOn(api, 'getState').mockResolvedValue(emptyState);
-  vi.spyOn(api, 'getTopology').mockResolvedValue({ generated_at: '2026-01-01T00:00:00Z', root_ids: [], nodes: [], edges: [] });
-  vi.spyOn(api, 'getVLANFlow').mockResolvedValue({ generated_at: '2026-01-01T00:00:00Z', vlans: [], findings: [] });
+  vi.spyOn(api, 'getTopology').mockResolvedValue(emptyTopology);
+  vi.spyOn(api, 'getVLANFlow').mockResolvedValue(emptyFlow);
   vi.spyOn(api, 'listTargets').mockResolvedValue([]);
   vi.spyOn(api, 'listDiagnostics').mockResolvedValue([]);
 }
