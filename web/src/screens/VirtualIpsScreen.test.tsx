@@ -326,7 +326,14 @@ describe('VirtualIpsScreen helpers', () => {
       { id: 'lnk_dmz', name: 'eth3', kind: 'ethernet' as const, enabled: true, mtu: 1500 },
       { id: 'lnk_pppoe', name: 'ppp0', kind: 'pppoe' as const, enabled: true, mtu: 1492, parent: 'lnk_wan' },
     ];
-    const segments = [wanStatic6, wanSlaac, wanDhcp6, lan6, lanDelegated, dmz6, ipv4Only, wanPppoe6];
+    const wanPppoeStatic6 = {
+      id: 'seg_pppoe_static6',
+      name: 'PPPoE static6',
+      link: 'lnk_pppoe',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'pppoe' }, ipv6: { mode: 'static', addresses: ['2001:db8:4::2/64'] } },
+    };
+    const segments = [wanStatic6, wanSlaac, wanDhcp6, lan6, lanDelegated, dmz6, ipv4Only, wanPppoe6, wanPppoeStatic6];
 
     expect(virtualAddressKind({ kind: 'proxyNdp' })).toBe('proxyNdp');
     expect(virtualAddressFamily({ kind: 'proxyNdp', address: '2001:db8:1::50' })).toBe('IPv6');
@@ -346,6 +353,8 @@ describe('VirtualIpsScreen helpers', () => {
       .toMatch(/static, SLAAC, or DHCPv6/);
     expect(checkVirtualIp('Delegated uplink', '2001:db8:9::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_del', hostSegment: 'seg_lan', segments, links }).errors.get('segment'))
       .toMatch(/static, SLAAC, or DHCPv6/);
+    expect(checkVirtualIp('PPPoE host', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: 'seg_pppoe_static6', segments, links }).errors.get('hostSegment'))
+      .toMatch(/PPPoE/);
     for (const badHost of ['seg_v4only', 'seg_slaac', 'seg_dhcp6']) {
       expect(checkVirtualIp('Bad host', '2001:db8:1::50', [], undefined, { kind: 'proxyNdp', segment: 'seg_wan6', hostSegment: badHost, segments, links }).errors.get('hostSegment'))
         .toMatch(/static or delegated/);

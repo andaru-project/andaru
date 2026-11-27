@@ -99,8 +99,9 @@ export function isProxyNdpUplinkSegment(segment: Segment, links?: SavedLink[]): 
   return mode === 'static' || mode === 'slaac' || mode === 'dhcp6';
 }
 
-// Proxy NDP host segments must be inside segments with static or delegated IPv6 addressing.
-export function isProxyNdpHostSegment(segment: Segment): boolean {
+// Proxy NDP host segments must be non-PPPoE inside segments with static or delegated IPv6 addressing.
+export function isProxyNdpHostSegment(segment: Segment, links?: SavedLink[]): boolean {
+  if (links?.find((l) => l.id === segment.link)?.kind === 'pppoe') return false;
   const mode = segment.addressing.ipv6.mode;
   return mode === 'static' || mode === 'delegated';
 }
@@ -217,6 +218,8 @@ export function checkVirtualIp(
       stale = true;
     }
 
+    const chosenHostLink = chosenHostSegment && links ? links.find((l) => l.id === chosenHostSegment.link) : undefined;
+
     if (!hostSegmentId) {
       errors.set('hostSegment', 'Choose the segment where the host lives.');
     } else if (segments && !chosenHostSegment) {
@@ -224,7 +227,10 @@ export function checkVirtualIp(
       stale = true;
     } else if (segmentId && hostSegmentId === segmentId) {
       errors.set('hostSegment', 'Host segment must differ from the uplink segment.');
-    } else if (chosenHostSegment && !isProxyNdpHostSegment(chosenHostSegment)) {
+    } else if (chosenHostLink?.kind === 'pppoe') {
+      errors.set('hostSegment', 'Proxy NDP host segment cannot be on a PPPoE link.');
+      stale = true;
+    } else if (chosenHostSegment && !isProxyNdpHostSegment(chosenHostSegment, links)) {
       errors.set('hostSegment', 'Choose a host segment with static or delegated IPv6 addressing.');
       stale = true;
     }

@@ -107,7 +107,7 @@ function VirtualIpEditor({
 
   const eligibleSegments = sortedSegments.filter(isProxyArpEligibleSegment);
   const eligibleNdpUplinks = sortedSegments.filter((s) => isProxyNdpUplinkSegment(s, links));
-  const eligibleNdpHosts = sortedSegments.filter(isProxyNdpHostSegment);
+  const eligibleNdpHosts = sortedSegments.filter((s) => isProxyNdpHostSegment(s, links));
 
   const segmentOptions = (() => {
     const items = eligibleSegments.map((s) => ({
