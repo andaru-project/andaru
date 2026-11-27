@@ -609,7 +609,12 @@ it('lets the user pick a display time zone from the account menu and updates tim
   const user = userEvent.setup();
   routes();
   mount('/system/session');
-  await user.click(screen.getByRole('button', { name: 'Administrator' }));
+  // The header button uses an icon instead of printing the display name; user details appear at the top of the menu.
+  expect(screen.queryByRole('button', { name: 'Administrator' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Account' }));
+  const menu = await screen.findByRole('menu');
+  expect(within(menu).getByText('admin')).toBeInTheDocument();
+  expect(within(menu).getByText('Administrator')).toBeInTheDocument();
   await user.click(await screen.findByRole('menuitem', { name: 'Time zone…' }, { timeout: 5000 }));
   const input = await screen.findByRole('combobox', { name: 'Time zone' }, { timeout: 5000 });
   await user.clear(input);

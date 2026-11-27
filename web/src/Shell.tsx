@@ -1,4 +1,4 @@
-import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, Modal, NavLink, Select, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
+import { AccordionChevron, ActionIcon, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, Modal, NavLink, Select, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
@@ -18,7 +18,7 @@ import { DashboardScreen } from './screens/DashboardScreen';
 import { DhcpScreen } from './screens/DhcpScreen';
 import { DnsScreen } from './screens/DnsScreen';
 import { InterfacesScreen } from './screens/InterfacesScreen';
-import { Bell } from './screens/Marks';
+import { Bell, UserMark } from './screens/Marks';
 import { NatScreen } from './screens/NatScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
 import { PasswordDialog } from './screens/PasswordDialog';
@@ -334,9 +334,20 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
             {/* Connected is the usual state and says so quietly; a lost connection is the one that shouts. */}
             <Badge color={connected ? 'green' : 'red'} variant={connected ? 'dot' : 'filled'} className={connected ? 'quiet-badge' : undefined} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
             {canReadNotifications && <HeaderNotifications notifications={notifications} />}
-            <Menu position="bottom-end">
-              <Menu.Target><Button className="account-button" variant="default" size="xs">{session.account.displayName || session.account.login}</Button></Menu.Target>
+            <Menu position="bottom-end" floatingStrategy="fixed" width={220} middlewares={{ flip: false, shift: true }} transitionProps={{ duration: 0 }}>
+              <Menu.Target>
+                <ActionIcon className="account-button" variant="default" size={30} aria-label="Account" title={session.account.login}>
+                  <UserMark />
+                </ActionIcon>
+              </Menu.Target>
               <Menu.Dropdown>
+                <div className="account-menu-header">
+                  <Text size="sm" fw={600} truncate="end">{session.account.login}</Text>
+                  {session.account.displayName && session.account.displayName !== session.account.login && (
+                    <Text size="xs" c="dimmed" truncate="end">{session.account.displayName}</Text>
+                  )}
+                </div>
+                <Menu.Divider />
                 <Menu.Item onClick={() => void navigate('/system/session')}>Session details</Menu.Item>
                 {capabilities.has('users.read') && <Menu.Item onClick={() => void changePassword()}>Change password</Menu.Item>}
                 <Menu.Divider />
