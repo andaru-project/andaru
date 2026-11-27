@@ -134,9 +134,14 @@ func (r *renderer) filterChains() {
 		f.set("internal", "ifname", "", quoted(names), "")
 		// A virtual address belongs to its service: reflection never takes it.
 		v := f.virtual4()
-		f.set("internal_4", "ipv4_addr", "", append(own, v...), "")
+		// A held block is a prefix, which only an interval set takes.
+		flags := ""
+		if slices.ContainsFunc(v, func(e string) bool { return strings.Contains(e, "/") }) {
+			flags = "interval"
+		}
+		f.set("internal_4", "ipv4_addr", flags, append(own, v...), "")
 		if len(v) > 0 {
-			f.set("virtual_4", "ipv4_addr", "", v, "")
+			f.set("virtual_4", "ipv4_addr", flags, v, "")
 		}
 	}
 	// A forward's own rule comes before the rules, so no later rule can shadow it.

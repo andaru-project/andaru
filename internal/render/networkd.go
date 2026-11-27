@@ -379,11 +379,12 @@ func (r *renderer) virtualAddresses() {
 			routes = append(routes, section{"Route", []string{"Destination=" + prefixOf(v.Address).String()}})
 			continue
 		}
-		a, err := netip.ParseAddr(v.Address)
-		if err != nil {
-			continue
+		if a, err := netip.ParseAddr(v.Address); err == nil {
+			addresses = append(addresses, "Address="+netip.PrefixFrom(a, a.BitLen()).String())
+		} else if p, err := netip.ParsePrefix(v.Address); err == nil {
+			// A held block: a local route makes every address of it the firewall's own, in the local table.
+			routes = append(routes, section{"Route", []string{"Destination=" + p.String(), "Type=local"}})
 		}
-		addresses = append(addresses, "Address="+netip.PrefixFrom(a, a.BitLen()).String())
 	}
 	sources := []string{"/virtualAddresses"}
 	r.file(networkDir+vipDevice+".netdev", "0644", ini(section{"NetDev", []string{"Name=" + vipDevice, "Kind=dummy"}}), sources)
