@@ -473,6 +473,7 @@ func (r *renderer) proxyNDPOnLink() {
 				subnets = append(subnets, p)
 			}
 		}
+		known := len(subnets) > 0 // a DHCPv6 address alone is a /128: the on-link prefix comes as a route, unseen here
 		for _, l := range r.in.Links {
 			if l.Name != r.name[s.Link] {
 				continue
@@ -480,10 +481,11 @@ func (r *renderer) proxyNDPOnLink() {
 			for _, x := range l.Addresses {
 				if y, e := netip.ParseAddr(x.Address); e == nil {
 					subnets = append(subnets, netip.PrefixFrom(y, x.PrefixLength))
+					known = known || y.Is6() && x.PrefixLength < 128
 				}
 			}
 		}
-		if !slices.ContainsFunc(subnets, func(p netip.Prefix) bool { return p.Contains(a) }) {
+		if known && !slices.ContainsFunc(subnets, func(p netip.Prefix) bool { return p.Contains(a) }) {
 			r.find("warning", "PROXY_NDP_OFF_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This address is on no subnet the segment's link has, so nothing there asks for it. Name an address of the uplink's prefix, or check that the link has its address.")
 		}
 	}

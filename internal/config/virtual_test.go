@@ -720,7 +720,17 @@ func TestProxyNDPValidation(t *testing.T) {
 		}, p + "/hostSegment", "Expected an existing segment."},
 		"a host segment without IPv6": {func(d map[string]any) {
 			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "none"}
-		}, p + "/hostSegment", "Expected a segment with IPv6"},
+		}, p + "/hostSegment", "Expected an inside segment with static or delegated IPv6"},
+		"an upstream host segment": {func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 56}
+		}, p + "/hostSegment", "Expected an inside segment with static or delegated IPv6"},
+		"an answering segment without IPv6": {func(d map[string]any) {
+			for _, s := range segmentsOf(d) {
+				if s.(map[string]any)["id"] == item(vips(d), 2)["segment"] {
+					s.(map[string]any)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "none"}
+				}
+			}
+		}, p + "/segment", "Expected a segment with IPv6"},
 		"the same segment twice": {func(d map[string]any) { item(vips(d), 2)["hostSegment"] = item(vips(d), 2)["segment"] }, p + "/hostSegment", "Expected a segment other than the one the firewall answers on."},
 		"off the static subnet":  {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:2::50" }, p + "/address", "Expected an address on one of the segment's static IPv6 subnets."},
 		"a firewall address":     {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::2" }, p + "/address", "This address is one of the firewall's own addresses."},

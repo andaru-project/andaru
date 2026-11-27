@@ -143,13 +143,19 @@ func TestProxyNDPOffSubnet(t *testing.T) {
 	in = change(t, in, func(d map[string]any) {
 		item(d, "segments", 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 56}
 	})
-	r := render(t, in)
-	if !findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || !findingAt(r, "PROXY_NDP_OFF_SUBNET", two) || !r.Realizable {
+	// Nothing learned yet, or a DHCPv6 address alone, a /128: the uplink's prefix is unknown, so nothing is said.
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || !r.Realizable {
 		t.Fatalf("nothing learned, yet %+v", r.Findings)
 	}
+	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:1::abcd", PrefixLength: 128, Scope: "global"}}
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) {
+		t.Fatalf("a DHCPv6 /128 alone warned: %+v", r.Findings)
+	}
+	// The uplink on another prefix: the address is off it, whatever the LAN learned.
+	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:9::2", PrefixLength: 64, Scope: "global"}}
 	in.Links[1].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:1::9", PrefixLength: 64, Scope: "global"}}
-	if r := render(t, in); !findingAt(r, "PROXY_NDP_OFF_SUBNET", one) {
-		t.Fatalf("the LAN's subnet counted: %+v", r.Findings)
+	if r := render(t, in); !findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || !findingAt(r, "PROXY_NDP_OFF_SUBNET", two) {
+		t.Fatalf("off the uplink's prefix, or the LAN's subnet counted: %+v", r.Findings)
 	}
 	in.Links[0].Addresses = []host.AddressStatus{
 		{Family: "ipv6", Address: "fe80::1", PrefixLength: 64, Scope: "link"},

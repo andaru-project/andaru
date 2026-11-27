@@ -352,14 +352,17 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken
 	case slices.ContainsFunc(d.Links, func(l link) bool { return l.ID == d.Segments[seg].Link && l.Kind == "pppoe" }):
 		// A point-to-point link has no neighbours to answer; the provider routes whatever it gives the firewall there.
 		bad(p+"/segment", "Expected a segment on an Ethernet, VLAN, bridge or bond link: a PPPoE link has no neighbours to answer. For a prefix the provider routes over it, use a held block.")
+	case d.Segments[seg].Addressing.IPv6.Mode == "none":
+		bad(p+"/segment", "Expected a segment with IPv6: without it the link has no address to answer neighbour discovery from.")
 	}
 	switch {
 	case host < 0:
 		bad(p+"/hostSegment", "Expected an existing segment.")
 	case v.HostSegment == v.Segment:
 		bad(p+"/hostSegment", "Expected a segment other than the one the firewall answers on.")
-	case d.Segments[host].Addressing.IPv6.Mode == "none":
-		bad(p+"/hostSegment", "Expected a segment with IPv6: without it the host has no link-local address of the firewall and no router advertisements to route back by.")
+	case d.Segments[host].Addressing.IPv6.Mode != "static" && d.Segments[host].Addressing.IPv6.Mode != "delegated":
+		// SLAAC and DHCPv6 segments face upstream: the firewall sends no router advertisements there.
+		bad(p+"/hostSegment", "Expected an inside segment with static or delegated IPv6: the host routes back by the firewall's link-local address, which the firewall's router advertisements give it.")
 	}
 	a, e := netip.ParseAddr(v.Address)
 	// Before i, every kind; after it, all but proxy NDP entries, which refuse the overlap themselves.
