@@ -23,11 +23,12 @@ export function highestSeverity(items: readonly Notification[]): NotificationSev
   return highest;
 }
 
-// isSafeAppLink allows only in-app paths that a browser cannot read as another site's. The page's own origin must
-// come back from the URL parser itself: it drops tabs and new lines and reads a backslash as a slash, so `/\t/host`
-// and `/\host` are `//host`. One it cannot parse is no link.
+// isSafeAppLink allows only single-slash in-app paths that a browser cannot read as another site's. The page's own
+// origin must come back from the URL parser itself: it drops tabs and new lines and reads a backslash as a slash, so
+// `/\t/host` and `/\host` are `//host`. Leading `//` is also rejected so same-origin protocol-relative URLs never reach
+// the SPA router. One it cannot parse is no link.
 export function isSafeAppLink(link: string | undefined): link is string {
-  if (typeof link !== 'string' || !link.startsWith('/')) return false;
+  if (typeof link !== 'string' || !link.startsWith('/') || link.startsWith('//')) return false;
   try {
     return new URL(link, window.location.origin).origin === window.location.origin;
   } catch {
@@ -37,11 +38,7 @@ export function isSafeAppLink(link: string | undefined): link is string {
 
 // diffNotifications returns items that are newly raised or whose updated timestamp moved since the previous snapshot.
 export function diffNotifications(previous: ReadonlyMap<number, string>, next: readonly Notification[]): Notification[] {
-  const changed: Notification[] = [];
-  for (const item of next) {
-    if (previous.get(item.id) !== item.updated) changed.push(item);
-  }
-  return changed;
+  return next.filter((item) => previous.get(item.id) !== item.updated);
 }
 
 // Per-browser alert preferences stored locally: in-page toasts are on by default; OS browser notifications are opt-in.
@@ -117,14 +114,6 @@ export function setNotificationPrefs(patch: Partial<NotificationPrefs>) {
   notifyPrefs();
 }
 
-export function resetNotificationPrefsForTests() {
-  currentPrefs = defaultNotificationPrefs;
-  try {
-    localStorage.removeItem(prefsStorageKey);
-  } catch { /* ignore */ }
-  notifyPrefs();
-}
-
 function subscribePrefs(listener: () => void) {
   if (prefsListeners.size === 0) {
     const stored = readStoredPrefs();
@@ -155,6 +144,8 @@ export function getBrowserNotificationSupport(): BrowserNotificationSupport {
 }
 
 const supportListeners = new Set<() => void>();
+let permissionStatus: PermissionStatus | null = null;
+let permissionQueryGeneration = 0;
 
 function notifySupport() {
   for (const listener of supportListeners) listener();
@@ -164,13 +155,27 @@ function subscribeSupport(listener: () => void) {
   if (supportListeners.size === 0 && typeof window !== 'undefined') {
     window.addEventListener('focus', notifySupport);
     document.addEventListener('visibilitychange', notifySupport);
+    // Watch live permission changes (e.g. site-settings toggle in the address bar) when supported.
+    const generation = ++permissionQueryGeneration;
+    if (typeof navigator !== 'undefined' && typeof navigator.permissions?.query === 'function') {
+      void navigator.permissions.query({ name: 'notifications' as PermissionName }).then((status) => {
+        if (generation !== permissionQueryGeneration || supportListeners.size === 0) return;
+        permissionStatus = status;
+        status.addEventListener('change', notifySupport);
+      }).catch(() => {});
+    }
   }
   supportListeners.add(listener);
   return () => {
     supportListeners.delete(listener);
     if (supportListeners.size === 0 && typeof window !== 'undefined') {
+      permissionQueryGeneration++;
       window.removeEventListener('focus', notifySupport);
       document.removeEventListener('visibilitychange', notifySupport);
+      if (permissionStatus) {
+        permissionStatus.removeEventListener('change', notifySupport);
+        permissionStatus = null;
+      }
     }
   };
 }
@@ -196,13 +201,28 @@ export async function requestBrowserNotificationPermission(): Promise<BrowserNot
   return getBrowserNotificationSupport();
 }
 
+// ToastMessage is the shared payload for both in-page toasts and native browser notifications.
+export interface ToastMessage {
+  id: number | string;
+  severity: NotificationSeverity;
+  subject: string;
+  detail?: string;
+  source?: string;
+  link?: string;
+}
+
 export function showBrowserNotification(
-  item: Pick<Notification, 'id' | 'severity' | 'source' | 'subject' | 'detail' | 'link'>,
+  item: ToastMessage,
   options: { hostname?: string; onOpen?: (link: string) => void } = {},
 ): globalThis.Notification | null {
-  if (getBrowserNotificationSupport() !== 'granted') return null;
+  if (getBrowserNotificationSupport() !== 'granted') {
+    // Sync subscribers immediately if permission was revoked while the tab stayed focused or hidden.
+    notifySupport();
+    return null;
+  }
   const title = options.hostname ? `${item.subject} — ${options.hostname}` : item.subject;
-  const body = item.detail?.trim() ? item.detail : `${item.severity} · ${item.source}`;
+  const fallbackBody = item.source ? `${item.severity} · ${item.source}` : item.severity;
+  const body = item.detail?.trim() ? item.detail : fallbackBody;
   const target = isSafeAppLink(item.link) ? item.link : '/system/notifications';
   try {
     const notice = new window.Notification(title, {
@@ -223,16 +243,8 @@ export function showBrowserNotification(
 }
 
 // Imperative toast queue subscribed by NotificationToaster so both live SSE diffs and explicit test actions share one stack.
-export interface ToastMessage {
-  id: number | string;
-  severity: NotificationSeverity;
-  subject: string;
-  detail?: string;
-  source?: string;
-  link?: string;
-}
+export const maxVisibleToasts = 4;
 
-const maxVisibleToasts = 4;
 const toastDurationMs: Record<NotificationSeverity, number> = {
   info: 6_000,
   warning: 8_000,
@@ -242,6 +254,7 @@ const toastDurationMs: Record<NotificationSeverity, number> = {
 const emptyToasts: readonly ToastMessage[] = [];
 const toastListeners = new Set<() => void>();
 const toastTimers = new Map<number | string, ReturnType<typeof setTimeout>>();
+const pausedToasts = new Set<number | string>();
 let currentToasts: readonly ToastMessage[] = emptyToasts;
 
 function notifyToasts() {
@@ -258,28 +271,35 @@ function clearToastTimer(id: number | string) {
 
 function scheduleToastDismiss(id: number | string, severity: NotificationSeverity) {
   clearToastTimer(id);
+  const duration = toastDurationMs[severity] ?? toastDurationMs.info;
   toastTimers.set(id, setTimeout(() => {
     toastTimers.delete(id);
     dismissNotificationToast(id);
-  }, toastDurationMs[severity]));
+  }, duration));
 }
 
 export function pushNotificationToast(message: ToastMessage) {
   const combined = [...currentToasts.filter((item) => item.id !== message.id), message];
   if (combined.length > maxVisibleToasts) {
-    for (const evicted of combined.slice(0, combined.length - maxVisibleToasts)) {
+    for (const evicted of combined.slice(0, -maxVisibleToasts)) {
       clearToastTimer(evicted.id);
+      pausedToasts.delete(evicted.id);
     }
     currentToasts = combined.slice(-maxVisibleToasts);
   } else {
     currentToasts = combined;
   }
-  scheduleToastDismiss(message.id, message.severity);
+  // Keep timers paused while the toast is hovered/focused or while the tab is hidden (so fallback toasts wait to be seen).
+  const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+  if (!pausedToasts.has(message.id) && !hidden) {
+    scheduleToastDismiss(message.id, message.severity);
+  }
   notifyToasts();
 }
 
 export function dismissNotificationToast(id: number | string) {
   clearToastTimer(id);
+  pausedToasts.delete(id);
   if (!currentToasts.some((item) => item.id === id)) return;
   const next = currentToasts.filter((item) => item.id !== id);
   currentToasts = next.length === 0 ? emptyToasts : next;
@@ -287,25 +307,32 @@ export function dismissNotificationToast(id: number | string) {
 }
 
 export function pauseNotificationToast(id: number | string) {
+  pausedToasts.add(id);
   clearToastTimer(id);
 }
 
 export function resumeNotificationToast(id: number | string) {
+  pausedToasts.delete(id);
   const toast = currentToasts.find((item) => item.id === id);
   if (!toast) return;
   scheduleToastDismiss(toast.id, toast.severity);
 }
 
+export function resumeHiddenNotificationToasts() {
+  for (const toast of currentToasts) {
+    if (!pausedToasts.has(toast.id) && !toastTimers.has(toast.id)) {
+      scheduleToastDismiss(toast.id, toast.severity);
+    }
+  }
+}
+
 export function clearNotificationToasts() {
   for (const timer of toastTimers.values()) clearTimeout(timer);
   toastTimers.clear();
+  pausedToasts.clear();
   if (currentToasts.length === 0) return;
   currentToasts = emptyToasts;
   notifyToasts();
-}
-
-function getNotificationToasts(): readonly ToastMessage[] {
-  return currentToasts;
 }
 
 function subscribeToasts(listener: () => void): () => void {
@@ -314,5 +341,5 @@ function subscribeToasts(listener: () => void): () => void {
 }
 
 export function useNotificationToasts(): readonly ToastMessage[] {
-  return useSyncExternalStore(subscribeToasts, getNotificationToasts, () => emptyToasts);
+  return useSyncExternalStore(subscribeToasts, () => currentToasts, () => emptyToasts);
 }

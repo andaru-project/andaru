@@ -1,3 +1,4 @@
+import { createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearNotificationToasts,
@@ -11,11 +12,13 @@ import {
   pauseNotificationToast,
   pushNotificationToast,
   requestBrowserNotificationPermission,
-  resetNotificationPrefsForTests,
   resumeNotificationToast,
   setNotificationPrefs,
   showBrowserNotification,
+  useNotificationPrefs,
+  useNotificationToasts,
 } from './notifications';
+import { act, render, screen } from './test/render';
 import type { Notification } from './types';
 
 const originalNotification = window.Notification;
@@ -84,7 +87,7 @@ function stubNotification(options: {
 afterEach(() => {
   vi.useRealTimers();
   clearNotificationToasts();
-  resetNotificationPrefsForTests();
+  setNotificationPrefs(defaultNotificationPrefs);
   if (originalIsSecureContext) Object.defineProperty(window, 'isSecureContext', originalIsSecureContext);
   else Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
   Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: originalNotification });
@@ -100,6 +103,7 @@ describe('notifications helpers', () => {
     expect(isSafeAppLink(undefined)).toBe(false);
     expect(isSafeAppLink('https://example.com')).toBe(false);
     expect(isSafeAppLink('//evil.example/path')).toBe(false);
+    expect(isSafeAppLink(`//${window.location.host}/changes`)).toBe(false);
     expect(isSafeAppLink('/\\evil.example')).toBe(false);
     expect(isSafeAppLink('/\t/evil.example')).toBe(false);
   });
@@ -117,7 +121,7 @@ describe('notifications helpers', () => {
     expect(diffNotifications(previous, next).map((n) => n.id)).toEqual([3, 2]);
   });
 
-  it('stores notification preferences in localStorage, removes the key on default reset, and syncs across storage events', () => {
+  it('stores notification preferences in localStorage, syncs across storage events, and ignores malformed JSON', () => {
     const store = new Map<string, string>();
     const memoryStorage = {
       getItem: (key: string) => store.get(key) ?? null,
@@ -128,13 +132,32 @@ describe('notifications helpers', () => {
     const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: memoryStorage });
     try {
-      expect(getNotificationPrefs()).toEqual(defaultNotificationPrefs);
-      setNotificationPrefs({ browser: true });
+      function PrefsProbe() {
+        const prefs = useNotificationPrefs();
+        return createElement('span', { 'data-testid': 'prefs' }, `${prefs.toasts}:${prefs.browser}`);
+      }
+      render(createElement(PrefsProbe));
+      expect(screen.getByTestId('prefs')).toHaveTextContent('true:false');
+
+      act(() => { setNotificationPrefs({ browser: true }); });
       expect(getNotificationPrefs()).toEqual({ toasts: true, browser: true });
       expect(store.get('andaru.notifications.prefs')).toBe(JSON.stringify({ toasts: true, browser: true }));
+      expect(screen.getByTestId('prefs')).toHaveTextContent('true:true');
 
-      setNotificationPrefs({ browser: false });
+      // Another tab updates storage -> listener updates hook state.
+      store.set('andaru.notifications.prefs', JSON.stringify({ toasts: false, browser: true }));
+      act(() => { window.dispatchEvent(new StorageEvent('storage', { key: 'andaru.notifications.prefs' })); });
+      expect(getNotificationPrefs()).toEqual({ toasts: false, browser: true });
+      expect(screen.getByTestId('prefs')).toHaveTextContent('false:true');
+
+      // Malformed JSON falls back to defaults.
+      store.set('andaru.notifications.prefs', '{not-json');
+      act(() => { window.dispatchEvent(new StorageEvent('storage', { key: 'andaru.notifications.prefs' })); });
       expect(getNotificationPrefs()).toEqual(defaultNotificationPrefs);
+      expect(screen.getByTestId('prefs')).toHaveTextContent('true:false');
+
+      act(() => { setNotificationPrefs({ browser: true }); });
+      act(() => { setNotificationPrefs({ browser: false }); });
       expect(store.has('andaru.notifications.prefs')).toBe(false);
     } finally {
       if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);
@@ -187,17 +210,43 @@ describe('notifications helpers', () => {
     focusSpy.mockRestore();
   });
 
-  it('auto-dismisses queued toasts and respects pause/resume', () => {
+  it('auto-dismisses queued toasts, respects pause/resume across updates, and caps the stack at 4', () => {
     vi.useFakeTimers();
-    pushNotificationToast({ id: 1, severity: 'info', subject: 'Disk almost full' });
-    pauseNotificationToast(1);
-    vi.advanceTimersByTime(20_000);
-    // Still dismissible because pause cleared the timer.
-    resumeNotificationToast(1);
-    vi.advanceTimersByTime(5_999);
-    // Still present until full 6s elapses, then cleared.
-    vi.advanceTimersByTime(1);
-    // Calling dismiss after auto-dismiss is a safe no-op.
-    dismissNotificationToast(1);
+    function QueueProbe() {
+      const toasts = useNotificationToasts();
+      return createElement('span', { 'data-testid': 'queue' }, toasts.map((t) => `${t.id}:${t.subject}`).join(','));
+    }
+    render(createElement(QueueProbe));
+    expect(screen.getByTestId('queue')).toHaveTextContent('');
+
+    act(() => { pushNotificationToast({ id: 1, severity: 'info', subject: 'Disk almost full' }); });
+    expect(screen.getByTestId('queue')).toHaveTextContent('1:Disk almost full');
+
+    // Pausing holds the toast even across same-ID updates.
+    act(() => {
+      pauseNotificationToast(1);
+      pushNotificationToast({ id: 1, severity: 'info', subject: 'Disk still full' });
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(screen.getByTestId('queue')).toHaveTextContent('1:Disk still full');
+
+    // Resuming starts the 6s timeout cleanly.
+    act(() => {
+      resumeNotificationToast(1);
+      vi.advanceTimersByTime(5_999);
+    });
+    expect(screen.getByTestId('queue')).toHaveTextContent('1:Disk still full');
+
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(screen.getByTestId('queue')).toHaveTextContent('');
+
+    // Evicts oldest past 4 items and deduplicates matching IDs.
+    act(() => {
+      for (const id of [1, 2, 3, 4, 5]) pushNotificationToast({ id, severity: 'info', subject: `N${id}` });
+    });
+    expect(screen.getByTestId('queue')).toHaveTextContent('2:N2,3:N3,4:N4,5:N5');
+
+    act(() => { dismissNotificationToast(3); });
+    expect(screen.getByTestId('queue')).toHaveTextContent('2:N2,4:N4,5:N5');
   });
 });

@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import { NotificationToaster } from '../NotificationToaster';
-import { clearNotificationToasts, resetNotificationPrefsForTests } from '../notifications';
+import { clearNotificationToasts, defaultNotificationPrefs, setNotificationPrefs } from '../notifications';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render, screen, within } from '../test/render';
@@ -40,7 +40,7 @@ const resourceOf = (fields: Partial<Resource<NotificationList | undefined>> = {}
 afterEach(() => {
   setTimeZone('local');
   clearNotificationToasts();
-  resetNotificationPrefsForTests();
+  setNotificationPrefs(defaultNotificationPrefs);
   if (originalIsSecureContext) Object.defineProperty(window, 'isSecureContext', originalIsSecureContext);
   else Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
   Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: originalNotification });
@@ -274,4 +274,29 @@ it('explains why browser notifications are unavailable on plain HTTP or when den
   );
   expect(screen.getByRole('switch', { name: /Browser notifications/ })).toBeDisabled();
   expect(screen.getByText(/blocked for this site/)).toBeInTheDocument();
+});
+
+it('explains accurately when native notifications fail during Send test with in-page alerts off or on', async () => {
+  const user = userEvent.setup();
+  class ThrowingNotification {
+    constructor() { throw new TypeError('Illegal constructor'); }
+    static get permission(): NotificationPermission { return 'granted'; }
+    static requestPermission = vi.fn(async () => 'granted' as NotificationPermission);
+  }
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+  Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: ThrowingNotification });
+  setNotificationPrefs({ toasts: false, browser: true });
+
+  render(
+    <MemoryRouter>
+      <NotificationsScreen api={new ApiClient('csrf')} session={session(['notifications.read'])} notifications={resourceOf({ data: { items: [] } })} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+
+  await user.click(screen.getByRole('button', { name: 'Send test' }));
+  expect(screen.getByText(/Enable in-page alerts to see notifications in this tab/)).toBeInTheDocument();
+
+  await user.click(screen.getByRole('switch', { name: /In-page alerts/ }));
+  await user.click(screen.getByRole('button', { name: 'Send test' }));
+  expect(screen.getByText(/In-page alerts will be used instead/)).toBeInTheDocument();
 });

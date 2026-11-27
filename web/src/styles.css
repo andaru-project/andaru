@@ -432,7 +432,8 @@ path.traffic-sent {
     min-height: 2.75rem;
   }
 
-  .mantine-ActionIcon-root {
+  .mantine-ActionIcon-root,
+  .notification-toast-close {
     min-width: 2.75rem;
   }
 
@@ -731,6 +732,12 @@ path.traffic-sent {
   border-left-color: var(--mantine-color-red-filled);
 }
 
+.notification-toast-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .notification-toast-body {
   background: transparent;
   border: 0;
@@ -752,7 +759,8 @@ path.traffic-sent {
   outline-offset: 2px;
 }
 
-.notification-toast-subject {
+.notification-toast-subject,
+.notification-toast-source {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -762,6 +770,7 @@ path.traffic-sent {
   -webkit-line-clamp: 2;
   display: -webkit-box;
   overflow: hidden;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 

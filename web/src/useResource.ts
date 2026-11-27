@@ -151,6 +151,7 @@ export function useEvents(onEvent: (type?: string) => void, enabled = true, keep
       source?.close();
       source = undefined;
       clearTimeout(timer);
+      timer = undefined;
     };
     const open = () => {
       close();
@@ -165,13 +166,17 @@ export function useEvents(onEvent: (type?: string) => void, enabled = true, keep
       opened.onerror = () => {
         if (!failed) onEvent();
         failed = true;
-        if (opened.readyState === EventSource.CLOSED) timer = setTimeout(open, reopenMilliseconds);
+        if (opened.readyState === EventSource.CLOSED) {
+          source = undefined;
+          clearTimeout(timer);
+          timer = setTimeout(open, reopenMilliseconds);
+        }
       };
       source = opened;
     };
     const sync = () => {
       if (keepOpenRef.current || document.visibilityState === 'visible') {
-        if (!source) open();
+        if (!source && timer === undefined) open();
       } else {
         close();
       }

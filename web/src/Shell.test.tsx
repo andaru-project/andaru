@@ -5,7 +5,7 @@ import type { Apply } from './types';
 import { configureNetplaneApi } from './netplane/api';
 import { setRoutePrefix } from './netplane/routing';
 import { Shell } from './Shell';
-import { clearNotificationToasts, resetNotificationPrefsForTests, setNotificationPrefs } from './notifications';
+import { clearNotificationToasts, defaultNotificationPrefs, setNotificationPrefs } from './notifications';
 import { openStreams } from './test/events';
 import { setTimeZone } from './timezone';
 import { fetchRoutes, jsonResponse } from './test/fetch';
@@ -44,7 +44,7 @@ afterEach(() => {
   setRoutePrefix('');
   setTimeZone('local');
   clearNotificationToasts();
-  resetNotificationPrefsForTests();
+  setNotificationPrefs(defaultNotificationPrefs);
   if (originalIsSecureContext) Object.defineProperty(window, 'isSecureContext', originalIsSecureContext);
   else Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
   Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: originalNotification });

@@ -48,7 +48,6 @@ function BrowserAlertsCard({ hostname }: { hostname?: string }) {
   const [testNote, setTestNote] = useState('');
 
   const browserEnabled = prefs.browser && support === 'granted';
-  const browserUnavailable = support === 'insecure' || support === 'unsupported' || support === 'denied';
   const hint = browserSupportHint[support];
 
   async function toggleBrowser(enabled: boolean) {
@@ -69,9 +68,8 @@ function BrowserAlertsCard({ hostname }: { hostname?: string }) {
 
   function sendTest() {
     setTestNote('');
-    const now = Date.now();
     const item = {
-      id: -now,
+      id: `test-${Date.now()}`,
       severity: 'info' as const,
       source: 'browser',
       subject: 'Test notification',
@@ -85,16 +83,20 @@ function BrowserAlertsCard({ hostname }: { hostname?: string }) {
       });
       if (notice) {
         if (prefs.toasts) {
-          pushNotificationToast({ ...item, id: `test-${now}`, detail: 'Sent a test browser notification.' });
+          pushNotificationToast({ ...item, detail: 'Sent a test browser notification.' });
         } else {
           setTestNote('Test browser notification sent.');
         }
         return;
       }
-      setTestNote('This browser blocked native notifications here. In-page alerts will be used instead.');
+      setTestNote(
+        prefs.toasts
+          ? 'This browser blocked native notifications here. In-page alerts will be used instead.'
+          : 'This browser blocked native notifications here. Enable in-page alerts to see notifications in this tab.',
+      );
     }
     if (prefs.toasts) {
-      pushNotificationToast({ ...item, id: `test-${now}` });
+      pushNotificationToast(item);
     }
   }
 
@@ -126,12 +128,12 @@ function BrowserAlertsCard({ hostname }: { hostname?: string }) {
             label="Browser notifications"
             description="Use OS alerts when this tab is in the background or idle"
             checked={browserEnabled}
-            disabled={requesting || browserUnavailable}
+            disabled={requesting || hint !== undefined}
             onChange={(event) => void toggleBrowser(event.currentTarget.checked)}
           />
         </Group>
         {hint && <Text size="xs" c={support === 'denied' ? undefined : 'dimmed'} className={support === 'denied' ? 'warning-text' : undefined}>{hint}</Text>}
-        {testNote && <Text size="xs" c="dimmed">{testNote}</Text>}
+        {testNote && <Text size="xs" c="dimmed" role="status">{testNote}</Text>}
       </Stack>
     </Paper>
   );

@@ -5,10 +5,13 @@ import {
   clearNotificationToasts,
   diffNotifications,
   dismissNotificationToast,
+  getBrowserNotificationSupport,
   getNotificationPrefs,
   isSafeAppLink,
+  maxVisibleToasts,
   pauseNotificationToast,
   pushNotificationToast,
+  resumeHiddenNotificationToasts,
   resumeNotificationToast,
   severityColor,
   showBrowserNotification,
@@ -23,27 +26,38 @@ interface NotificationToasterProps {
 }
 
 const activeIdleMs = 3 * 60_000;
-const maxVisibleToasts = 4;
 const maxBrowserBatch = 3;
+
+function isHovered(element: HTMLElement): boolean {
+  try {
+    return element.matches(':hover');
+  } catch {
+    return false;
+  }
+}
 
 export function NotificationToaster({ notifications, hostname }: NotificationToasterProps) {
   const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
   const toasts = useNotificationToasts();
   const seenRef = useRef<Map<number, string> | null>(null);
   const nativeRef = useRef<Map<number, globalThis.Notification>>(new Map());
   const lastActivityRef = useRef(0);
-  const hostnameRef = useRef(hostname);
 
   useEffect(() => {
-    hostnameRef.current = hostname;
-  }, [hostname]);
+    navigateRef.current = navigate;
+  }, [navigate]);
 
   // Track recent interaction in this tab so active viewers get in-page toasts while backgrounded/idle tabs use OS alerts.
+  // Returning to a visible tab also starts timers for any fallback toasts queued while hidden.
   useEffect(() => {
     lastActivityRef.current = Date.now();
     const markActive = () => { lastActivityRef.current = Date.now(); };
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') markActive();
+      if (document.visibilityState === 'visible') {
+        markActive();
+        resumeHiddenNotificationToasts();
+      }
     };
     window.addEventListener('pointerdown', markActive, { passive: true });
     window.addEventListener('keydown', markActive, { passive: true });
@@ -71,88 +85,64 @@ export function NotificationToaster({ notifications, hostname }: NotificationToa
   // refreshing or signing in never replays alerts that were already active.
   useEffect(() => {
     if (!notifications) return;
-    const nextSeen = new Map<number, string>();
-    for (const item of notifications.items) nextSeen.set(item.id, item.updated);
-
-    if (seenRef.current === null) {
-      seenRef.current = nextSeen;
-      return;
-    }
-
-    const changed = diffNotifications(seenRef.current, notifications.items);
-    const removedIds: number[] = [];
-    for (const id of seenRef.current.keys()) {
-      if (!nextSeen.has(id)) removedIds.push(id);
-    }
+    const nextSeen = new Map(notifications.items.map((item) => [item.id, item.updated]));
+    const previous = seenRef.current;
     seenRef.current = nextSeen;
 
-    for (const id of removedIds) {
+    if (previous === null) return;
+
+    const closeNative = (id: number) => {
       const notice = nativeRef.current.get(id);
       if (notice) {
         notice.close();
         nativeRef.current.delete(id);
       }
-      dismissNotificationToast(id);
+    };
+
+    for (const id of previous.keys()) {
+      if (!nextSeen.has(id)) {
+        closeNative(id);
+        dismissNotificationToast(id);
+      }
     }
 
+    const changed = diffNotifications(previous, notifications.items);
     if (changed.length === 0) return;
 
     const prefs = getNotificationPrefs();
     const activeInTab = document.visibilityState === 'visible' && Date.now() - lastActivityRef.current < activeIdleMs;
+    const useBrowser = prefs.browser && getBrowserNotificationSupport() === 'granted' && !activeInTab;
 
-    if (prefs.browser && !activeInTab) {
-      // Iterate oldest-to-newest within the capped batch so newest lands last in any fallback toast stack.
-      const batch = changed.slice(0, maxBrowserBatch).reverse();
-      for (const item of batch) {
-        const prior = nativeRef.current.get(item.id);
-        if (prior) {
-          prior.close();
-          nativeRef.current.delete(item.id);
-        }
+    if (!useBrowser && !prefs.toasts) return;
+
+    // Iterate oldest-to-newest within the capped batch so newest lands last in the toast stack.
+    const limit = useBrowser ? maxBrowserBatch : maxVisibleToasts;
+    const batch = changed.slice(0, limit).reverse();
+    for (const item of batch) {
+      closeNative(item.id);
+      if (useBrowser) {
         const notice = showBrowserNotification(item, {
-          hostname: hostnameRef.current,
-          onOpen: (target) => { void navigate(target); },
+          hostname,
+          onOpen: (target) => { void navigateRef.current(target); },
         });
         if (notice) {
           nativeRef.current.set(item.id, notice);
           notice.onclose = () => {
             if (nativeRef.current.get(item.id) === notice) nativeRef.current.delete(item.id);
           };
-        } else if (prefs.toasts) {
-          pushNotificationToast({
-            id: item.id,
-            severity: item.severity,
-            subject: item.subject,
-            detail: item.detail,
-            source: item.source,
-            link: item.link,
-          });
+          continue;
         }
       }
-      return;
+      if (prefs.toasts) pushNotificationToast(item);
     }
-
-    if (!prefs.toasts) return;
-    const batch = changed.slice(0, maxVisibleToasts).reverse();
-    for (const item of batch) {
-      pushNotificationToast({
-        id: item.id,
-        severity: item.severity,
-        subject: item.subject,
-        detail: item.detail,
-        source: item.source,
-        link: item.link,
-      });
-    }
-  }, [notifications, navigate]);
-
-  if (toasts.length === 0) return null;
+  }, [notifications, hostname]);
 
   function openToast(toast: ToastMessage) {
     dismissNotificationToast(toast.id);
     void navigate(isSafeAppLink(toast.link) ? toast.link : '/system/notifications');
   }
 
+  // Keep the stack container mounted so live-region insertions inside it are announced reliably by screen readers.
   return (
     <section className="notification-toast-stack" aria-label="Live notifications">
       {toasts.map((toast) => (
@@ -160,36 +150,51 @@ export function NotificationToaster({ notifications, hostname }: NotificationToa
           key={toast.id}
           className="notification-toast"
           data-severity={toast.severity}
-          role={toast.severity === 'critical' ? 'alert' : 'status'}
-          aria-live={toast.severity === 'critical' ? 'assertive' : 'polite'}
           onMouseEnter={() => pauseNotificationToast(toast.id)}
-          onMouseLeave={() => resumeNotificationToast(toast.id)}
+          onMouseLeave={(event) => {
+            if (!event.currentTarget.contains(document.activeElement)) {
+              resumeNotificationToast(toast.id);
+            }
+          }}
           onFocus={() => pauseNotificationToast(toast.id)}
           onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            if (
+              !event.currentTarget.contains(event.relatedTarget as Node | null) &&
+              !isHovered(event.currentTarget)
+            ) {
               resumeNotificationToast(toast.id);
             }
           }}
         >
-          <button type="button" className="notification-toast-body" onClick={() => openToast(toast)}>
-            <Group gap="xs" wrap="nowrap" align="center">
-              <Badge
-                size="xs"
-                className="plain-badge"
-                color={severityColor[toast.severity]}
-                variant={toast.severity === 'critical' ? 'filled' : 'light'}
-              >
-                {toast.severity}
-              </Badge>
-              <Text size="sm" fw={600} className="notification-toast-subject">{toast.subject}</Text>
-            </Group>
-            {toast.detail && (
-              <Text size="xs" c="dimmed" className="notification-toast-detail">{toast.detail}</Text>
-            )}
-            {toast.source && (
-              <Text size="xs" c="dimmed">{toast.source}</Text>
-            )}
-          </button>
+          <div className="notification-toast-content" role={toast.severity === 'critical' ? 'alert' : 'status'}>
+            <button type="button" className="notification-toast-body" onClick={() => openToast(toast)}>
+              <Group component="span" gap="xs" wrap="nowrap" align="center">
+                <Badge
+                  component="span"
+                  size="xs"
+                  className="plain-badge"
+                  color={severityColor[toast.severity]}
+                  variant={toast.severity === 'critical' ? 'filled' : 'light'}
+                >
+                  {toast.severity}
+                </Badge>
+                {' '}
+                <Text component="span" size="sm" fw={600} className="notification-toast-subject">{toast.subject}</Text>
+              </Group>
+              {toast.detail && (
+                <>
+                  {' '}
+                  <Text component="span" size="xs" c="dimmed" className="notification-toast-detail">{toast.detail}</Text>
+                </>
+              )}
+              {toast.source && (
+                <>
+                  {' '}
+                  <Text component="span" size="xs" c="dimmed" className="notification-toast-source">{toast.source}</Text>
+                </>
+              )}
+            </button>
+          </div>
           <CloseButton
             size="sm"
             className="notification-toast-close"
