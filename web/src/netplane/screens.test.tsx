@@ -504,9 +504,12 @@ describe('App poll all', () => {
       return {};
     });
 
+    // The access check on start: a server without a token answers it.
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response('{"items":[]}', { status: 200 })));
+
     wrap(<App />);
     fireEvent.click(await screen.findByRole('button', { name: 'Poll all' }));
     await waitFor(() => expect(screen.getByText('Poll failed for: Attic')).toBeInTheDocument());
-    expect(screen.queryByText('API error')).not.toBeInTheDocument();
+    expect(screen.queryByText('Fleet API error')).not.toBeInTheDocument();
   });
 });

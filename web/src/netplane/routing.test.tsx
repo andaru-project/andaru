@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createTheme, MantineProvider } from '@mantine/core';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, apiUrl, configureNetplaneApi } from './api';
@@ -19,11 +19,37 @@ function setBaseHref(href: string | null) {
 }
 
 afterEach(() => {
+  configureNetplaneApi(null);
+  setRoutePrefix('');
   resetPinnedRoot();
   vi.restoreAllMocks();
   setBaseHref(null);
   window.history.replaceState({}, '', '/');
 });
+
+const emptyState = {
+  devices: [],
+  links: [],
+  lag_groups: [],
+  segments: [],
+  zones: [],
+  gateways: [],
+  routes: [],
+  vpns: [],
+  firewalls: [],
+  radios: [],
+  wireless_uplinks: [],
+  clients: [],
+};
+
+// The shell reads the fleet itself; these answers keep it on the screens under test.
+function mockFleet() {
+  vi.spyOn(api, 'getState').mockResolvedValue(emptyState);
+  vi.spyOn(api, 'getTopology').mockResolvedValue({ generated_at: '2026-01-01T00:00:00Z', root_ids: [], nodes: [], edges: [] });
+  vi.spyOn(api, 'getVLANFlow').mockResolvedValue({ generated_at: '2026-01-01T00:00:00Z', vlans: [], findings: [] });
+  vi.spyOn(api, 'listTargets').mockResolvedValue([]);
+  vi.spyOn(api, 'listDiagnostics').mockResolvedValue([]);
+}
 
 function mockDevice() {
   return vi.spyOn(api, 'getDevice').mockImplementation(async (id) => ({
@@ -57,24 +83,13 @@ function mockDevice() {
 }
 
 function renderDeviceDetail(rawId: string) {
+  mockFleet();
+  setRoutePrefix('/network');
   window.history.replaceState({}, '', devicePath(rawId));
   render(
     <MantineProvider theme={testTheme}>
       <BrowserRouter>
-        <Shell
-          state={null}
-          topology={null}
-          flow={null}
-          targets={[]}
-          diagRuns={[]}
-          events={[]}
-          sseConnected={true}
-          errMsg={null}
-          pollBusy={false}
-          refreshNonce={0}
-          onPollAll={() => {}}
-          onDiagnosticCompleted={() => {}}
-        />
+        <Shell onSessionLost={() => {}} />
       </BrowserRouter>
     </MantineProvider>,
   );
@@ -110,9 +125,10 @@ describe('Ingress base href routing', () => {
   });
 
   it('routes screens and prefixes every navigation link under an Ingress base href', () => {
+    mockFleet();
     const prefix = '/api/hassio_ingress/ha_token_99';
     setBaseHref(`${prefix}/`);
-    window.history.replaceState({}, '', `${prefix}/vlans/flow`);
+    window.history.replaceState({}, '', `${prefix}/network/vlans/flow`);
 
     const basename = getRouterBasename();
     expect(basename).toBe(prefix);
@@ -120,33 +136,7 @@ describe('Ingress base href routing', () => {
     render(
       <MantineProvider theme={testTheme}>
         <BrowserRouter basename={basename}>
-          <Shell
-            state={{
-              devices: [],
-              links: [],
-              lag_groups: [],
-              segments: [],
-              zones: [],
-              gateways: [],
-              routes: [],
-              vpns: [],
-              firewalls: [],
-              radios: [],
-              wireless_uplinks: [],
-              clients: [],
-            }}
-            topology={{ generated_at: '2026-01-01T00:00:00Z', root_ids: [], nodes: [], edges: [] }}
-            flow={{ generated_at: '2026-01-01T00:00:00Z', vlans: [], findings: [] }}
-            targets={[]}
-            diagRuns={[]}
-            events={[]}
-            sseConnected={true}
-            errMsg={null}
-            pollBusy={false}
-            refreshNonce={0}
-            onPollAll={() => {}}
-            onDiagnosticCompleted={() => {}}
-          />
+          <Shell onSessionLost={() => {}} />
         </BrowserRouter>
       </MantineProvider>,
     );
@@ -156,13 +146,14 @@ describe('Ingress base href routing', () => {
 
     // Sidebar links stay scoped to the Ingress basename.
     const topoLink = screen.getByRole('link', { name: 'Topology' });
-    expect(topoLink).toHaveAttribute('href', `${prefix}/topology`);
+    expect(topoLink).toHaveAttribute('href', `${prefix}/network/topology`);
 
     const devicesLink = screen.getByRole('link', { name: 'Devices' });
-    expect(devicesLink).toHaveAttribute('href', `${prefix}/devices`);
+    expect(devicesLink).toHaveAttribute('href', `${prefix}/network/devices`);
 
-    const diagLink = screen.getByRole('link', { name: 'Diagnostics & Events' });
-    expect(diagLink).toHaveAttribute('href', `${prefix}/diagnostics`);
+    fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }));
+    const diagLink = screen.getByRole('link', { name: 'Tools & events' });
+    expect(diagLink).toHaveAttribute('href', `${prefix}/network/diagnostics`);
   });
 
   it('does not double-decode device IDs containing % in DeviceDetailScreen', async () => {

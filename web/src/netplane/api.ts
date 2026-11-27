@@ -403,8 +403,10 @@ export interface NetplaneApiConfig {
   apiPrefix?: string;
   /** CSRF token sent as `X-Andaru-CSRF` on state-changing requests. */
   csrfToken?: string;
-  /** Called on HTTP 401 instead of prompting for a standalone API token. */
+  /** Called on HTTP 401, so the app can ask to sign in again. */
   onUnauthorized?: () => void;
+  /** Hears whether each request got a response, for the shell's connection state. */
+  onConnection?: (connected: boolean) => void;
   /**
    * Consumes pending user input for read requests. When provided and returning `false` (or when
    * a read is explicitly marked `background`), `X-Andaru-Background: 1` is sent so unattended
@@ -417,19 +419,11 @@ let apiConfig: NetplaneApiConfig | null = null;
 
 /**
  * Configures how Netplane API requests are routed and authenticated. Pass `null` to restore
- * standalone defaults (`api/v1` with cookie-token prompt).
+ * standalone defaults (`api/v1`).
  */
 export function configureNetplaneApi(config: NetplaneApiConfig | null): void {
   apiConfig = config;
 }
-
-// Fired after a token is stored, so the event stream can reconnect at once.
-export const AUTH_EVENT = 'netplane-auth';
-
-// One shared prompt so parallel 401s ask for the token only once.
-let tokenPrompt: Promise<boolean> | null = null;
-// Bumped on each stored token, so a 401 sent before it retries with the new cookie instead of prompting again.
-let authGen = 0;
 
 function buildApiUrl(path: string, cfg: NetplaneApiConfig | null): string {
   const prefix = (cfg?.apiPrefix ?? 'api/v1').replace(/^\/+|\/+$/g, '');
@@ -459,23 +453,40 @@ function formatErrorMessage(status: number, text: string): string {
   return `HTTP ${status}`;
 }
 
-// promptForToken stores the API token in a SameSite=Strict cookie, which fetch and
-// EventSource both send; EventSource cannot set an Authorization header.
-function promptForToken(): Promise<boolean> {
-  tokenPrompt ??= Promise.resolve().then(() => {
-    const token = window.prompt('This netplane server requires an API token:');
-    if (!token) return false;
-    // Scope to the app's base path so other apps on the origin (e.g. other HA ingress add-ons) never get it.
-    const path = apiBasePath();
-    const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-    document.cookie = `netplane_token=${encodeURIComponent(token)}; path=${path}; SameSite=Strict${secure}`;
-    authGen++;
-    window.dispatchEvent(new Event(AUTH_EVENT));
-    return true;
-  }).finally(() => {
-    tokenPrompt = null;
-  });
-  return tokenPrompt;
+// The standalone server's API token is kept in a SameSite=Strict cookie, which fetch and EventSource both send;
+// EventSource cannot set an Authorization header. It is scoped to the app's base path, so other apps on the origin
+// (e.g. other HA ingress add-ons) never get it.
+function setTokenCookie(value: string, maxAge?: number): void {
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+  const age = maxAge === undefined ? '' : `; Max-Age=${maxAge}`;
+  document.cookie = `netplane_token=${encodeURIComponent(value)}; path=${apiBasePath()}; SameSite=Strict${age}${secure}`;
+}
+
+/** Whether this browser holds a token for the standalone server. */
+export function hasToken(): boolean {
+  return document.cookie.split(';').some((cookie) => cookie.trim().startsWith('netplane_token='));
+}
+
+export function signOut(): void {
+  setTokenCookie('', 0);
+}
+
+/**
+ * Whether the standalone server answers this browser, with its token if it holds one. A server without a token
+ * answers everyone. Throws when the server cannot be reached.
+ */
+export async function hasAccess(): Promise<boolean> {
+  const resp = await fetch(buildApiUrl('/diagnostics?limit=1', null), { credentials: 'same-origin', cache: 'no-store' });
+  return resp.status !== 401;
+}
+
+/** Stores the token and checks the server accepts it; a token it refuses is not kept. */
+export async function signIn(token: string): Promise<void> {
+  setTokenCookie(token);
+  if (!(await hasAccess())) {
+    signOut();
+    throw new Error('The server did not accept this token.');
+  }
 }
 
 const readTimeoutMs = 30_000;
@@ -487,11 +498,9 @@ interface FetchOptions {
 async function fetchJSON<T>(
   path: string,
   init?: RequestInit,
-  retried = false,
   cfg: NetplaneApiConfig | null = apiConfig,
   opts?: FetchOptions,
 ): Promise<T> {
-  const gen = authGen;
   const method = (init?.method ?? 'GET').toUpperCase();
   const isRead = method === 'GET' || method === 'HEAD';
   const headers: Record<string, string> = {
@@ -507,24 +516,27 @@ async function fetchJSON<T>(
     }
   }
   const signal = init?.signal ?? (isRead && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(readTimeoutMs) : undefined);
-  const resp = await fetch(buildApiUrl(path, cfg), {
-    credentials: 'same-origin',
-    cache: 'no-store',
-    signal,
-    ...init,
-    headers: {
-      ...headers,
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (resp.status === 401) {
-    if (cfg?.onUnauthorized) {
-      cfg.onUnauthorized();
-      throw new Error('HTTP 401: authentication required');
-    }
-    if (!retried && (gen !== authGen || (await promptForToken()))) {
-      return fetchJSON<T>(path, init, true, cfg, opts);
-    }
+  let resp: Response;
+  try {
+    resp = await fetch(buildApiUrl(path, cfg), {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal,
+      ...init,
+      headers: {
+        ...headers,
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (err) {
+    // A request its caller cancelled says nothing about the connection.
+    if (!init?.signal?.aborted) cfg?.onConnection?.(false);
+    throw err;
+  }
+  cfg?.onConnection?.(true);
+  if (resp.status === 401 && cfg?.onUnauthorized) {
+    cfg.onUnauthorized();
+    throw new Error('HTTP 401: authentication required');
   }
   if (!resp.ok) {
     const text = await resp.text();
@@ -534,14 +546,14 @@ async function fetchJSON<T>(
 }
 
 export const api = {
-  getState: (opts?: FetchOptions) => fetchJSON<NetworkState>('/state', undefined, false, apiConfig, opts),
-  getDevice: (id: string, opts?: FetchOptions) => fetchJSON<DeviceDetail>(`/devices/${encodeURIComponent(id)}`, undefined, false, apiConfig, opts),
-  getTopology: (opts?: FetchOptions) => fetchJSON<TopologyGraph>('/topology', undefined, false, apiConfig, opts),
-  getVLANFlow: (opts?: FetchOptions) => fetchJSON<VLANFlow>('/vlans/flow', undefined, false, apiConfig, opts),
-  listTargets: (opts?: FetchOptions) => fetchJSON<{ items: TargetConfig[] }>('/targets', undefined, false, apiConfig, opts).then((r) => r.items),
+  getState: (opts?: FetchOptions) => fetchJSON<NetworkState>('/state', undefined, apiConfig, opts),
+  getDevice: (id: string, opts?: FetchOptions) => fetchJSON<DeviceDetail>(`/devices/${encodeURIComponent(id)}`, undefined, apiConfig, opts),
+  getTopology: (opts?: FetchOptions) => fetchJSON<TopologyGraph>('/topology', undefined, apiConfig, opts),
+  getVLANFlow: (opts?: FetchOptions) => fetchJSON<VLANFlow>('/vlans/flow', undefined, apiConfig, opts),
+  listTargets: (opts?: FetchOptions) => fetchJSON<{ items: TargetConfig[] }>('/targets', undefined, apiConfig, opts).then((r) => r.items),
   pollTarget: (id: string) => fetchJSON<unknown>(`/targets/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
   listDiagnostics: (limit = 30, opts?: FetchOptions) =>
-    fetchJSON<{ items: DiagnosticResult[] }>(`/diagnostics?limit=${limit}`, undefined, false, apiConfig, opts).then((r) => r.items),
+    fetchJSON<{ items: DiagnosticResult[] }>(`/diagnostics?limit=${limit}`, undefined, apiConfig, opts).then((r) => r.items),
   runDiagnostic: (req: { kind: string; device_id?: string; target: string; params?: Record<string, string> }) =>
     fetchJSON<DiagnosticResult>('/diagnostics', { method: 'POST', body: JSON.stringify(req) }),
 };

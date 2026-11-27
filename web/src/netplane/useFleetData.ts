@@ -4,7 +4,6 @@ import { useVisiblePoll } from '../useResource';
 import {
   api,
   apiUrl,
-  AUTH_EVENT,
   type Device,
   type DiagnosticResult,
   type NetplaneEvent,
@@ -37,8 +36,6 @@ export interface FleetDataOptions {
   canReadTargets?: boolean;
   /** Whether the caller is allowed to trigger target polls (requires configuration.write in Andaru). */
   canPoll?: boolean;
-  /** Listen for standalone Netplane token-prompt auth events to reconnect SSE. */
-  listenAuthEvent?: boolean;
 }
 
 export function useFleetLookups(
@@ -79,7 +76,6 @@ export function useFleetLookups(
 export function useFleetData({
   canReadTargets = true,
   canPoll = true,
-  listenAuthEvent = false,
 }: FleetDataOptions = {}) {
   const [sseEpoch, setSseEpoch] = useState(0);
   const sseFailures = useRef(0);
@@ -164,18 +160,6 @@ export function useFleetData({
   }, [runRefresh]);
 
   useVisiblePoll(refreshBackground, 15_000);
-
-  useEffect(() => {
-    if (!listenAuthEvent) return;
-    const onAuth = () => {
-      sseFailures.current = 0;
-      // SSE only: in-flight requests retry with the new cookie themselves, and a fresh refresh
-      // here would hit 401 again before the server has accepted the token.
-      setSseEpoch((n) => n + 1);
-    };
-    window.addEventListener(AUTH_EVENT, onAuth);
-    return () => window.removeEventListener(AUTH_EVENT, onAuth);
-  }, [listenAuthEvent]);
 
   useEffect(() => {
     if (typeof EventSource === 'undefined') return;
