@@ -179,7 +179,7 @@ Retains the owner-approved structure from [traefik-manifest-example.md](../../re
        ConditionPathExists=!/run/andaru/addons-held
        ConditionKernelCommandLine=!andaru.safe=1
        ```
-     - `[Container]` with `Image=<pinned-digest>`, `Pull=never`, `Network=host`, `NoNewPrivileges=true`, `DropCapability=ALL` (plus only allowlisted `AddCapability=` / `AddDevice=` for curated `network-interface` add-ons—which are explicitly trusted in the host network namespace as qualified in section 2—under SELinux confinement), `EnvironmentFile=` (if present), `Exec=` (argument vector rendered safely with systemd quoting), `Volume=` binds for declared `storage` under `/var/lib/andaru/addons/<slug>/<name>` (`:Z` or explicit SELinux label validated by the lab spike), read-only directory mounts for secrets (`/run/andaru-addons/<slug>/secrets:/run/andaru/secrets:ro`), and—only when bus grants exist—the bus directory mount (`/run/andaru-addons/<slug>/bus:/run/andaru/bus:ro` plus `/run/andaru-addons/bus.sock:/run/andaru/bus.sock`).
+     - `[Container]` with `Image=<pinned-digest>`, `Pull=never`, `Network=host`, `NoNewPrivileges=true`, `DropCapability=ALL` (plus only allowlisted `AddCapability=` / `AddDevice=` for curated `network-interface` add-ons—which are explicitly trusted in the host network namespace as qualified in section 2—under SELinux confinement), `EnvironmentFile=` (if present), `Exec=` (argument vector rendered safely with systemd quoting), `Volume=` binds for declared `storage` under `/var/lib/andaru/addons/<slug>/<name>` (`:Z`), read-only per-add-on directory mounts for secrets (`/run/andaru-addons/<slug>/secrets:/run/andaru/secrets:ro,Z` — `,Z` is required under SELinux enforcing so Podman relabels the per-add-on `/run` directory from `var_run_t` to per-container `container_file_t:s0:<MCS>`), and—only when bus grants exist—the bus token directory mount (`/run/andaru-addons/<slug>/bus:/run/andaru/bus:ro,Z` plus `/run/andaru-addons/bus.sock:/run/andaru/bus.sock`).
      - `[Service]` with `Restart=on-failure`, `RestartSec=5`, `TimeoutStopSec=<stopTimeoutSeconds>`.
      - No `[Install]` `WantedBy=multi-user.target` reliance for boot: `andaru-network-boot.service` runs in `sysinit.target` after PID 1 has already run `podman-system-generator` and computed the `multi-user.target` transaction. Instead, `andaru realize boot` writes `/run/andaru/addons-held` (fail-closed) and places the Quadlet files; once `andaru-engine` starts, verifies no settings-upgrade hold is active, and registers bus tokens/grants, it invokes `andaru realize addons-release-hold`, which removes `/run/andaru/addons-held`, runs `systemctl daemon-reload`, and starts enabled add-on units with `systemctl start --no-block` (matching `internal/generation/pppoe.go`; systemd still skips every unit if boot safe mode is active).
    - **Activation and rollback in `internal/generation`:**
@@ -212,6 +212,7 @@ Completes the unbuilt safe-mode foundation from [2026-11-19-first-boot-safe-mode
 
 1. **Socket and transport.**
    - `packaging/tmpfiles.d/andaru.conf` creates `/run/andaru-addons` (`0700 root root`). `packaging/systemd/andaru-engine.service` adds `ReadWritePaths=-/run/andaru-addons` so the engine can bind `/run/andaru-addons/bus.sock` without weakening `ProtectSystem=strict` or `CapabilityBoundingSet=`. Because host traversal is unnecessary for container bind mounts, local non-root host processes cannot traverse `/run/andaru-addons` or reach `bus.sock`.
+   - Under SELinux enforcing (verified in [tailscale-quadlet-spike.md](../../research/tailscale-quadlet-spike.md)), `image/files/usr/share/andaru/selinux/andaru.cil` adds the two minimal rules allowing confined `container_t` add-ons to connect to `andaru-engine`'s add-on bus socket: `(filecon "/run/andaru-addons/bus.sock" socket (system_u object_r container_file_t ((s0) (s0))))` and `(allow container_t unconfined_service_t (unix_stream_socket (connectto)))`.
    - `/run/andaru-addons/bus.sock` is bind-mounted **only** into containers that have at least one granted bus topic, at `/run/andaru/bus.sock`.
    - Reuses the exact JSON-lines protocol in `internal/bus` (`hello`, `publish`, `subscribe`, `consume`, `ack`, `event`, `gap`, `detached`).
 2. **Authentication and listener isolation (per-add-on runtime token).**
@@ -275,25 +276,13 @@ Completes the unbuilt safe-mode foundation from [2026-11-19-first-boot-safe-mode
 
 ## First add-on: Tailscale (`addon-tailscale`)
 
-### Lab qualification gate (must pass before locking `addon-runtime` SELinux/Quadlet flags)
+### Lab qualification gate (passed on 2026-11-27)
 
-Per Slice 6 of [2026-11-18-appliance-image-design.md](2026-11-18-appliance-image-design.md), run a bounded lab check on the Fedora CoreOS Andaru VM with SELinux enforcing:
+Completed on throwaway Fedora CoreOS Andaru `0.5.0-a.2` VM (`SELinux Enforcing`, Podman `6.1.3`); full evidence is recorded in [tailscale-quadlet-spike.md](../../research/tailscale-quadlet-spike.md):
 
-1. Pull a digest-pinned official `ghcr.io/tailscale/tailscale@sha256:...` image for x86_64 (and verify aarch64 manifest-list digest).
-2. Run it via a system Podman Quadlet under `/run/containers/systemd/andaru-addon-tailscale.container` with:
-   - `Network=host`, `Pull=never`
-   - `DropCapability=ALL`, `AddCapability=NET_ADMIN`, `AddCapability=NET_RAW` (test whether `NET_RAW` is actually needed)
-   - `AddDevice=/dev/net/tun`
-   - `NoNewPrivileges=true`
-   - `Volume=/var/lib/andaru/addons/tailscale/state:/var/lib/tailscale:Z`
-   - `TS_EXTRA_ARGS=--netfilter-mode=off` (and `TS_USERSPACE=false` to verify real kernel `tailscale0` creation)
-3. Verify:
-   - Zero SELinux AVC denials (or record the minimal `.cil` rules needed in `image/files/usr/share/andaru/selinux/andaru.cil`).
-   - `tailscale0` comes up without `systemd-networkd` touching it (`51-andaru-unclassified.network` ignores it).
-   - `nft list ruleset` shows only Andaru's `inet andaru` table (zero Podman or Tailscale tables/chains).
-   - Adding `"tailscale0"` to a zone's interface-name set enforces Andaru firewall rules on traffic entering/leaving `tailscale0`.
-   - Rebooting with `andaru.safe=1` prevents `andaru-addon-tailscale.service` from starting while the network and filter come up normally.
-   - Record findings in `docs/research/tailscale-quadlet-spike.md`.
+1. Verified multi-arch OCI index digest `ghcr.io/tailscale/tailscale@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4` covering both `linux/amd64` and `linux/arm64`.
+2. Confirmed system Podman Quadlet under `/run/containers/systemd/andaru-addon-tailscale.container` with `Network=host`, `Pull=never`, `NoNewPrivileges=true`, `DropCapability=ALL`, `AddCapability=NET_ADMIN` alone (`NET_RAW` is **not** required), `AddDevice=/dev/net/tun`, `:Z` state mount, `:ro,Z` secrets mount, `TS_USERSPACE=false`, and `TS_EXTRA_ARGS=--netfilter-mode=off`.
+3. Confirmed zero `container_t` SELinux AVC denials for Tailscale (and verified the 2-line CIL rule required for `addon-bus` `/run/andaru-addons/bus.sock`), `tailscale0` unmanaged by `systemd-networkd`, `nft list ruleset` containing only `table inet andaru`, dynamic `zone_vpn` interface-name set matching `tailscale0`, and fail-closed skipping under both `/run/andaru/safe-mode` and kernel arg `andaru.safe=1` across reboot.
 
 ### Provisional Tailscale manifest sketch
 
