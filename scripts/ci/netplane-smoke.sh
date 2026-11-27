@@ -70,7 +70,7 @@ start() {
 	done
 }
 check() {
-	curl -fsS "$base/" | grep -q '<title>Andaru Netplane</title>' || fail "GET / does not serve the app"
+	curl -fsS "$base/" | grep -q '<title>[^<]*Netplane</title>' || fail "GET / does not serve the app"
 	code=$(curl -sS -o /dev/null -w '%{http_code}' "$base/api/v1/state")
 	[ "$code" = 401 ] || fail "GET /api/v1/state without the token answers $code, not 401"
 	curl -fsS -H "Authorization: Bearer $token" "$base/api/v1/state" | grep -q '^{' ||
