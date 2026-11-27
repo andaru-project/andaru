@@ -7,6 +7,7 @@ import type { SavedObject, Segment, Session, VirtualAddress, VirtualAddressKind 
 import {
   checkVirtualIp,
   isProxyArpEligibleSegment,
+  isSingleVirtualAddress,
   maxVirtualAddresses,
   staticIpv4Subnets,
   virtualAddressFamily,
@@ -29,7 +30,7 @@ const mono = { input: 'mono-input' };
 const vipFieldPattern = /^(?:\/virtualAddresses\/\d+)?\/(name|kind|segment|address|description)(?:\/|$)/;
 
 const kindOptions: Array<{ value: VirtualAddressKind; label: string }> = [
-  { value: 'address', label: 'Held address (andaru-vip)' },
+  { value: 'address', label: 'Held address or block (andaru-vip)' },
   { value: 'proxyArp', label: 'Proxy ARP (IPv4)' },
 ];
 
@@ -89,7 +90,7 @@ function VirtualIpEditor({
   const segmentOptions = (() => {
     const items = eligibleSegments.map((s) => ({
       value: s.id,
-      label: `${s.name} (${staticIpv4Subnets(s).filter((sub) => sub.bits < 32).map((sub) => sub.cidr).join(', ')})`,
+      label: `${s.name} (${staticIpv4Subnets(s).filter((sub) => sub.prefix.bits < 32).map((sub) => sub.cidr).join(', ')})`,
     }));
     if (segment && !eligibleSegments.some((s) => s.id === segment)) {
       const found = segments.find((s) => s.id === segment);
@@ -166,6 +167,9 @@ function VirtualIpEditor({
   const usedByDns = uses.some((u) => u.key === 'dns');
   const singleLock = addressLocks.length === 1;
   const isProxyArp = kind === 'proxyArp';
+  const isHeldBlockDraft = !isProxyArp
+    && virtualAddressFamily({ kind: 'address', address }) !== undefined
+    && !isSingleVirtualAddress({ kind: 'address', address });
 
   return (
     <Drawer
@@ -198,7 +202,7 @@ function VirtualIpEditor({
                 label="Kind"
                 description={isProxyArp
                   ? 'Answered by ARP on a segment without being held on the firewall, for 1:1 NAT and port forwards. Proxy NDP (IPv6) is not offered yet.'
-                  : 'Held by the firewall on andaru-vip for services such as DNS and port forwards.'}
+                  : 'Held by the firewall on andaru-vip for services such as DNS (single address) and port forwards (single address or routed block).'}
                 data={kindOptions}
                 value={kind}
                 error={errors.get('kind')}
@@ -217,26 +221,36 @@ function VirtualIpEditor({
               )}
               <TextInput
                 classNames={mono}
-                label={isProxyArp ? 'Address or prefix' : 'Address'}
+                label="Address or prefix"
                 description={isProxyArp
                   ? "IPv4 address or /24–/32 prefix inside the selected segment's static IPv4 subnet (host bits zero)."
-                  : 'Single unicast IPv4 or IPv6 address without a prefix length, outside any configured interface subnet.'}
-                placeholder={isProxyArp ? '203.0.113.50 or 203.0.113.56/29' : '172.16.53.53 or fd00:53::1'}
+                  : 'Unicast IPv4 (/24–/32) or IPv6 (/48–/128) address or routed block outside any configured interface subnet (host bits zero). A /32 or /128 is stored bare.'}
+                placeholder={isProxyArp ? '203.0.113.50 or 203.0.113.56/29' : '172.16.53.53, 198.51.100.0/29, or 2001:db8:53::/64'}
                 maxLength={64}
                 required
                 value={address}
                 error={errors.get('address')}
                 onChange={(event) => setAddress(event.currentTarget.value)}
               />
-              {saved && usedByDns && isProxyArp && (
+              {saved && usedByDns && (isProxyArp || isHeldBlockDraft) && (
                 <Alert
                   color="yellow"
                   role="status"
                   title="Address in use by DNS service"
                 >
-                  The DNS service listens on this virtual IP. Remove it from{' '}
-                  <Anchor component={Link} to="/network/dns" size="sm" onClick={onClose}>DNS service</Anchor>{' '}
-                  before switching it to Proxy ARP.
+                  {isProxyArp ? (
+                    <>
+                      The DNS service listens on this virtual IP. Remove it from{' '}
+                      <Anchor component={Link} to="/network/dns" size="sm" onClick={onClose}>DNS service</Anchor>{' '}
+                      before switching it to Proxy ARP.
+                    </>
+                  ) : (
+                    <>
+                      The DNS service listens on single addresses; name one address, not a block. Remove this virtual IP from{' '}
+                      <Anchor component={Link} to="/network/dns" size="sm" onClick={onClose}>DNS service</Anchor>{' '}
+                      before changing it to a block.
+                    </>
+                  )}
                 </Alert>
               )}
               {saved && addressLocks.length > 0 && (
@@ -245,7 +259,7 @@ function VirtualIpEditor({
                   role="status"
                   title={singleLock ? 'Address in use by port forward' : 'Address in use by port forwards'}
                 >
-                  {addressLocks.map((u) => u.label).join(', ')} {singleLock ? 'targets' : 'target'} this address. You can still rename or describe it, but changing the address or kind requires updating or removing {singleLock ? 'the port forward' : 'those port forwards'} first.
+                  {addressLocks.map((u) => u.label).join(', ')} {singleLock ? 'targets' : 'target'} this virtual IP. You can still rename or describe it, or change the prefix while keeping {singleLock ? 'the targeted address' : 'the targeted addresses'} covered; moving {singleLock ? 'it' : 'them'} out of range or switching kind requires updating or removing {singleLock ? 'the port forward' : 'those port forwards'} first.
                 </Alert>
               )}
               <Textarea
@@ -338,7 +352,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
         <div>
           <Title order={2}>Virtual IPs</Title>
           <Text c="dimmed">
-            Held host addresses on <Text span ff="monospace" inherit>andaru-vip</Text> for services such as DNS and port forwards, and IPv4 proxy ARP entries answered on a segment without being held by the firewall.
+            Held addresses and routed blocks on <Text span ff="monospace" inherit>andaru-vip</Text> for services such as DNS and port forwards, and IPv4 proxy ARP entries answered on a segment without being held by the firewall.
           </Text>
         </div>
         <Group gap="xs">
@@ -412,7 +426,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                 <Alert role="status" title="No virtual IPs">
                   {sorted.length === 0
                     ? (canWrite
-                      ? 'No virtual IP is saved yet. Add a held address for services such as DNS and port forwards, or a proxy ARP entry for extra addresses on a static IPv4 segment.'
+                      ? 'No virtual IP is saved yet. Add a held address or block for services such as DNS and port forwards, or a proxy ARP entry for extra addresses on a static IPv4 segment.'
                       : 'No virtual IP is saved yet.')
                     : 'No virtual IP matches the filter.'}
                 </Alert>

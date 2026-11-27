@@ -142,7 +142,7 @@ export function parsePrefix(raw: string): ParsedPrefix | null {
   return { family: ip.family, ip, network: ip.value & mask, mask, bits, raw: s };
 }
 
-function prefixContains(prefix: ParsedPrefix, ip: ParsedIp): boolean {
+export function prefixContains(prefix: ParsedPrefix, ip: ParsedIp): boolean {
   return prefix.family === ip.family && (ip.value & prefix.mask) === prefix.network;
 }
 
@@ -644,7 +644,6 @@ export function simulateTrafficFlow(
   const usableSegmentPrefixes: Array<{ segment: Segment; prefix: ParsedPrefix; staticIpv4: boolean }> = [];
   const localOwners: Array<{ ip: ParsedIp; owner: LocalOwner }> = [];
   const internalOwn4 = new Set<bigint>();
-  const virtual4 = new Set<bigint>();
   let usedLiveDynamic = false;
 
   for (const seg of snapshot.segments) {
@@ -704,26 +703,28 @@ export function simulateTrafficFlow(
     warnings.push('Dynamic DHCP/PPPoE/SLAAC addresses are read from live interfaces because saved-only dynamic leases do not exist yet.');
   }
 
+  const localVirtualOwners: Array<{ prefix: ParsedPrefix; owner: LocalOwner }> = [];
   const proxyArpRoutes: Array<{ vip: NonNullable<Snapshot['value']['virtualAddresses']>[number]; prefix: ParsedPrefix }> = [];
   for (const vip of snapshot.virtualAddresses ?? []) {
+    const prefix = parsePrefix(vip.address);
+    if (!prefix) continue;
     if (vip.kind === 'proxyArp') {
       // Matches internal/render/networkd.go virtualAddresses(): every proxyArp route lives on
       // the independent andaru-vip dummy device regardless of the associated segment's link state.
-      const prefix = parsePrefix(vip.address);
-      if (prefix && prefix.family === 4) proxyArpRoutes.push({ vip, prefix });
+      if (prefix.family === 4) proxyArpRoutes.push({ vip, prefix });
       continue;
     }
-    const ip = parseIp(vip.address);
-    if (!ip) continue;
-    localOwners.push({ ip, owner: { label: `Virtual IP ${vip.name}`, to: '/network/virtual-ips', isVirtual: true } });
-    if (ip.family === 4) {
-      virtual4.add(ip.value);
-      internalOwn4.add(ip.value);
-    }
+    localVirtualOwners.push({ prefix, owner: { label: `Virtual IP ${vip.name}`, to: '/network/virtual-ips', isVirtual: true } });
   }
 
   const findLocalOwner = (ip: ParsedIp): LocalOwner | undefined =>
-    localOwners.find((o) => o.ip.family === ip.family && o.ip.value === ip.value && (!o.owner.linkLocal || o.owner.segmentId === ingressSegment.id))?.owner;
+    localOwners.find((o) => o.ip.family === ip.family && o.ip.value === ip.value && (!o.owner.linkLocal || o.owner.segmentId === ingressSegment.id))?.owner
+    ?? localVirtualOwners.find((o) => prefixContains(o.prefix, ip))?.owner;
+
+  const isVirtual4 = (ip: ParsedIp): boolean =>
+    ip.family === 4 && localVirtualOwners.some((o) => prefixContains(o.prefix, ip));
+  const isInternalOwn4 = (ip: ParsedIp): boolean =>
+    ip.family === 4 && (internalOwn4.has(ip.value) || isVirtual4(ip));
 
   const isLocalTarget4 = (ip: ParsedIp): boolean => Boolean(findLocalOwner(ip));
 
@@ -824,8 +825,8 @@ export function simulateTrafficFlow(
           return !matchesAddressAlias(pf.to.address, origDstIp, addressesById);
         }
         if (viaReflection) {
-          if (pf.to.self) return Boolean(findLocalOwner(origDstIp)) && !internalOwn4.has(origDstIp.value);
-          return matchesAddressAlias(pf.to.address, origDstIp, addressesById) && !virtual4.has(origDstIp.value);
+          if (pf.to.self) return Boolean(findLocalOwner(origDstIp)) && !isInternalOwn4(origDstIp);
+          return matchesAddressAlias(pf.to.address, origDstIp, addressesById) && !isVirtual4(origDstIp);
         }
         if (pf.to.self) return Boolean(findLocalOwner(origDstIp));
         return matchesAddressAlias(pf.to.address, origDstIp, addressesById);
