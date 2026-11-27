@@ -226,8 +226,8 @@ it('suppresses duplicate connection-lost banners and stale Loaded errors when di
   await userEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
   expect(await screen.findByText('Could not check pending changes')).toBeInTheDocument();
   expect(await screen.findByText('Could not check upgrade status')).toBeInTheDocument();
-  // Loaded renders update.error alongside Update action failed when connected=true.
-  expect(screen.getAllByText(/Cannot reach the Andaru service/i).length).toBeGreaterThanOrEqual(3);
+  // All four disconnect messages render while connected=true: changes, upgrade, actionError, and Loaded(update).
+  await waitFor(() => expect(screen.getAllByText(/Cannot reach the Andaru service/i)).toHaveLength(4));
 
   // Once connected=false, only the header badge owns the offline state: redundant shell banners and Loaded error hide.
   view.rerender(shell(false));
@@ -238,7 +238,8 @@ it('suppresses duplicate connection-lost banners and stale Loaded errors when di
   // The Loaded region on UpdatesScreen hides its disconnect error while cached data is visible.
   expect(screen.queryAllByText(/Cannot reach the Andaru service/i)).toHaveLength(1); // only actionError from clicking Check
 
-  // Reconnecting clears disconnect errors and refreshes update, system, changes, and upgrade automatically.
+  // Reconnecting clears disconnect errors and refreshes applies, update, system, and upgrade exactly once each.
+  const appliesReadsBefore = appliesReads(fetchMock);
   const updateReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/update').length;
   const systemReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/system').length;
   const upgradeReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length;
@@ -247,6 +248,7 @@ it('suppresses duplicate connection-lost banners and stale Loaded errors when di
   failUpdate = false;
   view.rerender(shell(true));
   await waitFor(() => {
+    expect(appliesReads(fetchMock)).toBe(appliesReadsBefore + 1);
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/update').length).toBe(updateReadsBefore + 1);
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/system').length).toBe(systemReadsBefore + 1);
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length).toBe(upgradeReadsBefore + 1);

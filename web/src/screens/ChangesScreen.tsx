@@ -67,8 +67,9 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   }, [api]);
   const review = useResource(load, onSessionLost);
   const reloadReview = review.reload;
+  const refreshReview = review.refresh;
 
-  // A reload the user asks for, or a reconnect, starts over: old answers no longer describe the review.
+  // A reload the user asks for starts over: old answers no longer describe the review.
   const reload = useCallback(() => {
     setMessage('');
     setRefused([]);
@@ -76,11 +77,17 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
     void reloadReview();
   }, [onChanged, reloadReview]);
 
+  const reconnect = useCallback(() => {
+    setMessage('');
+    setRefused([]);
+    refreshReview();
+  }, [refreshReview]);
+
   const wasConnected = useRef(connected);
   useEffect(() => {
-    if (connected && !wasConnected.current) reload();
+    if (connected && !wasConnected.current) reconnect();
     wasConnected.current = connected;
-  }, [connected, reload]);
+  }, [connected, reconnect]);
 
   async function apply(reviewed: string) {
     setBusy('apply');

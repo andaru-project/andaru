@@ -19,7 +19,8 @@ export interface Resource<T> {
 
 // useResource loads data with the given function on mount and whenever the function changes.
 // A failed reload keeps the last data, so a poll that loses the connection does not blank the page.
-export function useResource<T>(load: () => Promise<T>, onSessionLost: () => void): Resource<T> {
+// Pass reloadOnReconnect=true for shell-level resources that should always re-fetch when the connection returns.
+export function useResource<T>(load: () => Promise<T>, onSessionLost: () => void, reloadOnReconnect = false): Resource<T> {
   const connected = useConnected();
   const [state, setState] = useState<{ data?: T; error: string; disconnected: boolean; loading: boolean }>({
     error: '',
@@ -40,7 +41,13 @@ export function useResource<T>(load: () => Promise<T>, onSessionLost: () => void
   const fetchInto = useCallback(() => {
     const request = ++latest.current;
     out.current++;
-    return load().then(
+    let pending: Promise<T>;
+    try {
+      pending = load();
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    return pending.then(
       (data) => {
         if (request === latest.current) {
           hasError.current = false;
@@ -68,14 +75,15 @@ export function useResource<T>(load: () => Promise<T>, onSessionLost: () => void
 
   useEffect(() => { void fetchInto(); }, [fetchInto]);
 
-  // Retry errored resources automatically on reconnect (stale disconnect errors are cleared during render above).
+  // Re-fetch on reconnect: always when reloadOnReconnect is set, or whenever the last read errored
+  // (stale disconnect errors are already cleared during render above so they never flash).
   const wasConnected = useRef(connected);
   useEffect(() => {
-    if (connected && !wasConnected.current && hasError.current && out.current === 0) {
+    if (connected && !wasConnected.current && (reloadOnReconnect || (hasError.current && out.current === 0))) {
       void fetchInto();
     }
     wasConnected.current = connected;
-  }, [connected, fetchInto]);
+  }, [connected, fetchInto, reloadOnReconnect]);
 
   return { data: state.data, error: state.error, loading: state.loading, reload, refresh };
 }

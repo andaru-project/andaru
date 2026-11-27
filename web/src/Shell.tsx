@@ -147,12 +147,12 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
 
   const canReadChanges = capabilities.has('configuration.read');
   const loadChanges = useCallback(() => (canReadChanges ? loadChangeState(api) : Promise.resolve(undefined)), [api, canReadChanges]);
-  const changes = useResource(loadChanges, onSessionLost);
+  const changes = useResource(loadChanges, onSessionLost, true);
   const reloadChanges = changes.reload;
 
   const canReadNotifications = capabilities.has('notifications.read');
   const loadNotifications = useCallback(() => (canReadNotifications ? api.notifications() : Promise.resolve(undefined)), [api, canReadNotifications]);
-  const notifications = useResource(loadNotifications, onSessionLost);
+  const notifications = useResource(loadNotifications, onSessionLost, true);
   const reloadNotifications = notifications.reload;
 
   // What the box is, for the header and the dashboard, with the browser's clock when it arrived so its time and
@@ -160,11 +160,11 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
   // again each minute: often enough for that, and for a first read that failed.
   const canReadStatus = capabilities.has('status.read');
   const loadSystem = useCallback(async () => (canReadStatus ? { info: await api.system(), loadedAt: Date.now() } : undefined), [api, canReadStatus]);
-  const system = useResource(loadSystem, onSessionLost);
+  const system = useResource(loadSystem, onSessionLost, true);
   useVisiblePoll(system.refresh, systemPollMilliseconds, canReadStatus);
 
   const loadUpdate = useCallback(() => (canReadStatus ? api.updateStatus() : Promise.resolve(undefined)), [api, canReadStatus]);
-  const update = useResource(loadUpdate, onSessionLost);
+  const update = useResource(loadUpdate, onSessionLost, true);
   useVisiblePoll(update.refresh, systemPollMilliseconds, canReadStatus);
 
   // Saves, applies and notification changes reach the shell on one event stream, dispatched by event type so each
@@ -212,21 +212,6 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     openedUpgrade.current = true;
     if (pathname === '/') navigate('/system/upgrade', { replace: true });
   }, [upgradePending, pathname, navigate]);
-
-  // When the API answers again, refresh resources that did not already fail (errored ones recover inside useResource).
-  const refreshNotifications = notifications.refresh;
-  const refreshSystem = system.refresh;
-  const refreshUpdate = update.refresh;
-  const wasConnected = useRef(connected);
-  useEffect(() => {
-    if (connected && !wasConnected.current) {
-      void reloadChanges();
-      refreshNotifications();
-      refreshSystem();
-      refreshUpdate();
-    }
-    wasConnected.current = connected;
-  }, [connected, reloadChanges, refreshNotifications, refreshSystem, refreshUpdate]);
 
   const groups = [
     {
