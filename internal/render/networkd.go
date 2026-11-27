@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -374,21 +375,68 @@ func (r *renderer) virtualAddresses() {
 	var addresses []string
 	var routes []section
 	for _, v := range r.d.VirtualAddresses {
-		if v.proxied() {
+		x := prefixOf(v.Address)
+		switch {
+		case !x.IsValid():
+		case v.proxied():
 			// The route that leaves by another interface, without which the kernel proxies no ARP for it.
-			routes = append(routes, section{"Route", []string{"Destination=" + prefixOf(v.Address).String()}})
-			continue
+			routes = append(routes, section{"Route", []string{"Destination=" + x.String()}})
+		case x.IsSingleIP():
+			addresses = append(addresses, "Address="+x.String())
+		default:
+			// A held block: a local route makes every address of it the firewall's own, in the local table.
+			routes = append(routes, section{"Route", []string{"Destination=" + x.String(), "Type=local"}})
 		}
-		a, err := netip.ParseAddr(v.Address)
-		if err != nil {
-			continue
-		}
-		addresses = append(addresses, "Address="+netip.PrefixFrom(a, a.BitLen()).String())
 	}
+	r.heldOnLearned()
 	sources := []string{"/virtualAddresses"}
 	r.file(networkDir+vipDevice+".netdev", "0644", ini(section{"NetDev", []string{"Name=" + vipDevice, "Kind=dummy"}}), sources)
 	network := append([]string{"LinkLocalAddressing=no", "LLDP=no"}, addresses...)
 	r.file(networkDir+vipDevice+".network", "0644", ini(append([]section{{"Match", []string{"Name=" + vipDevice}}, {"Link", []string{"RequiredForOnline=no"}}, {"Network", network}}, routes...)...), sources)
+}
+
+// heldOnLearned warns about a held address or block on a subnet the firewall has at run time, on an interface or
+// delegated to a WAN, which validation could not see: its local route would take that traffic.
+// shortcut: a learned gateway is seen only inside its learned subnet; a PPP peer off it is not, read routes if it matters.
+func (r *renderer) heldOnLearned() {
+	var learned []netip.Prefix
+	links := 0 // learned[:links] are the interfaces' subnets, the rest delegated prefixes
+	for _, l := range r.in.Links {
+		for _, a := range l.Addresses {
+			if v, e := netip.ParseAddr(a.Address); e == nil && l.Name != vipDevice && a.Scope == "global" {
+				learned = append(learned, netip.PrefixFrom(v, a.PrefixLength).Masked())
+			}
+		}
+	}
+	links = len(learned)
+	for _, name := range slices.Sorted(maps.Keys(r.in.Facts.Delegated.WANs)) { // in a stable order, as the finding names the first
+		w := r.in.Facts.Delegated.WANs[name]
+		if w.Current != nil {
+			learned = append(learned, w.Current.Prefix)
+		}
+		for _, h := range w.Replaced {
+			learned = append(learned, h.Prefix)
+		}
+	}
+	for i, v := range r.d.VirtualAddresses {
+		x := prefixOf(v.Address)
+		if v.proxied() || !x.IsValid() {
+			continue
+		}
+		// A single address takes one host's traffic, harmless inside a delegated prefix no segment uses.
+		pool := learned
+		if x.IsSingleIP() {
+			pool = learned[:links]
+		}
+		j := slices.IndexFunc(pool, x.Overlaps)
+		switch {
+		case j < 0:
+		case x.IsSingleIP():
+			r.find("warning", "HELD_ADDRESS_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This address is on "+pool[j].String()+", a subnet of one of the firewall's interfaces, so the firewall answers for it there and cannot reach a host that has it. Choose an address on no subnet the firewall is on.")
+		default:
+			r.find("warning", "HELD_ADDRESS_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This block overlaps "+pool[j].String()+", a subnet of one of the firewall's interfaces or a prefix delegated to it, so its local route takes traffic for that subnet, the gateway's included. Name a block the provider routes to the firewall.")
+		}
+	}
 }
 
 // proxiesARP says whether a proxy ARP entry names the segment with this ID.

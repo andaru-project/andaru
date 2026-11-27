@@ -374,6 +374,10 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 				bad(pp+"/prefix", "Expected a unique local prefix of /16 or longer, or a global unicast prefix of /32 or longer.")
 			case slices.ContainsFunc(own, func(o netip.Prefix) bool { return o.Overlaps(v) }):
 				bad(pp+"/prefix", "The pool overlaps a segment's addresses.")
+			case slices.ContainsFunc(d.VirtualAddresses, func(o virtualAddress) bool { x, ok := vipPrefix(o); return ok && !o.proxied() && !x.IsSingleIP() && x.Overlaps(v) }):
+				// The held block's local route would take the delegated prefixes' traffic. Blocks only, a new form: a
+				// saved single address inside a pool must still load.
+				bad(pp+"/prefix", "The pool holds a virtual address.")
 			case slices.ContainsFunc(pools, v.Overlaps):
 				bad(pp+"/prefix", "The pool overlaps another DHCPv6 entry's pool.")
 			default:
@@ -470,7 +474,11 @@ func listensOn(d *declaration, a netip.Addr) bool {
 		}
 	}
 	return slices.ContainsFunc(d.DNS.VirtualAddresses, func(id string) bool {
-		return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return v.ID == id && sameAddress(v.Address, a.String()) })
+		// Validation runs before normalization: a listener may still be written as a /32 or /128.
+		return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool {
+			x, ok := vipPrefix(v)
+			return v.ID == id && ok && x.IsSingleIP() && x.Addr() == a
+		})
 	})
 }
 

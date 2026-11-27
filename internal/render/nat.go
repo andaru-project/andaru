@@ -8,30 +8,38 @@ import (
 	"strings"
 )
 
-// ownStatic is the firewall's IPv4 addresses, declared and learned: a translation to one of them is local delivery.
-func (r *renderer) ownStatic() []netip.Addr {
-	var out []netip.Addr
+// ownStatic is the firewall's IPv4 addresses, declared and learned, and its held blocks: a translation to one of
+// them is local delivery.
+func (r *renderer) ownStatic() []netip.Prefix {
+	var out []netip.Prefix
 	for _, l := range r.in.Links {
 		for _, a := range l.Addresses {
 			if v, e := netip.ParseAddr(a.Address); e == nil && a.Family == "ipv4" {
-				out = append(out, v)
+				out = append(out, netip.PrefixFrom(v, 32))
 			}
 		}
 	}
 	// Also declared, since the device may not exist yet or may still hold an address a change just removed.
-	for _, v := range r.d.VirtualAddresses {
-		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() && !v.proxied() {
-			out = append(out, a)
-		}
-	}
+	out = append(out, r.held4()...)
 	for _, s := range r.d.Segments {
 		if s.Addressing.IPv4.Mode != "static" {
 			continue
 		}
 		for _, raw := range s.Addressing.IPv4.Addresses {
 			if p, e := netip.ParsePrefix(raw); e == nil {
-				out = append(out, p.Addr())
+				out = append(out, netip.PrefixFrom(p.Addr(), 32))
 			}
+		}
+	}
+	return out
+}
+
+// held4 are the held IPv4 virtual addresses, each a /32, and blocks.
+func (r *renderer) held4() []netip.Prefix {
+	var out []netip.Prefix
+	for _, v := range r.d.VirtualAddresses {
+		if x := prefixOf(v.Address); x.IsValid() && x.Addr().Is4() && !v.proxied() {
+			out = append(out, x)
 		}
 	}
 	return out
@@ -103,7 +111,11 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			tfirst = *pf.TargetPort
 		}
 		tlast := tfirst + last - first
-		local := pf.Target != nil && (six || pf.Target.Self || slices.ContainsFunc(own, func(a netip.Addr) bool { return a.String() == pf.Target.Address }))
+		var target netip.Addr
+		if pf.Target != nil {
+			target, _ = netip.ParseAddr(pf.Target.Address)
+		}
+		local := pf.Target != nil && (six || pf.Target.Self || slices.ContainsFunc(own, func(p netip.Prefix) bool { return p.Contains(target) }))
 		if pf.ToNegated && !pf.NoRedirect && !local {
 			// A negated destination catches internal clients going out, and a target beside them would answer them
 			// directly: the hairpin masquerade brings the replies back through the firewall.
@@ -327,7 +339,7 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 
 func prefixOf(s string) netip.Prefix {
 	if a, e := netip.ParseAddr(s); e == nil {
-		return netip.PrefixFrom(a, 32)
+		return netip.PrefixFrom(a, a.BitLen())
 	}
 	p, _ := netip.ParsePrefix(s)
 	return p
@@ -384,12 +396,14 @@ func (f *filter) checkExternal(external netip.Prefix, path string) {
 	}
 }
 
-// virtual4 are the IPv4 virtual addresses, which reflection never takes.
+// virtual4 are the IPv4 virtual addresses and blocks, which reflection never takes.
 func (f *filter) virtual4() []string {
 	var out []string
-	for _, v := range f.r.d.VirtualAddresses {
-		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() && !v.proxied() {
-			out = append(out, a.String())
+	for _, x := range f.r.held4() {
+		if x.IsSingleIP() {
+			out = append(out, x.Addr().String())
+		} else {
+			out = append(out, x.String())
 		}
 	}
 	return out

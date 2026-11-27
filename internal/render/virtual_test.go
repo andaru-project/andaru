@@ -1,8 +1,14 @@
 package render
 
 import (
+	"net/netip"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/andaru-project/andaru/internal/delegation"
+	"github.com/andaru-project/andaru/internal/host"
 )
 
 func TestVirtualAddressesRendering(t *testing.T) {
@@ -78,5 +84,37 @@ func TestReflectionObjectSkipsVirtualAddresses(t *testing.T) {
 	contains(t, nft, `iifname @internal ip daddr @adr_0000000a_0000_4000_8000_00000000000a_4 ip daddr != @virtual_4 tcp dport 8080`)
 	if i := strings.Index(nft, "set virtual_4 {"); i < 0 || !strings.Contains(nft[i:i+200], "172.16.53.53") {
 		t.Fatalf("no virtual_4 set:\n%s", nft)
+	}
+}
+
+// A held block on a subnet the firewall learned, or under a prefix delegated to it, is warned about at the block;
+// a single held address and a block clear of what was learned are not.
+func TestHeldAddressOnLearnedSubnet(t *testing.T) {
+	const four, six = "/virtualAddresses/2/address", "/virtualAddresses/3/address"
+	in := fixture(t, "routed-block")
+	if r := render(t, in); findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", four) || findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", six) {
+		t.Fatalf("nothing learned, yet %+v", r.Findings)
+	}
+	in.Links[0].Addresses = []host.AddressStatus{
+		{Family: "ipv4", Address: "203.0.113.2", PrefixLength: 28, Scope: "global"},
+		{Family: "ipv4", Address: "172.16.53.1", PrefixLength: 24, Scope: "global"},
+		{Family: "ipv6", Address: "fe80::1", PrefixLength: 64, Scope: "link"},
+	}
+	in.Facts.Delegated = delegation.State{WANs: map[string]delegation.WAN{"ens18": {Requested: 48,
+		Current: &delegation.Held{Prefix: netip.MustParsePrefix("2001:db8::/32"), Preferred: time.Now().Add(time.Hour), Valid: time.Now().Add(2 * time.Hour)}}}}
+	r := render(t, in)
+	if !findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", four) || !findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", six) || !r.Realizable {
+		t.Fatalf("findings %+v", r.Findings)
+	}
+	// A single held address on a learned subnet takes that one host's traffic: warned too, in its own words.
+	if !slices.ContainsFunc(r.Findings, func(f Finding) bool {
+		return f.Code == "HELD_ADDRESS_ON_LEARNED_SUBNET" && f.Path == "/virtualAddresses/0/address" && strings.HasPrefix(f.Message, "This address is on ")
+	}) {
+		t.Fatalf("no warning for a single held address: %+v", r.Findings)
+	}
+	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv4", Address: "203.0.113.10", PrefixLength: 29, Scope: "global"}}
+	in.Facts.Delegated = delegation.State{}
+	if r := render(t, in); findingAt(r, "HELD_ADDRESS_ON_LEARNED_SUBNET", four) {
+		t.Fatalf("a neighbouring subnet warned: %+v", r.Findings)
 	}
 }
