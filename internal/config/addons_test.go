@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -103,7 +105,11 @@ func TestValidateBackupDocumentsRejectsSecretWriteInAddonSettings(t *testing.T) 
 }
 
 func TestShippedTailscaleCatalogConfigValidation(t *testing.T) {
-	cat, err := addon.LoadCatalog(filepath.Join("..", "..", "image", "files", "usr", "share", "andaru", "addons"))
+	catalogDir := filepath.Join("..", "..", "image", "files", "usr", "share", "andaru", "addons")
+	if _, err := os.Stat(catalogDir); errors.Is(err, os.ErrNotExist) {
+		t.Skip("no source tree:", err)
+	}
+	cat, err := addon.LoadCatalog(catalogDir)
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}

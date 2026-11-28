@@ -1,7 +1,9 @@
 package render
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,6 +22,9 @@ func TestShippedTailscaleManifestLoadsAndRenders(t *testing.T) {
 	)
 
 	catalogDir := filepath.Join("..", "..", "image", "files", "usr", "share", "andaru", "addons")
+	if _, err := os.Stat(catalogDir); errors.Is(err, os.ErrNotExist) {
+		t.Skip("no source tree:", err)
+	}
 	cat, err := addon.LoadCatalog(catalogDir)
 	if err != nil {
 		t.Fatalf("LoadCatalog(%s): %v", catalogDir, err)
