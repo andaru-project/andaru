@@ -104,6 +104,13 @@ func buildEngineRoutes() []routeCapability {
 		add(authz.ConfigurationRead, "/api/v1/config/acme/"+kind+"/{id}", read...)
 		add(authz.CertificatesManage, "/api/v1/config/acme/"+kind+"/{id}", http.MethodPut, http.MethodDelete)
 	}
+	add(authz.ConfigurationRead, "/api/v1/config/vpn/wireguard", read...)
+	add(authz.ConfigurationWrite, "/api/v1/config/vpn/wireguard", http.MethodPost)
+	add(authz.ConfigurationRead, "/api/v1/config/vpn/wireguard/{id}", read...)
+	add(authz.ConfigurationWrite, "/api/v1/config/vpn/wireguard/{id}", http.MethodPut, http.MethodDelete)
+	add(authz.VPNRead, "/api/v1/status/vpn/wireguard", read...)
+	add(authz.VPNControl, "/api/v1/vpn/wireguard/keypair", http.MethodPost)
+	add(authz.VPNControl, "/api/v1/vpn/wireguard/{id}/peers/{peerId}/config", http.MethodPost)
 	add(authz.CertificatesRead, "/api/v1/status/acme", read...)
 	add(authz.CertificatesManage, "/api/v1/acme/orders/{id}/renew", http.MethodPost)
 	add(authz.CertificatesManage, "/api/v1/acme/orders/{id}/test-staging", http.MethodPost)

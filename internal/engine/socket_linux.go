@@ -308,7 +308,10 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		addonsAPI:        addonsHandler,
 		pkiAPI:           pkiHandler,
 		acmeAPI:          &acmeAPI{acme: acmeOrders, audits: audits},
-		stateDir:         stateDir,
+		wireguardAPI: &wireguardAPI{store: store, audits: audits, stateDir: stateDir, status: func(ctx context.Context, file string) error {
+			return runner.Realize(ctx, "wg-status", 0, file)
+		}},
+		stateDir: stateDir,
 	})
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)

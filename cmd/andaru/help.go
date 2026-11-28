@@ -173,7 +173,7 @@ Commands:
 
 Collections: links, segments, zones, aliases/addresses, aliases/ports, dhcp,
   dhcp6, virtualAddresses, notifications/channels, rules, nat/port-forwards,
-  nat/one-to-one, routes
+  nat/one-to-one, routes, vpn/wireguard
 Singletons: management, nat/outbound, dns
 Lists: rules, nat/port-forwards, nat/one-to-one
 
