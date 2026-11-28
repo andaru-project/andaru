@@ -40,6 +40,7 @@ func (b *bench) lastIndex(prefix string) int {
 
 func TestActivateLoadsFilterFirst(t *testing.T) {
 	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, ipv4Forwarding), "0\n")
 	id := b.gen(filtered(one, "aa"))
 	var told []string // the state each time Activating was called
 	b.r.Activating = func(got int) { told = append(told, fmt.Sprint(got, " ", b.read(got).State.State)) }
@@ -63,6 +64,26 @@ func TestActivateLoadsFilterFirst(t *testing.T) {
 	}
 	if b.exists(netDir + "/andaru") {
 		t.Fatal("the filter entry was placed as a file")
+	}
+}
+
+func TestLoadFilterRevertsIPv4ForwardingWhenIPv6Fails(t *testing.T) {
+	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, ipv4Forwarding), "0\n")
+	v6Path := filepath.Join(b.net.root, ipv6Forwarding)
+	if err := os.Remove(v6Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(v6Path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := b.gen(filtered(one, "aa"))
+	if err := b.r.Activate(t.Context(), id); err == nil {
+		t.Fatal("expected activation error when ipv6Forwarding write fails")
+	}
+	v4, _ := os.ReadFile(filepath.Join(b.net.root, ipv4Forwarding))
+	if string(v4) != "0\n" {
+		t.Fatalf("ipv4Forwarding = %q after ipv6Forwarding failure, want 0\\n", v4)
 	}
 }
 

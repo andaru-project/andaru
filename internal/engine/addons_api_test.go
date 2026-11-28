@@ -449,4 +449,11 @@ func TestAddonsAPIBeginAndFinishAuditCommitsEvent(t *testing.T) {
 	if events[1].Action != audit.ActionAddonRestarted || events[1].Target != "sample" || events[1].Result != audit.ResultSuccess || events[1].OperationID != events[0].OperationID {
 		t.Fatalf("unexpected finish audit event: %+v", events[1])
 	}
+	report, err := audits.Verify(t.Context())
+	if err != nil {
+		t.Fatalf("audits.Verify: %v", err)
+	}
+	if !report.Valid || report.PendingOperations != 0 {
+		t.Fatalf("unexpected audit verify report: %+v", report)
+	}
 }

@@ -34,8 +34,7 @@
     "env": {
       "TS_USERSPACE": "false",
       "TS_STATE_DIR": "/var/lib/tailscale",
-      "TS_ACCEPT_DNS": "false",
-      "TS_AUTH_ONCE": "true"
+      "TS_ACCEPT_DNS": "false"
     },
     "settingsActivation": "recreate",
     "stopTimeoutSeconds": 10
@@ -60,7 +59,7 @@
       "name": "authKey",
       "type": "secret-reference",
       "title": "Auth key",
-      "description": "Optional Tailscale auth key for unattended enrollment. Generate a key in the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). Leave blank to authenticate interactively via the login URL in Tailscale logs.",
+      "description": "Optional Tailscale auth key for unattended enrollment. Generate a key in the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). Leave blank to authenticate interactively via the login URL in Tailscale logs, and remove a single-use key after enrollment (or use a reusable key) so later settings changes do not re-submit an expired key.",
       "binding": {
         "type": "file",
         "name": "auth_key",
@@ -98,31 +97,32 @@
     {
       "name": "routingMode",
       "type": "enum",
+      "required": true,
       "minItems": 1,
       "maxItems": 1,
       "default": [
-        "--netfilter-mode=off"
+        "--netfilter-mode=off --accept-routes=false --advertise-exit-node=false"
       ],
       "title": "Tailnet routing mode",
       "description": "Controls whether this appliance accepts subnet routes from other tailnet peers or advertises itself as an exit node. Tailscale's internal netfilter management stays disabled so Andaru remains the sole firewall owner.",
       "options": [
         {
-          "value": "--netfilter-mode=off",
+          "value": "--netfilter-mode=off --accept-routes=false --advertise-exit-node=false",
           "title": "Standard node",
           "description": "Connect to your tailnet without accepting peer subnet routes or advertising an exit node."
         },
         {
-          "value": "--netfilter-mode=off --accept-routes",
+          "value": "--netfilter-mode=off --accept-routes=true --advertise-exit-node=false",
           "title": "Accept peer routes",
           "description": "Install subnet routes advertised by other tailnet nodes into the appliance routing table."
         },
         {
-          "value": "--netfilter-mode=off --advertise-exit-node",
+          "value": "--netfilter-mode=off --accept-routes=false --advertise-exit-node=true",
           "title": "Advertise exit node",
           "description": "Offer this appliance as a Tailscale exit node for other devices on your tailnet."
         },
         {
-          "value": "--netfilter-mode=off --accept-routes --advertise-exit-node",
+          "value": "--netfilter-mode=off --accept-routes=true --advertise-exit-node=true",
           "title": "Accept peer routes & advertise exit node",
           "description": "Both accept advertised peer subnet routes and offer this appliance as an exit node."
         }

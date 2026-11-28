@@ -230,7 +230,7 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 	candidate := current.Config
 	if decoded.configuration != nil {
 		candidate = *decoded.configuration
-		if errs := validateAddonsWebUISeparation(cat, &candidate, managementHosts); len(errs) > 0 {
+		if errs := validateAddonsAgainstCatalog(cat, &candidate, nil, managementHosts); len(errs) > 0 {
 			return empty, preview, boundaryFault(validationError(errs))
 		}
 	}

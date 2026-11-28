@@ -3,6 +3,7 @@ package config
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/andaru-project/andaru/internal/addon"
 )
@@ -133,8 +134,9 @@ func TestShippedTailscaleCatalogConfigValidation(t *testing.T) {
 		t.Fatalf("unexpected validation errors: %+v", errs)
 	}
 	rm, ok := addon.ToStringSlice(dValid.Addons[0].Settings["routingMode"])
-	if !ok || len(rm) != 1 || rm[0] != "--netfilter-mode=off" {
-		t.Fatalf("materialized routingMode = %#v, want [--netfilter-mode=off]", dValid.Addons[0].Settings["routingMode"])
+	const wantDefaultRouting = "--netfilter-mode=off --accept-routes=false --advertise-exit-node=false"
+	if !ok || len(rm) != 1 || rm[0] != wantDefaultRouting {
+		t.Fatalf("materialized routingMode = %#v, want [%s]", dValid.Addons[0].Settings["routingMode"], wantDefaultRouting)
 	}
 
 	// Invalid CIDR in advertiseRoutes must be rejected.
@@ -149,5 +151,23 @@ func TestShippedTailscaleCatalogConfigValidation(t *testing.T) {
 	}
 	if errs := validateAddonsAgainstCatalog(cat, dBadCIDR, nil, nil); len(errs) == 0 {
 		t.Fatal("expected rejection for invalid advertiseRoutes CIDR")
+	}
+
+	// Backup restoration must also validate add-on settings against the catalog fail-closed.
+	current := &savedState{Version: "1", Config: declaration{SchemaVersion: 4}, Secrets: emptySecrets()}
+	for _, badRouting := range []any{[]string{}, []string{"--netfilter-mode=on"}} {
+		badDecl := &declaration{
+			SchemaVersion: 4,
+			Zones:         []zone{{ID: zoneID, Name: "VPN"}},
+			Addons: []addonConfig{{
+				ID:         "org.andaru.tailscale",
+				Enabled:    true,
+				Settings:   map[string]any{"routingMode": badRouting},
+				Interfaces: []addonInterface{{Name: "tailscale0", Zone: zoneID}},
+			}},
+		}
+		if _, _, err := prepareRestoration(current, decodedBackup{configuration: badDecl}, "2", time.Now().UTC(), cat, nil); err == nil {
+			t.Fatalf("prepareRestoration unexpectedly accepted hostile routingMode %#v", badRouting)
+		}
 	}
 }

@@ -116,6 +116,40 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 	basePath := fmt.Sprintf("/addons/%d", idx)
 	sources := []string{basePath}
 
+	// Validate settings and required interface/filter invariants fail-closed at render/apply time so
+	// restored or manually modified declarations can never bypass manifest constraints.
+	zones := make(map[string]bool, len(r.d.Zones))
+	for _, z := range r.d.Zones {
+		zones[z.ID] = true
+	}
+	settings, valErrs := addon.ValidateSettings(m, a.Settings, zones)
+	if len(valErrs) > 0 {
+		for _, fe := range valErrs {
+			r.find("error", "ADDON_SETTING_INVALID", basePath+"/settings"+fe.Path, fe.Message)
+		}
+		return
+	}
+	boundZones := make(map[string]string, len(a.Interfaces))
+	for _, ifc := range a.Interfaces {
+		boundZones[ifc.Name] = ifc.Zone
+	}
+	unsafe := false
+	needsFilter := false
+	for _, spec := range m.Interfaces {
+		if !spec.ZoneRequired {
+			continue
+		}
+		needsFilter = true
+		if z := boundZones[spec.Name]; z == "" || !zones[z] {
+			r.find("error", "ADDON_INTERFACE_UNBOUND", basePath+"/interfaces", fmt.Sprintf("Interface %q requires a firewall zone when enabled.", spec.Name))
+			unsafe = true
+		}
+	}
+	if needsFilter && !r.d.filtered() {
+		r.find("error", "MANAGEMENT_REQUIRED", "/management", "Add-ons with zone-bound interfaces require a management segment so Andaru's packet filter is active. Set management.segment.")
+		unsafe = true
+	}
+
 	envMap := map[string]string{
 		"ANDARU_ADDON_ID":   m.ID,
 		"ANDARU_ADDON_SLUG": m.Slug,
@@ -129,10 +163,9 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 
 	var execArgs []string
 	var secrets []renderedAddonSecret
-	unsafe := false
 
 	for _, prop := range m.Properties {
-		val, present := a.Settings[prop.Name]
+		val, present := settings[prop.Name]
 		if !present {
 			if prop.Default == nil {
 				continue
@@ -237,7 +270,7 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 	if m.Health != nil && m.Health.Endpoint != "" {
 		if ei := slices.IndexFunc(m.Endpoints, func(ep addon.EndpointSpec) bool { return ep.Name == m.Health.Endpoint }); ei >= 0 {
 			ep := m.Endpoints[ei]
-			port, _ := m.EndpointPort(ep.Name, a.Settings)
+			port, _ := m.EndpointPort(ep.Name, settings)
 			expected := deref(m.Health.ExpectedStatus, 200)
 			fmt.Fprintf(&header, "# andaru-health-url: %s://127.0.0.1:%d%s %d\n", ep.Protocol, port, m.Health.Path, expected)
 			if m.Health.TimeoutSeconds > 0 {

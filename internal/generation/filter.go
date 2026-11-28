@@ -27,7 +27,9 @@ const FilterEntry = "nft:inet/andaru"
 // IPv6Forwarding= does not route IPv6 by itself. It is on exactly while Andaru's filter is loaded.
 const ipv6Forwarding = "/proc/sys/net/ipv6/conf/all/forwarding"
 
-// ipv4Forwarding is the IPv4 switch for every interface at once; networkd only ever turns it on.
+// ipv4Forwarding is the kernel's global IPv4 forwarding switch, under the realizer's root. Both global
+// forwarding switches are on exactly while Andaru's filter is loaded so unmanaged add-on tunnel interfaces
+// (e.g. tailscale0) can forward without container sysctl writes.
 const ipv4Forwarding = "/proc/sys/net/ipv4/conf/all/forwarding"
 
 var (
@@ -89,9 +91,14 @@ func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 	}
 	for _, item := range listing.Nftables {
 		if item.Table != nil && item.Table.Comment == comment {
-			// Enable both global IPv4 and IPv6 forwarding while table inet andaru is loaded so
-			// unmanaged add-on tunnel interfaces (e.g. tailscale0) can forward without container sysctl writes.
-			return errors.Join(r.sysctl(ipv4Forwarding, "1\n"), r.sysctl(ipv6Forwarding, "1\n"))
+			if err := r.sysctl(ipv4Forwarding, "1\n"); err != nil {
+				return err
+			}
+			if err := r.sysctl(ipv6Forwarding, "1\n"); err != nil {
+				_ = r.sysctl(ipv4Forwarding, "0\n")
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("the loaded packet filter is not this generation's")
