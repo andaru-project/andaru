@@ -1,0 +1,367 @@
+{
+  "schemaVersion": 4,
+  "links": [
+    {
+      "id": "lnk_00000001-0000-4000-8000-000000000001",
+      "name": "wan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:01"
+    },
+    {
+      "id": "lnk_00000002-0000-4000-8000-000000000002",
+      "name": "lan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:02"
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_00000001-0000-4000-8000-000000000001",
+      "name": "wan",
+      "link": "lnk_00000001-0000-4000-8000-000000000001",
+      "zone": "zon_00000001-0000-4000-8000-000000000001",
+      "addressing": {
+        "ipv4": {
+          "mode": "dhcp"
+        },
+        "ipv6": {
+          "mode": "dhcp6",
+          "requestPrefixLength": 56
+        }
+      }
+    },
+    {
+      "id": "seg_00000002-0000-4000-8000-000000000002",
+      "name": "lan",
+      "link": "lnk_00000002-0000-4000-8000-000000000002",
+      "zone": "zon_00000002-0000-4000-8000-000000000002",
+      "addressing": {
+        "ipv4": {
+          "mode": "static",
+          "addresses": [
+            "192.0.2.1/24"
+          ]
+        },
+        "ipv6": {
+          "mode": "delegated",
+          "from": "seg_00000001-0000-4000-8000-000000000001",
+          "subnetId": "beef",
+          "ra": {
+            "enabled": true,
+            "managed": false,
+            "otherInfo": true
+          }
+        }
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "zon_00000001-0000-4000-8000-000000000001",
+      "name": "wan"
+    },
+    {
+      "id": "zon_00000002-0000-4000-8000-000000000002",
+      "name": "lan"
+    },
+    {
+      "id": "zon_00000003-0000-4000-8000-000000000003",
+      "name": "vpn"
+    },
+    {
+      "id": "zon_00000004-0000-4000-8000-000000000004",
+      "name": "branch"
+    }
+  ],
+  "aliases": {
+    "addresses": [],
+    "ports": [
+      {
+        "id": "svc_00000001-0000-4000-8000-000000000001",
+        "name": "ping",
+        "protocol": "icmp",
+        "types": [
+          "echo-request"
+        ]
+      },
+      {
+        "id": "svc_00000002-0000-4000-8000-000000000002",
+        "name": "dns-udp",
+        "protocol": "udp",
+        "ports": [
+          "53"
+        ]
+      },
+      {
+        "id": "svc_00000003-0000-4000-8000-000000000003",
+        "name": "dns-tcp",
+        "protocol": "tcp",
+        "ports": [
+          "53"
+        ]
+      },
+      {
+        "id": "svc_00000004-0000-4000-8000-000000000004",
+        "name": "dns",
+        "protocol": "group",
+        "members": [
+          "svc_00000002-0000-4000-8000-000000000002",
+          "svc_00000003-0000-4000-8000-000000000003"
+        ]
+      }
+    ]
+  },
+  "rules": [
+    {
+      "id": "rul_00000001-0000-4000-8000-000000000001",
+      "name": "vpn to lan",
+      "enabled": true,
+      "action": "accept",
+      "from": {
+        "zones": [
+          "zon_00000003-0000-4000-8000-000000000003"
+        ],
+        "addresses": []
+      },
+      "to": {
+        "zones": [
+          "zon_00000002-0000-4000-8000-000000000002"
+        ],
+        "addresses": []
+      },
+      "ports": [],
+      "log": false
+    },
+    {
+      "id": "rul_00000002-0000-4000-8000-000000000002",
+      "name": "lan to branch",
+      "enabled": true,
+      "action": "accept",
+      "from": {
+        "zones": [
+          "zon_00000002-0000-4000-8000-000000000002"
+        ],
+        "addresses": []
+      },
+      "to": {
+        "zones": [
+          "zon_00000004-0000-4000-8000-000000000004"
+        ],
+        "addresses": []
+      },
+      "ports": [],
+      "log": false
+    },
+    {
+      "id": "rul_00000003-0000-4000-8000-000000000003",
+      "name": "branch ping",
+      "enabled": true,
+      "action": "accept",
+      "from": {
+        "zones": [
+          "zon_00000004-0000-4000-8000-000000000004"
+        ],
+        "addresses": []
+      },
+      "to": {
+        "zones": [
+          "zon_firewall"
+        ],
+        "addresses": []
+      },
+      "ports": [
+        "svc_00000001-0000-4000-8000-000000000001"
+      ],
+      "log": false
+    }
+  ],
+  "nat": {
+    "outbound": {
+      "mode": "automatic"
+    }
+  },
+  "management": {
+    "segment": "seg_00000002-0000-4000-8000-000000000002"
+  },
+  "vpn": {
+    "ipsec": [
+      {
+        "id": "ips_00000001-0000-4000-8000-000000000001",
+        "name": "site-a",
+        "enabled": true,
+        "mode": "route-based",
+        "ifname": "ipsec0",
+        "xfrmIfId": 42,
+        "zone": "zon_00000003-0000-4000-8000-000000000003",
+        "tunnelAddresses": [
+          "169.254.42.1/30"
+        ],
+        "remoteAddress": "198.51.100.7",
+        "ikeVersion": 2,
+        "proposals": [
+          "aes256gcm16-prfsha384-ecp384"
+        ],
+        "espProposals": [
+          "aes256gcm16-ecp384"
+        ],
+        "auth": {
+          "localType": "psk",
+          "remoteType": "psk",
+          "localId": "gw.example.com",
+          "remoteId": "site-a.example.com",
+          "pskRef": {
+            "secret": "IPSEC_SITE_A_PSK",
+            "isSet": true,
+            "version": "3"
+          }
+        },
+        "dpdDelaySeconds": 30,
+        "startAction": "trap",
+        "natTraversal": true
+      },
+      {
+        "id": "ips_00000002-0000-4000-8000-000000000002",
+        "name": "branch",
+        "enabled": true,
+        "mode": "policy-based",
+        "zone": "zon_00000004-0000-4000-8000-000000000004",
+        "localSegment": "seg_00000001-0000-4000-8000-000000000001",
+        "localAddress": "203.0.113.2",
+        "remoteAddress": "branch.example.net",
+        "ikeVersion": 2,
+        "auth": {
+          "localType": "cert",
+          "remoteType": "cert",
+          "localId": "CN=gw.example.com",
+          "remoteId": "CN=branch.example.net",
+          "localCertId": "crt_00000001-0000-4000-8000-000000000001",
+          "caId": "ca_00000001-0000-4000-8000-000000000001"
+        },
+        "localSubnets": [
+          "192.0.2.0/24"
+        ],
+        "remoteSubnets": [
+          "10.30.0.0/16",
+          "fd00:30::/64"
+        ],
+        "dpdDelaySeconds": 0,
+        "startAction": "start",
+        "natTraversal": false
+      },
+      {
+        "id": "ips_00000003-0000-4000-8000-000000000003",
+        "name": "roaming",
+        "enabled": true,
+        "mode": "road-warrior",
+        "ifname": "ipsec1",
+        "xfrmIfId": 43,
+        "zone": "zon_00000003-0000-4000-8000-000000000003",
+        "ikeVersion": 2,
+        "auth": {
+          "localType": "cert",
+          "remoteType": "eap-mschapv2",
+          "localId": "gw.example.com",
+          "localCertId": "crt_00000001-0000-4000-8000-000000000001",
+          "eapUsers": [
+            {
+              "username": "alice",
+              "passwordRef": {
+                "secret": "IPSEC_ALICE",
+                "isSet": true,
+                "version": "3"
+              }
+            },
+            {
+              "username": "bob",
+              "passwordRef": {
+                "secret": "IPSEC_BOB",
+                "isSet": true,
+                "version": "3"
+              }
+            }
+          ]
+        },
+        "virtualPool": [
+          "10.99.0.0/24",
+          "fd00:99::/112"
+        ],
+        "dpdDelaySeconds": 30,
+        "startAction": "none",
+        "natTraversal": true
+      },
+      {
+        "id": "ips_00000004-0000-4000-8000-000000000004",
+        "name": "off",
+        "enabled": false,
+        "mode": "route-based",
+        "ifname": "ipsec2",
+        "xfrmIfId": 44,
+        "remoteAddress": "198.51.100.9",
+        "ikeVersion": 2,
+        "auth": {
+          "localType": "psk",
+          "remoteType": "psk",
+          "localId": "gw.example.com",
+          "pskRef": {
+            "secret": "IPSEC_OFF_PSK",
+            "isSet": true,
+            "version": "3"
+          }
+        },
+        "dpdDelaySeconds": 30,
+        "startAction": "trap",
+        "natTraversal": true
+      }
+    ]
+  },
+  "routes": [
+    {
+      "id": "rte_00000001-0000-4000-8000-000000000001",
+      "name": "site-a",
+      "destination": "10.40.0.0/16",
+      "target": {
+        "kind": "ipsec",
+        "id": "ips_00000001-0000-4000-8000-000000000001"
+      },
+      "metric": 50,
+      "enabled": true
+    },
+    {
+      "id": "rte_00000002-0000-4000-8000-000000000002",
+      "name": "off",
+      "destination": "10.41.0.0/16",
+      "target": {
+        "kind": "ipsec",
+        "id": "ips_00000001-0000-4000-8000-000000000001"
+      },
+      "enabled": false
+    }
+  ],
+  "pki": {
+    "cas": [
+      {
+        "id": "ca_00000001-0000-4000-8000-000000000001",
+        "name": "root",
+        "certPem": "-----BEGIN CERTIFICATE-----\nQ0EK\n-----END CERTIFICATE-----\n"
+      }
+    ],
+    "certificates": [
+      {
+        "id": "crt_00000001-0000-4000-8000-000000000001",
+        "name": "gateway",
+        "caId": "ca_00000001-0000-4000-8000-000000000001",
+        "certPem": "-----BEGIN CERTIFICATE-----\nTEVBRgo=\n-----END CERTIFICATE-----\n",
+        "chainPem": "-----BEGIN CERTIFICATE-----\nQ0EK\n-----END CERTIFICATE-----\n",
+        "keyRef": {
+          "secret": "pki_crt_1",
+          "isSet": true,
+          "version": "3"
+        }
+      }
+    ]
+  }
+}

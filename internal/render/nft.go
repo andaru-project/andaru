@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -36,6 +37,8 @@ type filter struct {
 	services map[string]service
 	// reflection is set once any NAT entry reflects; it adds the internal sets and the hairpin masquerade.
 	reflection bool
+	// policies are, by zone, the reqids of the policy-based IPsec connections in it.
+	policies map[string][]int
 }
 
 // filterChains renders the packet filter, or reports why it cannot; without a management segment there is none.
@@ -48,6 +51,9 @@ func (r *renderer) filterChains() {
 		// A tunnel forwards, and only the packet filter keeps forwarding in its zone.
 		if slices.ContainsFunc(d.VPN.WireGuard, func(w wireguardInterface) bool { return w.Enabled }) {
 			r.find("error", "MANAGEMENT_REQUIRED", "/management", "WireGuard interfaces take effect only with a management segment, which switches the packet filter on. Set management.segment.")
+		}
+		if slices.ContainsFunc(d.VPN.IPsec, func(c ipsecConnection) bool { return c.Enabled }) {
+			r.find("error", "MANAGEMENT_REQUIRED", "/management", "IPsec connections take effect only with a management segment, which switches the packet filter on. Set management.segment.")
 		}
 		return
 	}
@@ -85,6 +91,14 @@ func (r *renderer) filterChains() {
 		segmentZone[w.Ifname] = w.Zone
 		zones[w.Zone] = append(zones[w.Zone], w.Ifname)
 	}
+	ipsecConns, reqids := r.ipsecs()
+	for _, c := range ipsecConns {
+		if c.xfrm() {
+			segmentZone[c.Ifname] = c.Zone
+			zones[c.Zone] = append(zones[c.Zone], c.Ifname)
+		}
+	}
+	f.policies = ipsecPolicies(ipsecConns, reqids)
 	hasAddonZones := false
 	for i, a := range d.Addons {
 		if !a.Enabled || r.in.Catalog == nil {
@@ -172,6 +186,7 @@ func (r *renderer) filterChains() {
 		}
 	}
 	input = append(input, r.wireguardListeners()...)
+	input = append(input, r.ipsecListeners()...)
 	// While an HTTP-01 challenge runs, the engine fills acme_http01_active with its segments' interfaces: port 80 to
 	// the firewall there goes to andaru-outbound's responder. Empty, it redirects nothing.
 	acmeLines, acmeHTTP01 := r.acmeHTTP01()
@@ -241,6 +256,12 @@ func (r *renderer) filterChains() {
 		postrouting = append(postrouting, "fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade")
 	}
 	if len(postrouting) > 0 {
+		// A policy-based IPsec connection's traffic leaves by an uplink, but its policy matched its own addresses.
+		var exempt []string
+		for _, reqid := range slices.Sorted(maps.Values(reqids)) {
+			exempt = append(exempt, fmt.Sprintf("ipsec out reqid %d accept", reqid))
+		}
+		postrouting = append(exempt, postrouting...)
 		chain("postrouting", "type nat hook postrouting priority srcnat;", postrouting)
 	}
 	// Created, deleted and defined in one file, which nft -f applies as one transaction.
@@ -261,7 +282,7 @@ func (r *renderer) filterChains() {
 	if len(acmeLines) > 0 {
 		nftSources = append(nftSources, "/acme")
 	}
-	if len(r.wireguards()) > 0 {
+	if len(r.wireguards()) > 0 || len(ipsecConns) > 0 {
 		nftSources = append(nftSources, "/vpn")
 	}
 	r.file(nftPath, "0644", script, nftSources)
@@ -552,6 +573,11 @@ func (f *filter) rule(r rule) []string {
 			// The firewall is no interface: the input chain is what makes a rule one to it.
 			if z != firewallZone {
 				zones = append(zones, fmt.Sprintf("%s @%s", iface, setName(z)))
+				// A policy-based IPsec connection's traffic is in its zone by the policy it matched, whatever the interface.
+				for _, reqid := range f.policies[z] {
+					// Only a decrypted packet has a secpath; one to encrypt matches its output policy alone.
+					zones = append(zones, map[string]string{"iifname": "meta ipsec exists ipsec in", "oifname": "ipsec out"}[iface]+fmt.Sprintf(" reqid %d", reqid))
+				}
 			}
 		}
 		if len(zones) == 0 {

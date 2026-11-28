@@ -157,6 +157,7 @@ type declaration struct {
 	VirtualAddresses []virtualAddress `json:"virtualAddresses"`
 	Addons           []addonEntry     `json:"addons"`
 	PKI              struct {
+		CAs          []certificate `json:"cas"`
 		Certificates []certificate `json:"certificates"`
 	} `json:"pki"`
 	ACME struct {
@@ -165,6 +166,7 @@ type declaration struct {
 	Routes []route `json:"routes"`
 	VPN    struct {
 		WireGuard []wireguardInterface `json:"wireguard"`
+		IPsec     []ipsecConnection    `json:"ipsec"`
 	} `json:"vpn"`
 }
 
@@ -289,7 +291,8 @@ type Input struct {
 	Declaration  json.RawMessage
 	Secrets      map[string]string
 	AddonSecrets map[string]map[string]string
-	// CertificateKeys are the private keys of the certificates enabled add-ons name, by certificate ID.
+	// CertificateKeys are the private keys of the certificates enabled add-ons and IPsec connections name, by
+	// certificate ID.
 	CertificateKeys map[string]string
 	Catalog         *addon.Catalog
 	StateDir        string

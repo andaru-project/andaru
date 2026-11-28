@@ -47,7 +47,9 @@ func fixture(t *testing.T, name string) Input {
 	if err = json.Unmarshal(raw, &rows); err != nil {
 		t.Fatal(err)
 	}
-	return Input{Declaration: declaration, Links: links(rows...), Facts: allFacts, Secrets: map[string]string{"WAN_PASSWORD": "kpn", "WG0_KEY": "ERERERERERERERERERERERERERERERERERERERERERE=", "WG1_KEY": "EhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhI=", "WG2_KEY": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM=", "WG0_LAPTOP_PSK": "FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQ="}}
+	return Input{Declaration: declaration, Links: links(rows...), Facts: allFacts, Secrets: map[string]string{"WAN_PASSWORD": "kpn", "WG0_KEY": "ERERERERERERERERERERERERERERERERERERERERERE=", "WG1_KEY": "EhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhI=", "WG2_KEY": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM=", "WG0_LAPTOP_PSK": "FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQ=",
+		"IPSEC_SITE_A_PSK": "site-a \"secret\" }", "IPSEC_ALICE": "alice-pw", "IPSEC_BOB": "bob-pw"},
+		CertificateKeys: map[string]string{"crt_00000001-0000-4000-8000-000000000001": "-----BEGIN PRIVATE KEY-----\nS0VZ\n-----END PRIVATE KEY-----\n"}}
 }
 
 func render(t *testing.T, in Input) Result {

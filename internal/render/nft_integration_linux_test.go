@@ -460,3 +460,22 @@ func TestWireGuardFilterLoads(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }
+
+// The IPsec connections' rules load: IKE, NAT-T and ESP input, XFRM interfaces in their zones, and a policy-based
+// connection's zone matched by its reqid, also kept out of the masquerade.
+func TestIPsecFilterLoads(t *testing.T) {
+	l := newLab(t)
+	l.load(fixture(t, "ipsec"))
+	for chain, want := range map[string][]string{
+		"input":       {"iifname @uplinks udp dport { 500, 4500 } accept", "meta ipsec exists ipsec in reqid 100", `iifname "ens18" udp dport 500 accept`},
+		"forward":     {"ipsec out reqid 100"},
+		"postrouting": {"ipsec out reqid 100 accept"},
+	} {
+		out, err := l.run(l.fw, "nft", "list", "chain", "inet", "andaru", chain)
+		for _, line := range want {
+			if err != nil || !strings.Contains(out, line) {
+				t.Fatalf("%s lacks %q: %v\n%s", chain, line, err, out)
+			}
+		}
+	}
+}

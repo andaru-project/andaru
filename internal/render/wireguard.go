@@ -44,17 +44,17 @@ const keyOwner = "root:systemd-network"
 func (r *renderer) wireguards() []wireguardInterface {
 	var out []wireguardInterface
 	for _, w := range r.d.VPN.WireGuard {
-		if w.Enabled && !r.taken(w.Ifname) {
+		if w.Enabled && !r.taken(w.Ifname, "wireguard") {
 			out = append(out, w)
 		}
 	}
 	return out
 }
 
-// taken says a device other than a WireGuard one already has the name.
-func (r *renderer) taken(name string) bool {
+// taken says a device of another kind than the one Andaru makes for a tunnel already has the name.
+func (r *renderer) taken(name, kind string) bool {
 	for _, l := range r.in.Links {
-		if l.Name == name && l.Kind != "wireguard" {
+		if l.Name == name && l.Kind != kind {
 			return true
 		}
 	}
@@ -68,7 +68,7 @@ func (r *renderer) wireguard() {
 		if !w.Enabled {
 			continue
 		}
-		if r.taken(w.Ifname) {
+		if r.taken(w.Ifname, "wireguard") {
 			r.find("error", "NAME_COLLISION", path+"/ifname", "Another device already has the interface name "+w.Ifname+".")
 			continue
 		}
