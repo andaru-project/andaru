@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/andaru-project/andaru/internal/addon"
@@ -42,6 +43,9 @@ type CertSync struct {
 	Web *CertPair `json:"web"`
 	// Addons are, by slug, the files of each add-on's certs directory, by file name.
 	Addons map[string]map[string]string `json:"addons"`
+	// IPsec are the IPsec connections' certificates and keys, by path under /run/andaru-ipsec
+	// (x509/<id>.pem, private/<id>.key).
+	IPsec map[string]string `json:"ipsec,omitempty"`
 }
 
 // CertPair is a PEM certificate, its chain appended, and its private key.
@@ -78,6 +82,11 @@ func (s CertSync) Validate() error {
 			}
 		}
 	}
+	for name := range s.IPsec {
+		if !ipsecCredential.MatchString(ipsecDir+"/"+name) || strings.HasPrefix(name, "x509ca/") {
+			return fmt.Errorf("cert-sync: invalid IPsec credential %q", name)
+		}
+	}
 	return nil
 }
 
@@ -111,7 +120,7 @@ func (r Realizer) SyncCertificates(ctx context.Context, s CertSync) error {
 			return err
 		}
 	}
-	return errors.Join(r.syncWebCertificate(ctx, s.Web, s.KeepWeb), r.syncAddonCertificates(s.Addons))
+	return errors.Join(r.syncWebCertificate(ctx, s.Web, s.KeepWeb), r.syncAddonCertificates(s.Addons), r.syncIPsecCertificates(ctx, s.IPsec))
 }
 
 func (r Realizer) syncWebCertificate(ctx context.Context, pair *CertPair, keepWeb bool) error {
@@ -263,4 +272,45 @@ func writeOwned(path string, data []byte, uid, gid int, labelFrom string) (bool,
 		return false, err
 	}
 	return true, syncDir(filepath.Dir(path))
+}
+
+// syncIPsecCertificates rewrites the IPsec certificates and keys that changed, while a generation runs strongSwan, and
+// has a running charon load them again.
+func (r Realizer) syncIPsecCertificates(ctx context.Context, files map[string]string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if _, err := os.Lstat(r.Root + ipsecConf); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	changed := false
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		path, mode := r.Root+ipsecDir+"/"+name, fs.FileMode(0o644)
+		if strings.HasPrefix(name, "private/") {
+			mode = 0o400
+		}
+		if sameRegularFile(path, []byte(files[name]), mode) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		if err := writeAtomic(path, []byte(files[name]), mode); err != nil {
+			return fmt.Errorf("place IPsec credential %s: %w", name, err)
+		}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if err := r.ipsecCredentialDirs(ctx); err != nil {
+		return err
+	}
+	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", strongswanUnit); err != nil {
+		return nil // a charon that starts later loads them itself
+	}
+	if _, err := r.Run(ctx, swanctl, "--load-creds", "--file", ipsecConf, "--noprompt"); err != nil {
+		return fmt.Errorf("reload the IPsec credentials: %w", err)
+	}
+	return nil
 }

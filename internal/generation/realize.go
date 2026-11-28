@@ -296,7 +296,8 @@ func (r Realizer) place(from, to []placed) error {
 	return nil
 }
 
-// wireguardOwner extracts the WireGuard device name (wg0..wg99) for a rendered .netdev, .key, or .psk file.
+// wireguardOwner extracts the WireGuard device name (wg0..wg99) for a rendered .netdev, .key, or .psk file, or the
+// XFRM device name (ipsec0..ipsec99) for a rendered .netdev: networkctl reload changes neither device in place.
 func wireguardOwner(path string) (string, bool) {
 	if filepath.Dir(path) != "/run/systemd/network" {
 		return "", false
@@ -320,7 +321,7 @@ func wireguardOwner(path string) (string, bool) {
 	default:
 		return "", false
 	}
-	if !strings.HasPrefix(name, "wg") {
+	if !strings.HasPrefix(name, "wg") && !(strings.HasPrefix(name, "ipsec") && strings.HasSuffix(path, ".netdev")) {
 		return "", false
 	}
 	return name, true
@@ -409,7 +410,7 @@ func (r Realizer) settle(ctx context.Context, from, to []placed, recreateWG []st
 					continue
 				}
 			}
-			return fmt.Errorf("recreate WireGuard device %s: %w", name, err)
+			return fmt.Errorf("recreate tunnel device %s: %w", name, err)
 		}
 	}
 	if _, err := r.Run(ctx, "/usr/bin/networkctl", "reload"); err != nil {
@@ -432,6 +433,9 @@ func (r Realizer) settle(ctx context.Context, from, to []placed, recreateWG []st
 		return err
 	}
 	if err := r.services(ctx, from, to); err != nil {
+		return err
+	}
+	if err := r.ipsec(ctx, from, to); err != nil {
 		return err
 	}
 	return r.addons(ctx, from, to)

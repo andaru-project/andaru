@@ -91,7 +91,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	verb := flags.Arg(0)
 	want := map[string]int{
 		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "aliases": 0, "addons-release-hold": 0, "factory-reset": 0,
-		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1, "cert-sync": 1, "addon-log": 4, "wg-status": 1, "acme-http01-open": -1, "acme-http01-close": 0,
+		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1, "cert-sync": 1, "addon-log": 4, "wg-status": 1, "ipsec-status": 1, "ipsec-ctl": 2, "acme-http01-open": -1, "acme-http01-close": 0,
 		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0, "set-hostname": 1,
 	}
 	n, known := want[verb]
@@ -131,7 +131,11 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 				return usageError(stderr, realizeUsage, "andaru realize")
 			}
 		}
-	case "addon-bus-tokens", "cert-sync", "wg-status":
+	case "ipsec-ctl":
+		if (rest[0] != "initiate" && rest[0] != "terminate") || !generation.ValidIPsecConnection(rest[1]) {
+			return usageError(stderr, realizeUsage, "andaru realize")
+		}
+	case "addon-bus-tokens", "cert-sync", "wg-status", "ipsec-status":
 		if !filepath.IsAbs(rest[0]) || filepath.Clean(rest[0]) != rest[0] {
 			return usageError(stderr, realizeUsage, "andaru realize")
 		}
@@ -151,7 +155,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		// The engine keeps owing these: it tries them again after the reset.
 		switch verb {
-		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens", "cert-sync", "addon-log", "acme-http01-open", "wg-status":
+		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens", "cert-sync", "addon-log", "acme-http01-open", "wg-status", "ipsec-status", "ipsec-ctl":
 			return 1
 		}
 		return 0
@@ -169,6 +173,11 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	case "wg-status":
 		// Outside the generations lock: it only reads the kernel, and must answer while an apply waits.
 		return wgStatusVerb(ctx, *stateDir, rest[0], stderr)
+	case "ipsec-status":
+		// Outside the generations lock, as wg-status: it only asks strongSwan.
+		return ipsecStatusVerb(ctx, *stateDir, rest[0], stderr)
+	case "ipsec-ctl":
+		return ipsecControlVerb(ctx, rest[0], rest[1], stderr)
 	}
 	id := 0
 	if verb == "activate" || verb == "rollback" || verb == "confirm" {

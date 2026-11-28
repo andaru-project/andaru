@@ -205,6 +205,9 @@ func TestRealizeUsageErrors(t *testing.T) {
 		{"realize", "acme-http01-open"}, {"realize", "acme-http01-open", "bad name"}, {"realize", "acme-http01-open", "../x"},
 		{"realize", "acme-http01-open", "averyveryverylongname"}, {"realize", "acme-http01-close", "ens18"},
 		{"realize", "--state-dir", "relative", "boot"},
+		{"realize", "ipsec-status"}, {"realize", "ipsec-status", "rel.json"}, {"realize", "ipsec-ctl", "initiate"},
+		{"realize", "ipsec-ctl", "reload", "ips_00000001-0000-4000-8000-000000000001"}, {"realize", "ipsec-ctl", "initiate", "--all"},
+		{"realize", "ipsec-ctl", "terminate", "ips_1"},
 	} {
 		var out, diagnostics bytes.Buffer
 		if code := run(context.Background(), args, strings.NewReader(""), &out, &diagnostics); code != 2 || out.Len() != 0 || diagnostics.Len() == 0 {
@@ -619,5 +622,22 @@ func TestConfigWireGuard(t *testing.T) {
 	}
 	if !validChanged(config.ChangedView{Collection: "vpn.wireguard", ID: id, Deleted: true}) {
 		t.Fatal("a WireGuard result was refused")
+	}
+}
+
+func TestConfigIPsec(t *testing.T) {
+	id := "ips_00000001-0000-4000-8000-000000000001"
+	for args, want := range map[string]ctlRequest{
+		"config list vpn/ipsec":      {method: "GET", path: "/api/v1/config/vpn/ipsec", kind: "collection"},
+		"config create vpn/ipsec":    {method: "POST", path: "/api/v1/config/vpn/ipsec", kind: "object"},
+		"config get vpn/ipsec " + id: {method: "GET", path: "/api/v1/config/vpn/ipsec/" + id, kind: "object"},
+	} {
+		req, err := ctlOperation(strings.Fields(args), io.Discard)
+		if err != nil || req.method != want.method || req.path != want.path || req.kind != want.kind {
+			t.Fatalf("%s: %+v %v", args, req, err)
+		}
+	}
+	if !validChanged(config.ChangedView{Collection: "vpn.ipsec", ID: id, Deleted: true}) {
+		t.Fatal("an IPsec result was refused")
 	}
 }
