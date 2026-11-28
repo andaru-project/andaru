@@ -54,12 +54,29 @@ func (s *Service) handleACME(ctx context.Context, c *bus.Client, http01Slot, dns
 		<-slot
 		return
 	}
-	issuer := s.ACME
-	if issuer == nil {
-		issuer = &acme.Issuer{}
+	var runIssuer acme.Issuer
+	if s.ACME != nil {
+		runIssuer = *s.ACME
+	}
+	if e.Data.Challenge.Type == "http-01" {
+		prevReady := runIssuer.OnHTTP01Ready
+		runIssuer.OnHTTP01Ready = func() {
+			if prevReady != nil {
+				prevReady()
+			}
+			readyPayload, rerr := bus.NewEvent(acme.ReadyType, User, acme.HTTP01Ready{JobID: e.Data.JobID, OrderID: orderID})
+			if rerr == nil {
+				rctx, rcancel := context.WithTimeout(ctx, acmePublishTimeout)
+				rerr = c.Publish(rctx, acme.ResultTopic(orderID), readyPayload, false)
+				rcancel()
+			}
+			if rerr != nil {
+				s.Log.Warn("ACME HTTP-01 readiness not published", "order", orderID, "error", rerr)
+			}
+		}
 	}
 	s.Log.Info("ACME order started", "order", orderID, "job", e.Data.JobID, "challenge", e.Data.Challenge.Type, "staging", e.Data.StagingTest)
-	res := issuer.Issue(jobCtx, e.Data)
+	res := runIssuer.Issue(jobCtx, e.Data)
 	// Release the worker slot before publishing so a slow bus reply cannot hold port 8480 or block other orders.
 	<-slot
 	if ctx.Err() != nil {

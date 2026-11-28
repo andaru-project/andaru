@@ -328,6 +328,22 @@ func TestACMECertificateChanges(t *testing.T) {
 	if _, err := acmeCertificateChanges(&s, orderID, certID, accountID, string(second.CertPEM), "", string(second.KeyPEM)); err == nil {
 		t.Fatal("accepted stale certificate after order domains changed")
 	}
+	// Removing a domain mid-issuance also rejects a certificate that still carries the removed SAN.
+	ca2, _ := pki.NewCA(pki.CARequest{CommonName: "LE2", KeyAlgorithm: "ecdsa-p256", ValidDays: 30}, nil)
+	issuer2, _ := pki.ParseIssuer(ca2.CertPEM, ca2.KeyPEM)
+	twoDomain, err := pki.NewLeaf(pki.LeafRequest{CommonName: "edge.example.com", SANs: []string{"edge.example.com", "api.example.com"}, Usage: "server", KeyAlgorithm: "ecdsa-p256", ValidDays: 30}, issuer2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrowed := dnsOrder(accountID, "edge.example.com")
+	narrowed["certificateId"] = certID
+	narrowed["challenge"].(map[string]any)["dns01"].(map[string]any)["cloudflare"] = map[string]any{}
+	if s, err = acmeReplace(t, s, "acme.orders", orderID, narrowed, "13"); err != nil {
+		t.Fatal(faultText(err))
+	}
+	if _, err := acmeCertificateChanges(&s, orderID, certID, accountID, string(twoDomain.CertPEM), "", string(twoDomain.KeyPEM)); err == nil {
+		t.Fatal("accepted certificate with extra SAN after a domain was removed from the order")
+	}
 	// Empty ACME arrays canonicalize to absent so round-trip encoding matches.
 	d := seededState(t).Config
 	d.ACME.Accounts, d.ACME.Orders = []acmeAccount{}, []acmeOrder{}

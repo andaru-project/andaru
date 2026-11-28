@@ -313,13 +313,52 @@ func TestACMEHTTP01OpensLiveInterfaces(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "pointers.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	b.answer = func(acme.Job) acme.Result { return acme.Result{Error: "unauthorized"} }
+	b.answer = func(job acme.Job) acme.Result {
+		// Simulate andaru-outbound binding port 8480 and signaling readiness before returning the result.
+		readyRaw, _ := bus.NewEvent(acme.ReadyType, "andaru-outbound", acme.HTTP01Ready{JobID: job.JobID, OrderID: job.OrderID})
+		_ = b.events.Publish(acme.ResultTopic(job.OrderID), readyRaw, false)
+		// Wait until the engine opens the redirect, then simulate a filter reload (apply/+) mid-challenge.
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			b.mu.Lock()
+			opened := len(b.realized) >= 1
+			b.mu.Unlock()
+			if opened {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		b.c.onApply("apply/1", nil)
+		deadline = time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			b.mu.Lock()
+			reopened := len(b.realized) >= 2
+			b.mu.Unlock()
+			if reopened {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return acme.Result{Error: "unauthorized"}
+	}
 	if err := b.c.trigger(context.Background(), testOrderID, false); err != nil {
 		t.Fatal(err)
 	}
 	b.c.wg.Wait()
-	if !slices.Equal(b.realized, []string{"acme-http01-open ens18 ens19", "acme-http01-close"}) {
+	if !slices.Equal(b.realized, []string{"acme-http01-open ens18 ens19", "acme-http01-open ens18 ens19", "acme-http01-close"}) {
 		t.Fatalf("realized %q", b.realized)
+	}
+	// If outbound fails before binding port 8480 (no readiness event), port 80 is never redirected.
+	b.mu.Lock()
+	b.realized = nil
+	b.mu.Unlock()
+	b.answer = func(acme.Job) acme.Result { return acme.Result{Error: "bind failed"} }
+	if err := b.c.trigger(context.Background(), testOrderID, false); err != nil {
+		t.Fatal(err)
+	}
+	b.c.wg.Wait()
+	if len(b.realized) != 0 {
+		t.Fatalf("redirect opened without responder readiness: %q", b.realized)
 	}
 }
 

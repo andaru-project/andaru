@@ -469,10 +469,12 @@ func acmeCertificateChanges(state *savedState, orderID, certID, accountID, certP
 	if order.KeyAlgorithm != "" && info.KeyAlgorithm != order.KeyAlgorithm {
 		return changes, fault("VALIDATION_FAILED", "/keyAlgorithm", "The order's key algorithm changed while the certificate was being issued.")
 	}
-	for _, domain := range order.Domains {
-		if !slices.Contains(info.SANs, domain) {
-			return changes, fault("VALIDATION_FAILED", "/domains", "The order's domains changed while the certificate was being issued.")
-		}
+	wantDomains := slices.Clone(order.Domains)
+	gotDomains := slices.Clone(info.SANs)
+	slices.Sort(wantDomains)
+	slices.Sort(gotDomains)
+	if !slices.Equal(gotDomains, wantDomains) {
+		return changes, fault("VALIDATION_FAILED", "/domains", "The order's domains changed while the certificate was being issued.")
 	}
 	head := state.Version
 	changes.ExpectedSavedVersion = &head

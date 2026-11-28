@@ -285,6 +285,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		return fmt.Errorf("follow ACME results: %w", err)
 	}
 	defer stopACME()
+	stopACMEApplies, err := events.Subscribe("apply/+", acmeOrders.onApply)
+	if err != nil {
+		return fmt.Errorf("follow applies for ACME HTTP-01: %w", err)
+	}
+	defer stopACMEApplies()
 	acmeDone := make(chan struct{})
 	go func() { defer close(acmeDone); acmeOrders.run(lifetime) }()
 	defer func() { cancel(context.Canceled); <-acmeDone }()

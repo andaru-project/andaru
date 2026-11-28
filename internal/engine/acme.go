@@ -38,6 +38,7 @@ const (
 	acmeOrdersPrefix  = "/api/v1/acme/orders/"
 	acmeNoticeSource  = "acme"
 	acmeJobTimeout    = 15 * time.Minute
+	acmeReadyTimeout  = 30 * time.Second
 	acmeFirstCheck    = 2 * time.Minute
 	acmeCheckEvery    = 24 * time.Hour
 	acmeExpiryWarning = 14 * 24 * time.Hour
@@ -91,6 +92,7 @@ type acmeRun struct {
 	order   config.ACMEOrder
 	staging bool
 	binding string
+	ready   chan struct{}
 	results chan acme.Result
 }
 
@@ -111,12 +113,14 @@ type acmeCoordinator struct {
 	now     func() time.Time
 	timeout time.Duration
 
-	mu       sync.Mutex
-	http01Mu sync.Mutex
-	state    acmeState
-	runs     map[string]*acmeRun
-	lifetime context.Context
-	wg       sync.WaitGroup
+	mu                sync.Mutex
+	http01Mu          sync.Mutex
+	nftMu             sync.Mutex
+	activeHTTP01Order string
+	state             acmeState
+	runs              map[string]*acmeRun
+	lifetime          context.Context
+	wg                sync.WaitGroup
 }
 
 func newACMECoordinator(store acmeStore, stateDir, systemRoot string, events *bus.Bus, certs *certSync, audits *audit.Store,
@@ -176,9 +180,9 @@ func (c *acmeCoordinator) run(ctx context.Context) {
 	c.mu.Lock()
 	c.lifetime = ctx
 	c.mu.Unlock()
-	c.http01Mu.Lock()
+	c.nftMu.Lock()
 	c.closeHTTP01()
-	c.http01Mu.Unlock()
+	c.nftMu.Unlock()
 	timer := time.NewTimer(acmeFirstCheck)
 	defer timer.Stop()
 	for {
@@ -368,7 +372,7 @@ func (c *acmeCoordinator) prepare(o config.ACMEOrder, staging bool, cached *acme
 		job.AccountURI = cached.RegisteredURI
 	}
 	run := &acmeRun{jobID: job.JobID, keyPEM: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})), order: o, staging: staging,
-		binding: binding, results: make(chan acme.Result, 1)}
+		binding: binding, ready: make(chan struct{}, 1), results: make(chan acme.Result, 1)}
 	return job, run, ifaces, nil
 }
 
@@ -405,7 +409,8 @@ func liveHTTP01Interfaces(stateDir, orderID string) ([]string, error) {
 	return nil, notApplied
 }
 
-// execute opens the HTTP-01 redirect if the order needs it, sends the job and waits for its result.
+// execute sends the job, opens the HTTP-01 redirect only once andaru-outbound reports the responder listening,
+// and waits for the result.
 func (c *acmeCoordinator) execute(ctx context.Context, run *acmeRun, job acme.Job, ifaces []string) acme.Result {
 	failed := func(err error) acme.Result {
 		return acme.Result{JobID: run.jobID, OrderID: job.OrderID, Error: err.Error()}
@@ -417,13 +422,6 @@ func (c *acmeCoordinator) execute(ctx context.Context, run *acmeRun, job acme.Jo
 		// Serialize HTTP-01 runs so concurrent orders never flush each other's active nftables redirect set.
 		c.http01Mu.Lock()
 		defer c.http01Mu.Unlock()
-		rctx, cancel := context.WithTimeout(ctx, acmeRealizeLimit)
-		err := c.realize(rctx, "acme-http01-open", ifaces...)
-		cancel()
-		defer c.closeHTTP01() // on success, failure, timeout and stop alike
-		if err != nil {
-			return failed(fmt.Errorf("open the HTTP-01 redirect: %w", err))
-		}
 	}
 	deadline := c.now().Add(c.timeout).UTC()
 	job.Deadline = &deadline
@@ -440,6 +438,51 @@ func (c *acmeCoordinator) execute(ctx context.Context, run *acmeRun, job acme.Jo
 	}
 	timer := time.NewTimer(c.timeout)
 	defer timer.Stop()
+	if len(ifaces) > 0 {
+		readyWait := min(acmeReadyTimeout, c.timeout)
+		readyTimer := time.NewTimer(readyWait)
+		select {
+		case <-run.ready:
+			readyTimer.Stop()
+		case res := <-run.results:
+			readyTimer.Stop()
+			return res
+		case <-readyTimer.C:
+			return failed(errors.New("andaru-outbound did not start the HTTP-01 responder in time; is it running?"))
+		case <-timer.C:
+			return failed(errors.New("andaru-outbound did not answer in time; is it running?"))
+		case <-ctx.Done():
+			return failed(errors.New("the engine stopped"))
+		}
+		// Re-read the live generation's interfaces right before opening in case an apply happened while waiting.
+		liveIfaces, liveErr := liveHTTP01Interfaces(c.stateDir, job.OrderID)
+		if liveErr != nil {
+			return failed(liveErr)
+		}
+		c.nftMu.Lock()
+		rctx, cancel := context.WithTimeout(ctx, acmeRealizeLimit)
+		openErr := c.realize(rctx, "acme-http01-open", liveIfaces...)
+		cancel()
+		if openErr == nil {
+			c.mu.Lock()
+			c.activeHTTP01Order = job.OrderID
+			c.mu.Unlock()
+		}
+		c.nftMu.Unlock()
+		defer func() {
+			c.nftMu.Lock()
+			c.mu.Lock()
+			if c.activeHTTP01Order == job.OrderID {
+				c.activeHTTP01Order = ""
+			}
+			c.mu.Unlock()
+			c.closeHTTP01() // on success, failure, timeout and stop alike
+			c.nftMu.Unlock()
+		}()
+		if openErr != nil {
+			return failed(fmt.Errorf("open the HTTP-01 redirect: %w", openErr))
+		}
+	}
 	select {
 	case res := <-run.results:
 		return res
@@ -450,25 +493,85 @@ func (c *acmeCoordinator) execute(ctx context.Context, run *acmeRun, job acme.Jo
 	}
 }
 
-// onResult hands andaru-outbound's result to the run it answers. It runs in the bus's goroutine and never blocks.
-func (c *acmeCoordinator) onResult(topic string, payload []byte) {
-	var e struct {
-		Type string      `json:"type"`
-		Data acme.Result `json:"data"`
+// onApply re-populates @acme_http01_active if a filter reload (apply or rollback) replaced table inet andaru
+// while an HTTP-01 challenge was active. It runs in the bus goroutine and never blocks.
+func (c *acmeCoordinator) onApply(string, []byte) {
+	if c.realize == nil {
+		return
 	}
-	if json.Unmarshal(payload, &e) != nil || e.Type != acme.ResultType {
+	c.mu.Lock()
+	active := c.activeHTTP01Order
+	life := c.lifetime
+	if active == "" {
+		c.mu.Unlock()
+		return
+	}
+	c.wg.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.wg.Done()
+		c.nftMu.Lock()
+		defer c.nftMu.Unlock()
+		c.mu.Lock()
+		orderID := c.activeHTTP01Order
+		c.mu.Unlock()
+		if orderID == "" {
+			return
+		}
+		ifaces, err := liveHTTP01Interfaces(c.stateDir, orderID)
+		if err != nil {
+			return // the new generation removed or disabled the HTTP-01 order
+		}
+		rctx, cancel := context.WithTimeout(life, acmeRealizeLimit)
+		defer cancel()
+		if err := c.realize(rctx, "acme-http01-open", ifaces...); err != nil {
+			slog.Warn("acme: restore HTTP-01 redirect after filter reload", "order", orderID, "error", err)
+		}
+	}()
+}
+
+// onResult hands andaru-outbound's readiness signal or result to the run it answers. It runs in the bus's goroutine
+// and never blocks.
+func (c *acmeCoordinator) onResult(topic string, payload []byte) {
+	var env struct {
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(payload, &env) != nil {
 		return
 	}
 	orderID := strings.TrimPrefix(topic, "acme-result/")
-	c.mu.Lock()
-	run := c.runs[orderID]
-	c.mu.Unlock()
-	if run == nil || run.jobID == "" || run.jobID != e.Data.JobID || e.Data.OrderID != orderID {
-		return // a late or foreign result
-	}
-	select {
-	case run.results <- e.Data:
-	default:
+	switch env.Type {
+	case acme.ReadyType:
+		var ready acme.HTTP01Ready
+		if json.Unmarshal(env.Data, &ready) != nil || ready.OrderID != orderID {
+			return
+		}
+		c.mu.Lock()
+		run := c.runs[orderID]
+		c.mu.Unlock()
+		if run == nil || run.jobID == "" || run.jobID != ready.JobID {
+			return
+		}
+		select {
+		case run.ready <- struct{}{}:
+		default:
+		}
+	case acme.ResultType:
+		var res acme.Result
+		if json.Unmarshal(env.Data, &res) != nil || res.OrderID != orderID {
+			return
+		}
+		c.mu.Lock()
+		run := c.runs[orderID]
+		c.mu.Unlock()
+		if run == nil || run.jobID == "" || run.jobID != res.JobID {
+			return // a late or foreign result
+		}
+		select {
+		case run.results <- res:
+		default:
+		}
 	}
 }
 

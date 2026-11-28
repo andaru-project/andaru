@@ -30,6 +30,7 @@ const (
 	OrderFilter  = "acme-order/#"
 	ResultFilter = "acme-result/+"
 	JobType      = "acme.order.v1"
+	ReadyType    = "acme.http01.ready.v1"
 	ResultType   = "acme.result.v1"
 	// StagingDirectory is Let's Encrypt's staging directory, which a staging test orders from.
 	StagingDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
@@ -88,6 +89,13 @@ type DNS01 struct {
 	AllowPrivateIP bool   `json:"allowPrivateIp,omitempty"`
 }
 
+// HTTP01Ready notifies the engine that andaru-outbound has bound the HTTP-01 responder and is ready for port 80
+// redirection to open.
+type HTTP01Ready struct {
+	JobID   string `json:"jobId"`
+	OrderID string `json:"orderId"`
+}
+
 // Result is what an issuance returned: the certificate and its chain, or why it failed. It holds no secret.
 type Result struct {
 	JobID       string `json:"jobId"`
@@ -115,6 +123,8 @@ type Issuer struct {
 	Poll time.Duration
 	// Endpoints overrides the providers' API base URLs, by provider name, for tests.
 	Endpoints map[string]string
+	// OnHTTP01Ready, when set, is called right after the HTTP-01 responder starts listening.
+	OnHTTP01Ready func()
 }
 
 // Issue runs job to its end and says how it went.
@@ -138,6 +148,27 @@ func (is *Issuer) issue(ctx context.Context, job Job) (certPEM, chainPEM, accoun
 	if len(job.Domains) == 0 || len(job.CSR) == 0 {
 		return "", "", "", errors.New("the order has no domains or CSR")
 	}
+	var cleanups []func()
+	defer func() {
+		for _, c := range slices.Backward(cleanups) {
+			c()
+		}
+	}()
+	// Start the HTTP-01 responder before contacting the CA so port 8480 is listening before port 80 redirects.
+	var responder *responder
+	if job.Challenge.Type == "http-01" {
+		addr := is.HTTP01Addr
+		if addr == "" {
+			addr = HTTP01Addr
+		}
+		if responder, err = startResponder(addr); err != nil {
+			return "", "", "", err
+		}
+		cleanups = append(cleanups, responder.close)
+		if is.OnHTTP01Ready != nil {
+			is.OnHTTP01Ready()
+		}
+	}
 	httpClient := is.HTTP
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -152,24 +183,6 @@ func (is *Issuer) issue(ctx context.Context, job Job) (certPEM, chainPEM, accoun
 	order, err := client.AuthorizeOrder(ctx, xacme.DomainIDs(job.Domains...))
 	if err != nil {
 		return "", "", accountURI, fmt.Errorf("create the order: %w", acmeError(err))
-	}
-	var cleanups []func()
-	defer func() {
-		for _, c := range slices.Backward(cleanups) {
-			c()
-		}
-	}()
-	// Start the HTTP-01 responder immediately so port 8480 is listening as soon as the redirect opens.
-	var responder *responder
-	if job.Challenge.Type == "http-01" {
-		addr := is.HTTP01Addr
-		if addr == "" {
-			addr = HTTP01Addr
-		}
-		if responder, err = startResponder(addr); err != nil {
-			return "", "", accountURI, err
-		}
-		cleanups = append(cleanups, responder.close)
 	}
 	if len(order.AuthzURLs) > len(job.Domains) || len(order.AuthzURLs) > 100 {
 		return "", "", accountURI, errors.New("the CA returned more authorizations than requested domains")
