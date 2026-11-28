@@ -109,6 +109,9 @@ func (c *certSync) sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(raw) > generation.MaxCertSyncBytes {
+		return fmt.Errorf("cert-sync payload exceeds maximum size (%d bytes)", generation.MaxCertSyncBytes)
+	}
 	// The generation is part of the key: an activation or rollback places its own copies, which must be replaced.
 	sum := sha256.Sum256(append([]byte(fmt.Sprintf("%d\x00", live)), raw...))
 	if hex.EncodeToString(sum[:]) == c.last {
@@ -145,13 +148,20 @@ func (c *certSync) payload(ctx context.Context) (int, generation.CertSync, error
 	payload := generation.CertSync{Addons: map[string]map[string]string{}}
 	dir := generation.Dir(c.stateDir)
 	p, err := generation.ReadPointers(dir)
-	if err != nil || p.Live == nil {
+	if err != nil {
 		return 0, payload, err
+	}
+	if p.Live == nil {
+		zero := 0
+		payload.ExpectedLive = &zero
+		return 0, payload, nil
 	}
 	g, err := generation.Read(dir, *p.Live)
 	if err != nil {
 		return 0, payload, err
 	}
+	liveID := g.ID
+	payload.ExpectedLive = &liveID
 	if g.SavedVersion == "" {
 		return g.ID, payload, nil
 	}
@@ -169,8 +179,6 @@ func (c *certSync) payload(ctx context.Context) (int, generation.CertSync, error
 			realized[strings.TrimSuffix(rest, ".container")] = true
 		}
 	}
-	liveID := g.ID
-	payload.ExpectedLive = &liveID
 	for _, consumer := range consumers {
 		m, ok := material[consumer.CertificateID]
 		if !ok {

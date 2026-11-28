@@ -217,10 +217,16 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 			}
 			for _, a := range addons {
 				settings, _ := a["settings"].(map[string]any)
+				stripped := false
 				for k, v := range settings {
 					if id, ok := v.(string); ok && certificateIDPattern.MatchString(id) {
 						delete(settings, k)
+						stripped = true
 					}
+				}
+				if stripped {
+					// Keep the sanitized recovery copy restorable when a manifest marks the stripped certificate-reference required.
+					a["enabled"] = false
 				}
 			}
 			if d["addons"], err = json.Marshal(addons); err != nil {

@@ -404,6 +404,9 @@ func Import(certPEM, chainPEM, keyPEM []byte) (Imported, error) {
 	if currentTime.After(leaf.NotAfter) {
 		return Imported{}, errors.New("the certificate has expired")
 	}
+	if currentTime.Add(5 * time.Minute).Before(leaf.NotBefore) {
+		return Imported{}, errors.New("the certificate is not yet valid")
+	}
 	if leaf.SerialNumber == nil || leaf.SerialNumber.Sign() <= 0 || len(fmt.Sprintf("%x", leaf.SerialNumber)) > 64 {
 		return Imported{}, errors.New("the certificate has an invalid serial number")
 	}
@@ -413,6 +416,9 @@ func Import(certPEM, chainPEM, keyPEM []byte) (Imported, error) {
 		}
 		if currentTime.After(certs[i].NotAfter) {
 			return Imported{}, fmt.Errorf("chain certificate %d has expired", i)
+		}
+		if currentTime.Add(5 * time.Minute).Before(certs[i].NotBefore) {
+			return Imported{}, fmt.Errorf("chain certificate %d is not yet valid", i)
 		}
 		if err := certs[i-1].CheckSignatureFrom(certs[i]); err != nil {
 			return Imported{}, fmt.Errorf("chain certificate %d did not sign the certificate before it", i)

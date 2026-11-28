@@ -198,7 +198,7 @@ func (r Realizer) Teardown(ctx context.Context) error {
 	}
 	// The managed web certificate's key goes with the settings that bound it; andaru-web is stopped by now and
 	// starts again on its bootstrap certificate.
-	for _, path := range []string{WebKey, WebCertificate} {
+	for _, path := range []string{WebKey, WebCertificate, webReloadPending} {
 		if err := os.Remove(r.Root + path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}

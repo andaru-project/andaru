@@ -21,6 +21,7 @@ import (
 
 const (
 	maxAddonBusTokensBytes = 1 << 20
+	maxCertSyncBytes       = generation.MaxCertSyncBytes
 	maxAddonLogBytes       = 256 << 10
 )
 
@@ -29,7 +30,7 @@ var addonLogCatalogDir = addon.DefaultCatalogDir
 // readStagedJSON strictly reads a root-owned 0600 JSON document the engine staged, without following symlinks, into v.
 // When removeAfterValidate is true, the file is unlinked only AFTER all path, ancestor, symlink, ownership, and 0600
 // regular-file checks succeed, so an unvalidated target is never removed.
-func readStagedJSON(path, what string, v any, removeAfterValidate bool) error {
+func readStagedJSON(path, what string, maxBytes int, v any, removeAfterValidate bool) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return errors.New(what + " path must be canonical and absolute")
 	}
@@ -48,7 +49,7 @@ func readStagedJSON(path, what string, v any, removeAfterValidate bool) error {
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !securefs.RootOwned(info) {
 		return errors.New(what + " must be a root-owned 0600 regular file")
 	}
-	raw, readErr := io.ReadAll(io.LimitReader(f, maxAddonBusTokensBytes+1))
+	raw, readErr := io.ReadAll(io.LimitReader(f, int64(maxBytes)+1))
 	if removeAfterValidate {
 		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) && readErr == nil {
 			readErr = fmt.Errorf("remove %s: %w", what, rmErr)
@@ -57,8 +58,8 @@ func readStagedJSON(path, what string, v any, removeAfterValidate bool) error {
 	if readErr != nil {
 		return fmt.Errorf("read %s: %w", what, readErr)
 	}
-	if len(raw) > maxAddonBusTokensBytes {
-		return errors.New(what + " exceeds maximum size")
+	if len(raw) > maxBytes {
+		return fmt.Errorf("%s exceeds maximum size (%d bytes)", what, maxBytes)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -78,7 +79,7 @@ func readCertSyncFile(path string) (generation.CertSync, error) {
 		return generation.CertSync{}, errors.New("cert-sync file name must match cert-sync-*.json")
 	}
 	var payload generation.CertSync
-	if err := readStagedJSON(path, "cert-sync file", &payload, true); err != nil {
+	if err := readStagedJSON(path, "cert-sync file", maxCertSyncBytes, &payload, true); err != nil {
 		return generation.CertSync{}, err
 	}
 	return payload, payload.Validate()
@@ -87,7 +88,7 @@ func readCertSyncFile(path string) (generation.CertSync, error) {
 // readAddonBusTokensFile strictly reads a root-owned 0600 JSON map of slug -> bus token without following symlinks.
 func readAddonBusTokensFile(path string) (map[string]string, error) {
 	var tokens map[string]string
-	if err := readStagedJSON(path, "bus tokens file", &tokens, false); err != nil {
+	if err := readStagedJSON(path, "bus tokens file", maxAddonBusTokensBytes, &tokens, false); err != nil {
 		return nil, err
 	}
 	if tokens == nil {

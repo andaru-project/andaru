@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"maps"
 	"regexp"
@@ -120,10 +121,11 @@ func validatePKI(d *declaration) []FieldError {
 		}
 	}
 	cas := map[string]bool{}
+	caCerts := map[string]*x509.Certificate{}
 	for i, ca := range d.PKI.CAs {
 		p := fmt.Sprintf("/pki/cas/%d", i)
 		unique(p, ca.ID, ca.Name, cas)
-		info, _, err := pki.Inspect([]byte(ca.CertPEM))
+		info, cert, err := pki.Inspect([]byte(ca.CertPEM))
 		switch {
 		case err != nil:
 			bad(p+"/certPem", "Expected one PEM certificate: "+err.Error()+".")
@@ -131,6 +133,7 @@ func validatePKI(d *declaration) []FieldError {
 			bad(p+"/certPem", "The certificate is not a CA certificate.")
 		default:
 			matches(p, info, ca.pkiCertInfo)
+			caCerts[ca.ID] = cert
 		}
 	}
 	for i, ca := range d.PKI.CAs {
@@ -145,10 +148,20 @@ func validatePKI(d *declaration) []FieldError {
 		if c.CAID != "" && !cas[c.CAID] {
 			bad(p+"/caId", "Expected a certificate authority of this configuration.")
 		}
-		info, _, err := pki.Inspect([]byte(c.CertPEM))
+		info, cert, err := pki.Inspect([]byte(c.CertPEM))
 		if err != nil {
 			bad(p+"/certPem", "Expected one PEM certificate: "+err.Error()+".")
 			continue
+		}
+		if info.IsCA {
+			bad(p+"/certPem", "Expected a leaf certificate, not a CA certificate.")
+		}
+		if c.CAID != "" {
+			if issuerCert := caCerts[c.CAID]; issuerCert != nil {
+				if err := cert.CheckSignatureFrom(issuerCert); err != nil {
+					bad(p+"/caId", "The certificate was not signed by the named certificate authority.")
+				}
+			}
 		}
 		matches(p, info, c.pkiCertInfo)
 		if !slices.Equal(info.SANs, c.SANs) {

@@ -48,7 +48,18 @@ type certificate struct {
 // load leaves the one being served in place. If an override file vanishes between the existence check and load
 // (concurrent cert-sync removal), load falls back to the bootstrap pair.
 func (c *certificate) load() error {
-	usingOverride := c.config.TLSCertificateOverride != "" && exists(c.config.TLSCertificateOverride) && exists(c.config.TLSKeyOverride)
+	usingOverride := false
+	if c.config.TLSCertificateOverride != "" {
+		certOK, err := fileExists(c.config.TLSCertificateOverride)
+		if err != nil {
+			return fmt.Errorf("stat TLS override %s: %w", c.config.TLSCertificateOverride, err)
+		}
+		keyOK, err := fileExists(c.config.TLSKeyOverride)
+		if err != nil {
+			return fmt.Errorf("stat TLS override %s: %w", c.config.TLSKeyOverride, err)
+		}
+		usingOverride = certOK && keyOK
+	}
 	certPath, keyPath := c.config.TLSCertificate, c.config.TLSKey
 	if usingOverride {
 		certPath, keyPath = c.config.TLSCertificateOverride, c.config.TLSKeyOverride
@@ -69,9 +80,15 @@ func (c *certificate) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return c.current.Load(), nil
 }
 
-func exists(path string) bool {
+func fileExists(path string) (bool, error) {
 	_, err := os.Stat(path)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 func Serve(ctx context.Context, config Config) error {

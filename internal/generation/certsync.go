@@ -19,9 +19,12 @@ import (
 
 const (
 	// WebCertificate and WebKey are the managed certificate andaru-web serves instead of its bootstrap one.
-	WebCertificate = "/run/andaru-web/tls.crt"
-	WebKey         = "/run/andaru-web/tls.key"
-	webUnit        = "andaru-web.service"
+	WebCertificate     = "/run/andaru-web/tls.crt"
+	WebKey             = "/run/andaru-web/tls.key"
+	webReloadPending   = "/run/andaru-web/.reload-pending"
+	webUnit            = "andaru-web.service"
+	// MaxCertSyncBytes is the shared size bound for staged cert-sync payloads (covers up to 64 add-ons with max PEM chains).
+	MaxCertSyncBytes = 16 << 20
 )
 
 var certFileName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}\.(crt|key|pem)$`)
@@ -96,7 +99,11 @@ func (r Realizer) SyncCertificates(ctx context.Context, s CertSync) error {
 				if err != nil {
 					return err
 				}
-				if p.Live == nil || *p.Live != *s.ExpectedLive {
+				if *s.ExpectedLive == 0 {
+					if p.Live != nil {
+						return nil
+					}
+				} else if p.Live == nil || *p.Live != *s.ExpectedLive {
 					return nil
 				}
 			}
@@ -142,13 +149,21 @@ func (r Realizer) syncWebCertificate(ctx context.Context, pair *CertPair, keepWe
 			changed = changed || wrote
 		}
 	}
-	if !changed {
+	pendingMarker := r.Root + webReloadPending
+	_, markerErr := os.Lstat(pendingMarker)
+	reloadPending := markerErr == nil
+	if !changed && !reloadPending {
 		return nil
+	}
+	if changed {
+		// Record a reload marker so if systemctl fails, a subsequent retry still reloads andaru-web even though the files match.
+		_ = os.WriteFile(pendingMarker, []byte("1\n"), 0o600)
 	}
 	// Only a running andaru-web is told; one that starts later reads the files itself.
 	if _, err := r.Run(ctx, "/usr/bin/systemctl", "try-reload-or-restart", webUnit); err != nil {
 		return fmt.Errorf("reload %s: %w", webUnit, err)
 	}
+	_ = os.Remove(pendingMarker)
 	return nil
 }
 

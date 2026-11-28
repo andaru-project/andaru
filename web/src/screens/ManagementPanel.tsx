@@ -58,7 +58,7 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
   const [segmentId, setSegmentId] = useState(initial?.value.segment ?? '');
   const [allowedSources, setAllowedSources] = useState<string[]>(() => Array.from(new Set(initial?.value.allowedSources ?? [])));
   const [certificateId, setCertificateId] = useState(initial?.value.certificate ?? '');
-  const [openedAt] = useState(() => Date.now());
+  const [checkedAt, setCheckedAt] = useState(() => Date.now());
   const [errors, setErrors] = useState(new Map<string, string>());
   const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
@@ -97,7 +97,7 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
     certificateOptions.push({ value: certificateId, label: `${certificateId} (missing)` });
   }
   const selectedCert = (snapshot.value.pki?.certificates ?? []).find((c) => c.id === certificateId);
-  const selectedCertExpired = Boolean(selectedCert && Number.isFinite(Date.parse(selectedCert.notAfter)) && Date.parse(selectedCert.notAfter) <= openedAt);
+  const selectedCertExpired = Boolean(selectedCert && Number.isFinite(Date.parse(selectedCert.notAfter)) && Date.parse(selectedCert.notAfter) <= checkedAt);
   const selectedCertUnresolved = Boolean(selectedCert?.keyRef?.unresolved);
 
   const selectedSegment = snapshot.value.segments.find((s) => s.id === segmentId);
@@ -248,7 +248,10 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
                 data={certificateOptions}
                 value={certificateId || null}
                 error={errors.get('certificate')}
-                onChange={(value) => setCertificateId(value ?? '')}
+                onChange={(value) => {
+                  setCertificateId(value ?? '');
+                  setCheckedAt(Date.now());
+                }}
               />
               {selectedCertUnresolved && (
                 <Alert color="orange" role="status" title="Certificate private key is unresolved">
