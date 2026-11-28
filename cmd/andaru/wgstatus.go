@@ -53,8 +53,10 @@ func writeWireGuardStatus(ctx context.Context, stateDir, outPath string, run fun
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := securefs.CheckAncestors(stateDir); err != nil {
-		return err
+	if os.Geteuid() == 0 {
+		if err := securefs.CheckAncestors(stateDir); err != nil {
+			return err
+		}
 	}
 	status, err := generation.ReadWireGuardStatus(ctx, run, now)
 	if err != nil {
