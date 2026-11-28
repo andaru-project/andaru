@@ -14,6 +14,7 @@ import { AddonsScreen } from './screens/AddonsScreen';
 import { AliasesScreen } from './screens/AliasesScreen';
 import { AuditScreen } from './screens/AuditScreen';
 import { BackupScreen } from './screens/BackupScreen';
+import { CertificatesScreen } from './screens/CertificatesScreen';
 import { ChangesScreen } from './screens/ChangesScreen';
 import { DashboardScreen } from './screens/DashboardScreen';
 import { DhcpScreen } from './screens/DhcpScreen';
@@ -69,6 +70,7 @@ const pageTitles: Record<string, string> = {
   '/firewall/zones': 'Zones',
   '/changes': 'Review and apply',
   '/system/details': 'System details',
+  '/system/certificates': 'Certificates',
   '/system/addons': 'Add-ons',
   '/system/updates': 'Software updates',
   '/system/backups': 'Backup & restore',
@@ -238,6 +240,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
       label: 'System',
       items: [
         { to: '/system/details', label: 'Details', visible: canReadStatus },
+        { to: '/system/certificates', label: 'Certificates', visible: canReadChanges },
         { to: '/system/addons', label: 'Add-ons', visible: capabilities.has('addons.read') },
         { to: '/system/updates', label: 'Updates', visible: canReadStatus },
         { to: '/system/backups', label: 'Backups', visible: capabilities.has('backups.create') || capabilities.has('backups.restore') },
@@ -285,6 +288,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     ['/diagnostics/traffic-flow', <TrafficFlowScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} api={api} canRename={capabilities.has('configuration.apply')} onSessionLost={onSessionLost} />],
+    ['/system/certificates', <CertificatesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/addons', <AddonsScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],
     ['/system/backups', <BackupScreen api={api} session={session} hostname={hostname} onRestored={() => { void reloadChanges(); void reloadNotifications(); void system.reload(); }} onSessionLost={onSessionLost} />],

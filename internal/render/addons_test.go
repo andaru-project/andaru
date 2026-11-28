@@ -465,3 +465,81 @@ func TestRenderAddonHardeningNewlineLiteralEnvEntrypointAndHealthCmd(t *testing.
 		}
 	}
 }
+
+func TestRenderAddonCertificateReference(t *testing.T) {
+	manifest := strings.Replace(renderTestTailscaleManifest, `"properties": [`, `"properties": [
+    {
+      "name": "tls",
+      "type": "certificate-reference",
+      "title": "TLS certificate",
+      "binding": { "type": "certificate", "name": "web", "format": "split", "keyEnv": "TLS_KEY" }
+    },
+    {
+      "name": "bundle",
+      "type": "certificate-reference",
+      "title": "Bundle",
+      "binding": { "type": "certificate", "name": "edge", "format": "bundle" }
+    },`, 1)
+	cat := testAddonCatalog(t, manifest)
+	facts := allFacts
+	facts.PodmanTool = true
+	facts.StagedImages = []string{renderTestTailscaleDigest}
+	const crt = "crt_6c1f5d0e-2b3a-4c5d-8e9f-0a1b2c3d4e5f"
+	decl := json.RawMessage(`{
+		"links": [{"id":"lnk_lan","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"02:00:00:00:00:01"}],
+		"segments": [{"id":"seg_lan","link":"lnk_lan","zone":"zon_lan","addressing":{"ipv4":{"mode":"static","addresses":["10.0.0.1/24"]},"ipv6":{"mode":"none"}}}],
+		"zones": [{"id":"zon_lan"},{"id":"zon_vpn"}],
+		"management": {"segment":"seg_lan"},
+		"pki": {"certificates": [{"id":"` + crt + `","certPem":"CERT\n","chainPem":"CHAIN\n"}]},
+		"addons": [{"id": "org.andaru.tailscale", "enabled": true,
+			"settings": {"authKey": {"secret":"auth_key"}, "tls": "` + crt + `", "bundle": "` + crt + `"},
+			"interfaces": [{"name":"tailscale0","zone":"zon_vpn"}]}]
+	}`)
+	in := Input{
+		Declaration:     decl,
+		AddonSecrets:    map[string]map[string]string{"org.andaru.tailscale": {"auth_key": "tskey"}},
+		CertificateKeys: map[string]string{crt: "KEY_SECRET_MATERIAL\n"},
+		Catalog:         cat,
+		Links:           []host.LinkStatus{{IfIndex: 2, Name: "enp1s0", LinkType: "ether", LinkAddress: "02:00:00:00:00:01", PermanentAddress: "02:00:00:00:00:01"}},
+		Facts:           facts,
+	}
+	res, err := Network(in)
+	if err != nil || !res.Realizable {
+		t.Fatalf("Network: %v %+v", err, res.Findings)
+	}
+	byPath := map[string]File{}
+	for _, f := range res.Files {
+		byPath[f.Path] = f
+	}
+	for path, real := range map[string]string{
+		"/run/andaru-addons/tailscale/certs/web.crt":  "CERT\nCHAIN\n",
+		"/run/andaru-addons/tailscale/certs/web.key":  "KEY_SECRET_MATERIAL\n",
+		"/run/andaru-addons/tailscale/certs/edge.pem": "CERT\nCHAIN\nKEY_SECRET_MATERIAL\n",
+	} {
+		f, ok := byPath[path]
+		if !ok || f.Mode != "0400" || !f.Secret || f.Real() != real || strings.Contains(f.Content, "KEY_SECRET") {
+			t.Fatalf("%s = %+v (real %q)", path, f, f.Real())
+		}
+	}
+	ctr := byPath["/run/containers/systemd/andaru-addon-tailscale.container"].Content
+	if !strings.Contains(ctr, "Volume=/run/andaru-addons/tailscale/certs:/run/andaru/certs:ro,Z,U") {
+		t.Fatalf("no certs volume:\n%s", ctr)
+	}
+	env := byPath["/run/andaru-addons/tailscale/andaru-addon-tailscale.env"].Content
+	for _, want := range []string{"ANDARU_CERT_WEB_CERT=/run/andaru/certs/web.crt\n", "ANDARU_CERT_WEB_KEY=/run/andaru/certs/web.key\n", "TLS_KEY=/run/andaru/certs/web.key\n", "ANDARU_CERT_EDGE_BUNDLE=/run/andaru/certs/edge.pem\n"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("env missing %q:\n%s", want, env)
+		}
+	}
+
+	// Without the key, or naming a certificate that does not exist, the add-on does not render.
+	in.CertificateKeys = nil
+	if res, _ := Network(in); res.Realizable || !slices.ContainsFunc(res.Findings, func(f Finding) bool { return f.Code == "CERTIFICATE_UNRESOLVED" }) {
+		t.Fatalf("unresolved key rendered: %+v", res.Findings)
+	}
+	in.CertificateKeys = map[string]string{crt: "k"}
+	in.Declaration = json.RawMessage(strings.Replace(string(decl), `"pki": {"certificates": [{"id":"`+crt+`","certPem":"CERT\n","chainPem":"CHAIN\n"}]},`, "", 1))
+	if res, _ := Network(in); res.Realizable {
+		t.Fatal("dangling certificate rendered")
+	}
+}

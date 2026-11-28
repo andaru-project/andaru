@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	LayoutVersion        = 2
+	LayoutVersion        = 3
 	generalBudget        = 80_000
 	protectedBudget      = 20_000
 	maxEvents            = generalBudget + protectedBudget
@@ -89,6 +89,16 @@ const (
 	ActionAddonStarted           Action = "addon.started"
 	ActionAddonStopped           Action = "addon.stopped"
 	ActionAddonRestarted         Action = "addon.restarted"
+	ActionCertificateCreated     Action = "certificate.created"
+	ActionCertificateImported    Action = "certificate.imported"
+	ActionCertificateDeleted     Action = "certificate.deleted"
+	ActionCertificateRenewed     Action = "certificate.renewed"
+	ActionACMEOrderTriggered     Action = "acme.order.triggered"
+	ActionWireGuardPSKExported   Action = "vpn.wireguard.psk_exported"
+	ActionIPsecInitiated         Action = "vpn.ipsec.initiated"
+	ActionIPsecTerminated        Action = "vpn.ipsec.terminated"
+	ActionOpenVPNDisconnected    Action = "vpn.openvpn.client_disconnected"
+	ActionOpenVPNProfileExported Action = "vpn.openvpn.profile_exported"
 )
 
 const (
@@ -260,7 +270,23 @@ var actionRules = map[Action]actionRule{
 	ActionAddonStarted:           {category: CategoryGeneral},
 	ActionAddonStopped:           {category: CategoryGeneral},
 	ActionAddonRestarted:         {category: CategoryGeneral},
+	ActionCertificateCreated:     {category: CategoryGeneral},
+	ActionCertificateImported:    {category: CategoryGeneral},
+	ActionCertificateDeleted:     {category: CategoryProtected},
+	ActionCertificateRenewed:     {category: CategoryGeneral},
+	ActionACMEOrderTriggered:     {category: CategoryGeneral},
+	ActionWireGuardPSKExported:   {category: CategoryProtected},
+	ActionIPsecInitiated:         {category: CategoryGeneral},
+	ActionIPsecTerminated:        {category: CategoryGeneral},
+	ActionOpenVPNDisconnected:    {category: CategoryGeneral},
+	ActionOpenVPNProfileExported: {category: CategoryProtected},
 }
+
+// CategoryOf is the category an action is recorded in.
+func CategoryOf(action Action) Category { return actionRules[action].category }
+
+// ValidTarget reports whether target is one action may name.
+func ValidTarget(action Action, target string) bool { return validTarget(action, target) }
 
 func validateIntent(intent Intent) error {
 	if !validOperationID(intent.OperationID) || !validRequestHash(intent.RequestHash) {
@@ -320,9 +346,29 @@ func validTarget(action Action, target string) bool {
 		return len(target) == 32 && strings.ToLower(target) == target && isHex(target)
 	case ActionAddonStaged, ActionAddonUnstaged, ActionAddonStarted, ActionAddonStopped, ActionAddonRestarted:
 		return addon.ValidSlug(target)
+	case ActionCertificateCreated, ActionCertificateImported, ActionCertificateDeleted, ActionCertificateRenewed:
+		return objectTarget(target, "ca_", "crt_", "tck_")
+	case ActionACMEOrderTriggered:
+		return objectTarget(target, "aco_")
+	case ActionWireGuardPSKExported:
+		return objectTarget(target, "wg_")
+	case ActionIPsecInitiated, ActionIPsecTerminated:
+		return objectTarget(target, "ips_")
+	case ActionOpenVPNDisconnected, ActionOpenVPNProfileExported:
+		return objectTarget(target, "ovp_")
 	default:
 		return false
 	}
+}
+
+// objectTarget reports whether target is a saved object ID with one of prefixes: the prefix and a version-4 UUID.
+func objectTarget(target string, prefixes ...string) bool {
+	for _, p := range prefixes {
+		if id, ok := strings.CutPrefix(target, p); ok {
+			return accountIDPattern.MatchString(id)
+		}
+	}
+	return false
 }
 
 func validActor(actor authz.Actor) bool {

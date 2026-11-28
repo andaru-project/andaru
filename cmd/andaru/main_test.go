@@ -263,6 +263,11 @@ func (f *fakeVerbs) SyncAddonBusTokens(_ context.Context, tokens map[string]stri
 	return f.err
 }
 
+func (f *fakeVerbs) SyncCertificates(_ context.Context, s generation.CertSync) error {
+	f.calls = append(f.calls, fmt.Sprintf("cert-sync %d", len(s.Addons)))
+	return f.err
+}
+
 func (f *fakeVerbs) Fence(_ context.Context, denyAll bool) error {
 	f.calls = append(f.calls, fmt.Sprint("fence ", denyAll))
 	return f.err

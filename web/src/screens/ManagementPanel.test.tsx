@@ -340,4 +340,63 @@ describe('ManagementPanel', () => {
     expect(aliasCreateCalls).toBe(0);
     expect(savedBody).toEqual({ segment: 'seg_lan', allowedSources: ['10.0.0.1', '10.0.0.0/24'] });
   });
+
+  it('displays and saves a managed HTTPS certificate in management config', async () => {
+    const user = userEvent.setup();
+    let savedBody: unknown;
+    const snapWithCert: Snapshot = {
+      ...baseSnapshot,
+      value: {
+        ...baseSnapshot.value,
+        pki: {
+          certificates: [
+            {
+              id: 'crt_web',
+              name: 'Gateway HTTPS',
+              subject: 'CN=fw.example.lan',
+              serial: '01',
+              fingerprintSha256: 'abcd',
+              notBefore: '2026-01-01T00:00:00Z',
+              notAfter: '2027-01-01T00:00:00Z',
+              certPem: '-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----',
+              keyRef: { secret: 'crt_web', isSet: true, version: '1' },
+              keyAlgorithm: 'ecdsa-p256',
+            },
+          ],
+        },
+        management: { segment: 'seg_lan' },
+      },
+    };
+
+    fetchRoutes({
+      '/api/v1/config/management': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '10',
+        version: '3',
+        value: { segment: 'seg_lan' },
+      }),
+      '/api/v1/config': () => jsonResponse(200, snapWithCert),
+      'PUT /api/v1/config/management': (init) => {
+        savedBody = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(200, { state: 'saved', savedVersion: '11', version: '4', value: savedBody });
+      },
+    });
+
+    const onSaved = vi.fn();
+    render(
+      <MemoryRouter>
+        <ManagementPanel api={new ApiClient('csrf')} snapshot={snapWithCert} canWrite onSaved={onSaved} onSessionLost={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Built-in bootstrap certificate')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Edit management access' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit management access' });
+    await user.click(within(dialog).getByLabelText(/^HTTPS certificate/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: /Gateway HTTPS/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save management access' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(savedBody).toEqual({ segment: 'seg_lan', certificate: 'crt_web' });
+  });
 });

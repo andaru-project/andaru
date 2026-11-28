@@ -152,7 +152,7 @@ func decodeBackupDocuments(input RestoreDocuments) (decodedBackup, error) {
 		}
 		for _, entries := range secrets.Scopes {
 			for _, entry := range entries {
-				if len(entry.Value) > 4096 || strings.ContainsRune(entry.Value, 0) {
+				if len(entry.Value) > maxSecretBytes || strings.ContainsRune(entry.Value, 0) {
 					return decoded, fault("VALIDATION_FAILED", "/configurationSecrets", "Invalid configuration-secret value.")
 				}
 			}

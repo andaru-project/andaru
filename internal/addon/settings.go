@@ -13,8 +13,8 @@ import (
 
 // ValidateSettings validates raw add-on settings against m.Properties, rejects unknown keys and explicit null
 // values, materializes declared defaults onto the returned map, preserves explicit false/0/"", and checks
-// zone references against validZones (when non-nil).
-func ValidateSettings(m *Manifest, raw map[string]any, validZones map[string]bool) (map[string]any, []FieldError) {
+// zone references against validZones and certificate references against validCerts (each when non-nil).
+func ValidateSettings(m *Manifest, raw map[string]any, validZones, validCerts map[string]bool) (map[string]any, []FieldError) {
 	var errs []FieldError
 	propsByName := make(map[string]*Property, len(m.Properties))
 	for i := range m.Properties {
@@ -54,7 +54,7 @@ func ValidateSettings(m *Manifest, raw map[string]any, validZones map[string]boo
 			}
 			continue
 		}
-		if verrs := validateValue(prop, val, p, validZones); len(verrs) > 0 {
+		if verrs := validateValue(prop, val, p, validZones, validCerts); len(verrs) > 0 {
 			errs = append(errs, verrs...)
 			continue
 		}
@@ -82,7 +82,7 @@ func cloneDefault(v any) any {
 	}
 }
 
-func validateValue(prop *Property, val any, p string, validZones map[string]bool) []FieldError {
+func validateValue(prop *Property, val any, p string, validZones, validCerts map[string]bool) []FieldError {
 	if val == nil {
 		return []FieldError{{Path: p, Message: "null values are not allowed"}}
 	}
@@ -216,9 +216,19 @@ func validateValue(prop *Property, val any, p string, validZones map[string]bool
 		if validZones != nil && !validZones[id] {
 			return []FieldError{{Path: p, Message: fmt.Sprintf("unknown zone %q", id)}}
 		}
+	case "certificate-reference":
+		id, ok := val.(string)
+		if !ok || !certificateIDPattern.MatchString(id) {
+			return []FieldError{{Path: p, Message: "expected certificate id string crt_<uuid>"}}
+		}
+		if validCerts != nil && !validCerts[id] {
+			return []FieldError{{Path: p, Message: fmt.Sprintf("unknown certificate %q", id)}}
+		}
 	}
 	return nil
 }
+
+var certificateIDPattern = regexp.MustCompile(`^crt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // ToStringSlice converts []string or []any of strings into a []string.
 func ToStringSlice(v any) ([]string, bool) { return toStringSlice(v) }

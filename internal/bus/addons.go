@@ -29,9 +29,11 @@ var (
 	forbiddenAddonPublishRoots = []string{
 		"notification", "delivery", "alias-fetch", "alias-result",
 		"config", "apply", "notifications",
+		"certificate", "acme-order", "acme-result",
 	}
 	forbiddenAddonSubscribeRoots = []string{
 		"notification", "delivery", "alias-fetch",
+		"acme-order", "acme-result",
 	}
 )
 

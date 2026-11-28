@@ -51,7 +51,7 @@ func (r Realizer) filter(g Generation) (path, comment string, ok bool, err error
 		if m == nil {
 			return "", "", true, fmt.Errorf("generation %d: its filter has no table comment", g.ID)
 		}
-		return filepath.Join(r.dir(), strconv.Itoa(g.ID), "files", filepath.Base(f.Path)), string(m[1]), true, nil
+		return g.stored(r.dir(), f), string(m[1]), true, nil
 	}
 	return "", "", false, nil
 }

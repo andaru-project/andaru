@@ -239,7 +239,7 @@ func TestRollbackOnResetHostWithNothingUsableRestoresTheBareSet(t *testing.T) {
 	if err := b.r.Activate(t.Context(), second); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(b.dir, itoa(first), "files", "50-andaru-eth1.network"), "evil")
+	writeFile(t, filepath.Join(b.dir, itoa(first), "files", storedName(netDir+"50-andaru-eth1.network")), "evil")
 	if err := b.timerFires(second); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/andaru-project/andaru/internal/engine"
+	"github.com/andaru-project/andaru/internal/pki"
 )
 
 func TestProxyOverwritesSourceAndIdentityMetadata(t *testing.T) {
@@ -258,7 +260,7 @@ func eventStreamEndsWhenStalledOrShutDown(t *testing.T, h2 bool) {
 func TestServerOffersHTTP2(t *testing.T) {
 	certified := httptest.NewTLSServer(http.NotFoundHandler())
 	certified.Close()
-	server := newServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, r.Proto) }), certified.TLS.Certificates[0])
+	server := newServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, r.Proto) }), func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &certified.TLS.Certificates[0], nil })
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -276,5 +278,81 @@ func TestServerOffersHTTP2(t *testing.T) {
 		if want := map[bool]string{true: "HTTP/2.0", false: "HTTP/1.1"}[h2]; string(body) != want {
 			t.Errorf("served %s, want %s", body, want)
 		}
+	}
+}
+
+func writePair(t *testing.T, dir, name, cn string) (certPath, keyPath string) {
+	t.Helper()
+	ca, err := pki.NewCA(pki.CARequest{CommonName: cn, KeyAlgorithm: "ecdsa-p256", ValidDays: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPath, keyPath = filepath.Join(dir, name+".crt"), filepath.Join(dir, name+".key")
+	if os.WriteFile(certPath, ca.CertPEM, 0o600) != nil || os.WriteFile(keyPath, ca.KeyPEM, 0o600) != nil {
+		t.Fatal("write pair")
+	}
+	return certPath, keyPath
+}
+
+// The override pair is served once it exists, a reload that fails keeps the pair being served, and a reload never
+// drops a connection already open.
+func TestCertificateReloadKeepsConnections(t *testing.T) {
+	dir := t.TempDir()
+	bootCert, bootKey := writePair(t, dir, "boot", "bootstrap")
+	served := &certificate{config: Config{TLSCertificate: bootCert, TLSKey: bootKey,
+		TLSCertificateOverride: filepath.Join(dir, "tls.crt"), TLSKeyOverride: filepath.Join(dir, "tls.key")}}
+	if err := served.load(); err != nil {
+		t.Fatal(err)
+	}
+	subject := func() string {
+		c, _ := served.get(nil)
+		leaf, _ := x509.ParseCertificate(c.Certificate[0])
+		return leaf.Subject.CommonName
+	}
+	if subject() != "bootstrap" {
+		t.Fatalf("without an override serves %q", subject())
+	}
+	server := newServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok") }), served.get)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.Serve(tls.NewListener(listener, server.TLSConfig)) }()
+	defer server.Close()
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	peer := func() string {
+		response, err := client.Get("https://" + listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		_, _ = io.ReadAll(response.Body)
+		return response.TLS.PeerCertificates[0].Subject.CommonName
+	}
+	if peer() != "bootstrap" {
+		t.Fatal("first connection not on the bootstrap certificate")
+	}
+	writePair(t, dir, "tls", "managed")
+	if err := served.load(); err != nil || subject() != "managed" {
+		t.Fatalf("override not loaded: %v %q", err, subject())
+	}
+	// The kept-alive connection still answers, with the certificate it was opened with.
+	if got := peer(); got != "bootstrap" {
+		t.Fatalf("open connection now presents %q", got)
+	}
+	client.CloseIdleConnections()
+	if got := peer(); got != "managed" {
+		t.Fatalf("new connection presents %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tls.key"), []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := served.load(); err == nil || subject() != "managed" {
+		t.Fatalf("broken override replaced the served pair: %v %q", err, subject())
+	}
+	_ = os.Remove(filepath.Join(dir, "tls.crt"))
+	_ = os.Remove(filepath.Join(dir, "tls.key"))
+	if err := served.load(); err != nil || subject() != "bootstrap" {
+		t.Fatalf("removed override: %v %q", err, subject())
 	}
 }

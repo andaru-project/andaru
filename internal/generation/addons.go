@@ -68,6 +68,9 @@ func addonSlugFromPath(path string) (string, bool) {
 	if m := addonSecret.FindStringSubmatch(path); len(m) == 3 && m[1] == m[2] {
 		return m[1], true
 	}
+	if m := addonCert.FindStringSubmatch(path); len(m) == 3 {
+		return m[1], true
+	}
 	return "", false
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,45 +21,75 @@ import (
 
 const (
 	maxAddonBusTokensBytes = 1 << 20
+	maxCertSyncBytes       = generation.MaxCertSyncBytes
 	maxAddonLogBytes       = 256 << 10
 )
 
 var addonLogCatalogDir = addon.DefaultCatalogDir
 
-// readAddonBusTokensFile strictly reads a root-owned 0600 JSON map of slug -> bus token without following symlinks.
-func readAddonBusTokensFile(path string) (map[string]string, error) {
+// readStagedJSON strictly reads a root-owned 0600 JSON document the engine staged, without following symlinks, into v.
+// When removeAfterValidate is true, the file is unlinked only AFTER all path, ancestor, symlink, ownership, and 0600
+// regular-file checks succeed, so an unvalidated target is never removed.
+func readStagedJSON(path, what string, maxBytes int, v any, removeAfterValidate bool) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, errors.New("bus tokens file path must be canonical and absolute")
+		return errors.New(what + " path must be canonical and absolute")
 	}
 	if err := securefs.CheckAncestors(filepath.Dir(path)); err != nil {
-		return nil, err
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open bus tokens file: %w", err)
+		return fmt.Errorf("open %s: %w", what, err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("stat bus tokens file: %w", err)
+		return fmt.Errorf("stat %s: %w", what, err)
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !securefs.RootOwned(info) {
-		return nil, errors.New("bus tokens file must be a root-owned 0600 regular file")
+		return errors.New(what + " must be a root-owned 0600 regular file")
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxAddonBusTokensBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read bus tokens file: %w", err)
+	raw, readErr := io.ReadAll(io.LimitReader(f, int64(maxBytes)+1))
+	if removeAfterValidate {
+		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) && readErr == nil {
+			readErr = fmt.Errorf("remove %s: %w", what, rmErr)
+		}
 	}
-	if len(raw) > maxAddonBusTokensBytes {
-		return nil, errors.New("bus tokens file exceeds maximum size")
+	if readErr != nil {
+		return fmt.Errorf("read %s: %w", what, readErr)
 	}
-	var tokens map[string]string
+	if len(raw) > maxBytes {
+		return fmt.Errorf("%s exceeds maximum size (%d bytes)", what, maxBytes)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	if err := dec.Decode(&tokens); err != nil {
-		return nil, fmt.Errorf("decode bus tokens file: %w", err)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("decode %s: %w", what, err)
 	}
 	if dec.Decode(&struct{}{}) != io.EOF {
-		return nil, errors.New("unexpected trailing data in bus tokens file")
+		return errors.New("unexpected trailing data in " + what)
+	}
+	return nil
+}
+
+// readCertSyncFile reads the engine's staged cert-sync payload and removes it once validated: it holds private keys.
+func readCertSyncFile(path string) (generation.CertSync, error) {
+	base := filepath.Base(path)
+	if !strings.HasPrefix(base, "cert-sync-") || !strings.HasSuffix(base, ".json") {
+		return generation.CertSync{}, errors.New("cert-sync file name must match cert-sync-*.json")
+	}
+	var payload generation.CertSync
+	if err := readStagedJSON(path, "cert-sync file", maxCertSyncBytes, &payload, true); err != nil {
+		return generation.CertSync{}, err
+	}
+	return payload, payload.Validate()
+}
+
+// readAddonBusTokensFile strictly reads a root-owned 0600 JSON map of slug -> bus token without following symlinks.
+func readAddonBusTokensFile(path string) (map[string]string, error) {
+	var tokens map[string]string
+	if err := readStagedJSON(path, "bus tokens file", maxAddonBusTokensBytes, &tokens, false); err != nil {
+		return nil, err
 	}
 	if tokens == nil {
 		return nil, errors.New("bus tokens file must be a JSON object")

@@ -521,8 +521,8 @@ func openDatabase(ctx context.Context, stateDir string) (*sql.DB, error) {
 		}
 	} else if appID != applicationID {
 		return fail(errors.New("audit database application or layout mismatch"))
-	} else if version == 1 {
-		if err = migrateAuditV1(ctx, db); err != nil {
+	} else if version == 1 || version == 2 {
+		if err = migrateAuditV2(ctx, db); err != nil {
 			return fail(err)
 		}
 	} else if version != LayoutVersion {
@@ -613,7 +613,7 @@ func probeDatabase(ctx context.Context, path string) error {
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if appID != applicationID || (version != LayoutVersion && version != 1) {
+	if appID != applicationID || (version != LayoutVersion && version != 1 && version != 2) {
 		return errors.New("audit database application or layout mismatch")
 	}
 	return nil

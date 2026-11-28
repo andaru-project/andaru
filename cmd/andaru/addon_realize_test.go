@@ -49,7 +49,7 @@ func TestReadAddonBusTokensFileValidation(t *testing.T) {
 	}
 
 	if os.Geteuid() != 0 {
-		return
+		t.Skip("requires root")
 	}
 	// Root-only valid & malformed JSON checks in a root-owned 0700 directory.
 	rootDir, err := os.MkdirTemp("/var/tmp", "andaru-tok-")
@@ -157,5 +157,49 @@ func TestWriteAddonLogOutput(t *testing.T) {
 	}
 	if err := writeAddonLogOutput(catDir, stateDir, "sample", "appfile", 2, outside); err == nil {
 		t.Fatal("expected rejection for output path outside stateDir")
+	}
+}
+
+// cert-sync reads its staged payload strictly and removes it, since it holds private keys.
+func TestReadCertSyncFile(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs a root-owned staging directory")
+	}
+	dir, err := os.MkdirTemp("/var/tmp", "andaru-certsync-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(dir, "cert-sync-1.json")
+	write := func(body string) {
+		if err := os.WriteFile(staged, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"web":{"cert":"C","key":"K"},"addons":{"proxy":{"web.pem":"P"}}}`)
+	got, err := readCertSyncFile(staged)
+	if err != nil || got.Web.Key != "K" || got.Addons["proxy"]["web.pem"] != "P" {
+		t.Fatalf("read = %+v, %v", got, err)
+	}
+	if _, err := os.Stat(staged); err == nil {
+		t.Fatal("staged payload kept")
+	}
+	for _, body := range []string{`{"web":null,"addons":{"proxy":{"../x.crt":"P"}}}`, `{"web":null,"extra":1}`} {
+		write(body)
+		if _, err := readCertSyncFile(staged); err == nil {
+			t.Fatalf("accepted %s", body)
+		}
+		if _, err := os.Stat(staged); err == nil {
+			t.Fatal("refused payload kept")
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	write(`{"web":null,"addons":{}}`)
+	verbs := &fakeVerbs{}
+	if code := realizeCommand(context.Background(), []string{"cert-sync", staged}, &stdout, &stderr, func(string, string) (realizeVerbs, error) { return verbs, nil }); code != 0 || len(verbs.calls) != 1 || verbs.calls[0] != "cert-sync 0" {
+		t.Fatalf("cert-sync = %d %q %s", code, verbs.calls, stderr.String())
 	}
 }

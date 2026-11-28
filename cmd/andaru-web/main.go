@@ -15,6 +15,7 @@ import (
 )
 
 const usage = `usage: andaru-web --listen ADDR --tls-cert FILE --tls-key FILE
+                  [--tls-cert-override FILE --tls-key-override FILE]
                   --origin HTTPS_ORIGIN [--origin HTTPS_ORIGIN ...]
                   --backend-socket PATH --assets-dir DIR
 `
@@ -22,13 +23,17 @@ const usage = `usage: andaru-web --listen ADDR --tls-cert FILE --tls-key FILE
 // help keeps each line within 80 columns; main_test.go checks it.
 const help = `Serve the Andaru web interface over HTTPS: the static assets, and /api/
 requests passed to the engine's dedicated web socket. Every option is
-required.
+required but the overrides. SIGHUP reloads the TLS certificate; open
+connections keep theirs.
 
 ` + usage + `
 Options:
   --listen ADDR            explicit non-wildcard IP address and port
   --tls-cert FILE          absolute TLS certificate path
   --tls-key FILE           absolute TLS private key path
+  --tls-cert-override FILE absolute managed certificate path, served instead
+                           of --tls-cert while it and its key exist
+  --tls-key-override FILE  absolute managed private key path
   --origin HTTPS_ORIGIN    exact HTTPS management origin; repeat for each
                            origin
   --backend-socket PATH    absolute dedicated engine web socket path
@@ -62,6 +67,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	listen := flags.String("listen", "", "")
 	certificate := flags.String("tls-cert", "", "")
 	key := flags.String("tls-key", "", "")
+	certificateOverride := flags.String("tls-cert-override", "", "")
+	keyOverride := flags.String("tls-key-override", "", "")
 	backend := flags.String("backend-socket", "", "")
 	assets := flags.String("assets-dir", "", "")
 	flags.Var(&origins, "origin", "")
@@ -80,6 +87,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if err := andaruweb.Serve(ctx, andaruweb.Config{
 		ListenAddress: *listen, TLSCertificate: *certificate, TLSKey: *key, Origins: []string(origins),
+		TLSCertificateOverride: *certificateOverride, TLSKeyOverride: *keyOverride,
 		BackendSocket: *backend, AssetsDirectory: *assets,
 	}); err != nil {
 		fmt.Fprintln(stderr, err)

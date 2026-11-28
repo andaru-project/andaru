@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// maxSecretBytes bounds one secret's value: an RSA-4096 PKCS #8 private key in PEM fits with room to spare.
+const maxSecretBytes = 8192
+
 type secretEntry struct {
 	Kind      string  `json:"kind"`
 	Value     string  `json:"value"`
@@ -92,7 +95,7 @@ func validateSecrets(doc secretDocument, head Version) error {
 		for name, v := range entries {
 			n, e := strconv.ParseInt(string(v.Version), 10, 64)
 			_, te := time.Parse(time.RFC3339Nano, v.UpdatedAt)
-			if !validSecretName(name) || e != nil || n <= 0 || n > h || te != nil || len(v.Value) > 4096 || strings.ContainsRune(v.Value, 0) {
+			if !validSecretName(name) || e != nil || n <= 0 || n > h || te != nil || len(v.Value) > maxSecretBytes || strings.ContainsRune(v.Value, 0) {
 				return validationError{{Path: "", Message: "Invalid secret value or version."}}
 			}
 			if scope == "core" && v.Kind == "addon" || scope != "core" && v.Kind != "addon" {
@@ -103,10 +106,27 @@ func validateSecrets(doc secretDocument, head Version) error {
 	return nil
 }
 
-// checkResolvedReferences gates an apply, so it covers links and enabled add-ons: channels take effect without an apply.
-// A channel or disabled add-on a restore left unresolved may be saved with that reference unchanged.
+// checkResolvedReferences gates an apply, so it covers links, enabled add-ons and the certificates management and
+// enabled add-ons serve: channels take effect without an apply, and a CA without its key still verifies peers. A
+// channel, disabled add-on or PKI object a restore left unresolved may be saved with that reference unchanged.
 func checkResolvedReferences(d *declaration) error {
 	var details []FieldError
+	certs := certificateIndex(d)
+	unresolvedCert := func(path, id string) {
+		if c, ok := certs[id]; ok && c.KeyRef.Unresolved {
+			details = append(details, FieldError{Path: path, Message: "The private key of certificate " + id + " is unresolved; set it before applying."})
+		}
+	}
+	if d.Management != nil && d.Management.Certificate != "" {
+		unresolvedCert("/management/certificate", d.Management.Certificate)
+	}
+	for i := range d.Addons {
+		if d.Addons[i].Enabled {
+			for _, id := range addonCertificateRefs(&d.Addons[i]) {
+				unresolvedCert(fmt.Sprintf("/addons/%d/settings", i), id)
+			}
+		}
+	}
 	for i, l := range d.Links {
 		if l.Password != nil && l.Password.Unresolved {
 			details = append(details, FieldError{Path: "/links/" + strconv.Itoa(i) + "/password", Message: "Secret " + l.Password.Secret + " is unresolved; explicitly bind or set it before applying."})
@@ -161,6 +181,20 @@ func heldSecrets(d *declaration) []heldSecret {
 			}
 		}
 	}
+	pkiKey := func(collection, id, kind string, i int, ref *secretReference) {
+		if ref != nil {
+			out = append(out, heldSecret{key: objectKey{collection, id}, scope: "core", path: fmt.Sprintf("/pki/%s/%d/keyRef", kind, i), ref: ref})
+		}
+	}
+	for i := range d.PKI.CAs {
+		pkiKey("pki.cas", d.PKI.CAs[i].ID, "cas", i, d.PKI.CAs[i].KeyRef)
+	}
+	for i := range d.PKI.Certificates {
+		pkiKey("pki.certificates", d.PKI.Certificates[i].ID, "certificates", i, &d.PKI.Certificates[i].KeyRef)
+	}
+	for i := range d.PKI.TLSCryptKeys {
+		pkiKey("pki.tlsCryptKeys", d.PKI.TLSCryptKeys[i].ID, "tlsCryptKeys", i, &d.PKI.TLSCryptKeys[i].KeyRef)
+	}
 	for i := range d.Addons {
 		a := &d.Addons[i]
 		scope := addonSecretScope(a.ID)
@@ -199,6 +233,8 @@ func secretKind(collection string) string {
 		return "notification"
 	case "addons":
 		return "addon"
+	case "pki.cas", "pki.certificates", "pki.tlsCryptKeys":
+		return "pki"
 	default:
 		return "password"
 	}
@@ -215,6 +251,8 @@ func secretFields(collection string, value map[string]any) []secretField {
 	switch collection {
 	case "links":
 		return []secretField{{"/password", value, "password"}}
+	case "pki.cas", "pki.certificates", "pki.tlsCryptKeys":
+		return []secretField{{"/keyRef", value, "keyRef"}}
 	case "notifications.channels":
 		var out []secretField
 		for _, kind := range []struct {

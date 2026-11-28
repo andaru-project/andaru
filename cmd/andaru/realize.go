@@ -36,6 +36,7 @@ type realizeVerbs interface {
 	ReleaseAddonsHold(ctx context.Context) error
 	AddonControl(ctx context.Context, action, slug string) error
 	SyncAddonBusTokens(ctx context.Context, tokens map[string]string) error
+	SyncCertificates(ctx context.Context, s generation.CertSync) error
 	Fence(ctx context.Context, denyAll bool) error
 }
 
@@ -89,7 +90,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	verb := flags.Arg(0)
 	want := map[string]int{
 		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "aliases": 0, "addons-release-hold": 0, "factory-reset": 0,
-		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1, "addon-log": 4,
+		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1, "cert-sync": 1, "addon-log": 4,
 		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0, "set-hostname": 1,
 	}
 	n, known := want[verb]
@@ -123,7 +124,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		if (rest[0] != "start" && rest[0] != "stop" && rest[0] != "restart") || !addon.ValidSlug(rest[1]) {
 			return usageError(stderr, realizeUsage, "andaru realize")
 		}
-	case "addon-bus-tokens":
+	case "addon-bus-tokens", "cert-sync":
 		if !filepath.IsAbs(rest[0]) || filepath.Clean(rest[0]) != rest[0] {
 			return usageError(stderr, realizeUsage, "andaru realize")
 		}
@@ -143,7 +144,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		// The engine keeps owing these: it tries them again after the reset.
 		switch verb {
-		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens", "addon-log":
+		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens", "cert-sync", "addon-log":
 			return 1
 		}
 		return 0
@@ -200,6 +201,11 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		var tokens map[string]string
 		if tokens, err = readAddonBusTokensFile(rest[0]); err == nil {
 			err = verbs.SyncAddonBusTokens(ctx, tokens)
+		}
+	case "cert-sync":
+		var payload generation.CertSync
+		if payload, err = readCertSyncFile(rest[0]); err == nil {
+			err = verbs.SyncCertificates(ctx, payload)
 		}
 	}
 	// A verb on a generation may change its state even when it fails, so the bus hears of each one.

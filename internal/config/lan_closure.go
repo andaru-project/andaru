@@ -161,6 +161,9 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 				doc.Segments[i].Addressing.IPv6 = ipv6{Mode: "none"}
 			}
 		}
+		if doc.Management != nil {
+			doc.Management.Certificate = "" // the copy holds no certificate: the web interface serves its bootstrap one
+		}
 		d := declaration{
 			SchemaVersion: schemaVersion, Management: doc.Management,
 			Links: nonNil(doc.Links), Segments: nonNil(doc.Segments), Zones: nonNil(doc.Zones),
@@ -194,6 +197,42 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 		// The copy keeps the network reachable, and holds only the links' secrets: notification channels, whose
 		// secrets it lacks, are set up again after the recovery.
 		delete(d, "notifications")
+		// Nor does it hold private keys: the web interface serves its bootstrap certificate, and add-ons lose the
+		// certificates they named, until the certificates are set up again.
+		delete(d, "pki")
+		if raw, ok := d["management"]; ok {
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &m); err != nil {
+				return RestoreDocuments{}, err
+			}
+			delete(m, "certificate")
+			if d["management"], err = json.Marshal(m); err != nil {
+				return RestoreDocuments{}, err
+			}
+		}
+		if raw, ok := d["addons"]; ok {
+			var addons []map[string]any
+			if err := json.Unmarshal(raw, &addons); err != nil {
+				return RestoreDocuments{}, err
+			}
+			for _, a := range addons {
+				settings, _ := a["settings"].(map[string]any)
+				stripped := false
+				for k, v := range settings {
+					if id, ok := v.(string); ok && certificateIDPattern.MatchString(id) {
+						delete(settings, k)
+						stripped = true
+					}
+				}
+				if stripped {
+					// Keep the sanitized recovery copy restorable when a manifest marks the stripped certificate-reference required.
+					a["enabled"] = false
+				}
+			}
+			if d["addons"], err = json.Marshal(addons); err != nil {
+				return RestoreDocuments{}, err
+			}
+		}
 		// A view shows a link's password with its state; a declaration holds only the reference.
 		if raw, ok := d["links"]; ok {
 			var links []map[string]json.RawMessage

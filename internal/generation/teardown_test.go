@@ -22,8 +22,13 @@ func TestTeardownClearsLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.net.argv = nil
+	writeFile(t, filepath.Join(b.net.root, WebKey), "KEY")
+	writeFile(t, filepath.Join(b.net.root, WebCertificate), "CERT")
 	if err := b.r.Teardown(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if b.exists(WebKey[1:]) || b.exists(WebCertificate[1:]) {
+		t.Fatal("the managed web certificate survived the teardown")
 	}
 	for name := range b.net.netFiles() {
 		if strings.HasPrefix(name, "50-andaru-") {

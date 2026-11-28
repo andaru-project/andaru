@@ -574,7 +574,7 @@ func TestActivateRefusals(t *testing.T) {
 	b.wantDisk(one)
 
 	corrupt := b.gen(two)
-	writeFile(t, filepath.Join(b.dir, itoa(corrupt), "files", "50-andaru-vl0.network"), "evil")
+	writeFile(t, filepath.Join(b.dir, itoa(corrupt), "files", storedName(netDir+"50-andaru-vl0.network")), "evil")
 	if err := b.r.Activate(t.Context(), corrupt); err == nil || errors.Is(err, ErrWrongState) {
 		t.Fatalf("corrupt generation: %v", err)
 	}
@@ -666,7 +666,7 @@ func TestRollbackFallsBack(t *testing.T) {
 	if err := writeJSON(filepath.Join(b.dir, "pointers.json"), p); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(b.dir, "1", "files", "50-andaru-eth0.network"), "evil")
+	writeFile(t, filepath.Join(b.dir, "1", "files", storedName(netDir+"50-andaru-eth0.network")), "evil")
 	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +686,7 @@ func TestRollbackWithNothingUsableLeavesFiles(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(b.dir, "1", "files", "50-andaru-eth0.network"), "evil")
+	writeFile(t, filepath.Join(b.dir, "1", "files", storedName(netDir+"50-andaru-eth0.network")), "evil")
 	if err := b.timerFires(id); err == nil {
 		t.Fatal("rollback reported success with nothing to restore")
 	}

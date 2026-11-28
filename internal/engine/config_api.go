@@ -14,13 +14,19 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/kept"
+	"github.com/andaru-project/andaru/internal/pki"
 )
 
 func newConfigurationHandler(store *config.Store) http.Handler {
+	return newConfigurationHandlerWithPKI(store, nil)
+}
+
+func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/"), "/")
 		route := ""
@@ -93,6 +99,15 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		case len(parts) >= 3 && parts[0] == "config" && (parts[1] == "aliases" && (parts[2] == "addresses" || parts[2] == "ports") ||
 			parts[1] == "notifications" && parts[2] == "channels"):
 			collection = parts[1] + "." + parts[2]
+			if len(parts) == 3 {
+				route = "collection"
+				allowed = []string{"GET", "HEAD", "POST"}
+			} else if len(parts) == 4 && parts[3] != "" {
+				route, id = "object", parts[3]
+				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
+			}
+		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "pki" && pkiKinds[parts[2]] != "":
+			collection = pkiKinds[parts[2]]
 			if len(parts) == 3 {
 				route = "collection"
 				allowed = []string{"GET", "HEAD", "POST"}
@@ -292,10 +307,99 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing notification channels requires notifications.manage, and configuration.read unless deleting.")
 			return
 		}
+		isPKICollection := func(c string) bool {
+			return c == "pki.cas" || c == "pki.certificates" || c == "pki.tlsCryptKeys"
+		}
+		if slices.ContainsFunc(changes.Operations, func(o config.Operation) bool { return isPKICollection(o.Collection) }) && !hasCapability(actor, authz.CertificatesManage) {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing PKI objects requires certificates.manage.")
+			return
+		}
+		var pkiFinishes []func(audit.Result)
+		var replacedCertIDs []string
+		if pkiHandler != nil {
+			for i := range changes.Operations {
+				op := &changes.Operations[i]
+				if !isPKICollection(op.Collection) {
+					continue
+				}
+				var action audit.Action
+				target := op.ID
+				switch op.Op {
+				case "create":
+					action = audit.ActionCertificateCreated
+					if target == "" {
+						allocated, err := config.NewID(op.Collection)
+						if err != nil {
+							for _, fin := range pkiFinishes {
+								fin(audit.ResultFailure)
+							}
+							writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "Identity allocation failed.")
+							return
+						}
+						if err := changes.AssignID(i, allocated); err != nil {
+							for _, fin := range pkiFinishes {
+								fin(audit.ResultFailure)
+							}
+							writeConfigurationError(w, r, err)
+							return
+						}
+						target = allocated
+					}
+				case "replace":
+					action = audit.ActionCertificateRenewed
+					if op.Collection == "pki.certificates" && target != "" {
+						replacedCertIDs = append(replacedCertIDs, target)
+					}
+				case "delete":
+					action = audit.ActionCertificateDeleted
+				default:
+					continue
+				}
+				if audit.ValidTarget(action, target) {
+					fin, ok := pkiHandler.beginAudit(w, r, actor, action, target)
+					if !ok {
+						for _, prev := range pkiFinishes {
+							prev(audit.ResultFailure)
+						}
+						return
+					}
+					pkiFinishes = append(pkiFinishes, fin)
+				}
+			}
+		}
 		result, e := store.Save(r.Context(), actor.Actor, changes)
 		if e != nil {
+			for _, fin := range pkiFinishes {
+				fin(audit.ResultFailure)
+			}
 			writeConfigurationError(w, r, e)
 			return
+		}
+		for _, fin := range pkiFinishes {
+			fin(audit.ResultSuccess)
+		}
+		if pkiHandler != nil && len(replacedCertIDs) > 0 {
+			var pending []pendingRenewal
+			for _, certID := range replacedCertIDs {
+				if obj, err := store.PKIObject(r.Context(), "pki.certificates", certID); err == nil {
+					if info, _, err := pki.Inspect([]byte(obj.CertPEM)); err == nil {
+						pending = append(pending, pendingRenewal{id: certID, r: renewal{name: obj.Name, info: info, source: "manual"}})
+					}
+				}
+			}
+			if pkiHandler.certs != nil {
+				for _, item := range pending {
+					pkiHandler.certs.enqueueRenewal(item.id, item.r)
+				}
+				if err := pkiHandler.certs.sync(r.Context()); err != nil {
+					slog.Warn("cert-sync after certificate replacement; renewal event deferred until retry succeeds", "error", err)
+					pkiHandler.certs.nudge()
+				}
+			} else {
+				for _, item := range pending {
+					publishCertificateRenewed(pkiHandler.events, item.id, item.r)
+				}
+			}
 		}
 		if err := recordLiveLAN(r.Context(), store, actor.Actor); err != nil {
 			slog.Error("record the last LAN", "error", err)

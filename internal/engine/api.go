@@ -111,6 +111,7 @@ type handlerDeps struct {
 	notificationsAPI http.Handler
 	aliasesAPI       http.Handler
 	addonsAPI        http.Handler
+	pkiAPI           http.Handler
 	stateDir         string
 }
 
@@ -173,6 +174,10 @@ func newHandlerWithDeps(d handlerDeps) http.Handler {
 		}
 		if (r.URL.Path == addonsAPIPrefix || strings.HasPrefix(r.URL.Path, addonsAPIPrefix+"/")) && addonsAPI != nil {
 			addonsAPI.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, pkiAPIPrefix+"/") && d.pkiAPI != nil {
+			d.pkiAPI.ServeHTTP(w, r)
 			return
 		}
 		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath || r.URL.Path == "/api/v1/kept/recovery" || isBackupPath(r.URL.Path)

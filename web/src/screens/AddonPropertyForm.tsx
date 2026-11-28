@@ -14,7 +14,7 @@ import {
 import type { ReactNode } from 'react';
 import { AddonMarkdown } from '../addonMarkdown';
 import { addonText, type AddonPropertyDraft } from '../addons';
-import type { AddonProperty, Zone } from '../types';
+import type { AddonProperty, PKICertificate, Zone } from '../types';
 
 const formatPlaceholders: Record<string, string> = {
   hostname: 'service.example.lan',
@@ -30,6 +30,7 @@ interface AddonPropertyFormProps {
   properties: AddonProperty[];
   draft: AddonPropertyDraft;
   zones: Zone[];
+  certificates?: PKICertificate[];
   readOnly: boolean;
   errors: Map<string, string>;
   onChange(next: AddonPropertyDraft): void;
@@ -39,11 +40,16 @@ export function AddonPropertyForm({
   properties,
   draft,
   zones,
+  certificates = [],
   readOnly,
   errors,
   onChange,
 }: AddonPropertyFormProps) {
   const zoneOptions = zones.map((z) => ({ value: z.id, label: z.name }));
+  const certificateOptions = certificates.map((c) => ({
+    value: c.id,
+    label: c.subject ? `${c.name} (${c.subject})` : c.name,
+  }));
 
   function setValue(name: string, value: unknown) {
     onChange({
@@ -218,6 +224,32 @@ export function AddonPropertyForm({
             onChange={(val) => setValue(prop.name, val ?? '')}
           />
         );
+
+      case 'certificate-reference': {
+        const selectedCertId = typeof draft.values[prop.name] === 'string' && draft.values[prop.name] !== ''
+          ? (draft.values[prop.name] as string)
+          : null;
+        const options = selectedCertId && !certificateOptions.some((o) => o.value === selectedCertId)
+          ? [...certificateOptions, { value: selectedCertId, label: `${selectedCertId} (missing)` }]
+          : certificateOptions;
+        return (
+          <Select
+            label={title}
+            description={descriptionNode}
+            descriptionProps={descriptionProps}
+            required={prop.required}
+            disabled={readOnly}
+            searchable
+            data={options}
+            value={selectedCertId}
+            clearable={!prop.required}
+            allowDeselect={!prop.required}
+            placeholder={options.length > 0 ? 'Select a managed certificate' : 'No certificates configured'}
+            error={fieldError}
+            onChange={(val) => setValue(prop.name, val ?? '')}
+          />
+        );
+      }
 
       case 'secret-reference': {
         const existing = Object.hasOwn(draft.existingSecrets, prop.name)

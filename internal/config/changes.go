@@ -31,6 +31,8 @@ type Changes struct {
 	Operations           []Operation `json:"operations"`
 	single               bool
 	wire                 any
+	// assigned maps create-operation indices to pre-allocated IDs (used by engine routes that audit before saving).
+	assigned map[int]string
 }
 type Current struct {
 	Kind       string          `json:"kind"`
@@ -97,6 +99,35 @@ func ObjectChange(op, collection, id string, expected *Version, body []byte) (Ch
 	return c, nil
 }
 
+// ObjectCreateWithID is a create of one object under id, which the caller allocated with NewID; a client's create
+// never names its ID.
+func ObjectCreateWithID(collection, id string, body []byte) (Changes, error) {
+	c, e := ObjectChange("create", collection, "", nil, body)
+	if e != nil {
+		return c, e
+	}
+	if err := c.AssignID(0, id); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+// AssignID binds a pre-allocated ID to the create operation at opIndex so audited creates use the exact ID recorded in audit.
+func (c *Changes) AssignID(opIndex int, id string) error {
+	if opIndex < 0 || opIndex >= len(c.Operations) || c.Operations[opIndex].Op != "create" {
+		return fault("INVALID_REQUEST", "", "AssignID requires a create operation.")
+	}
+	collection := c.Operations[opIndex].Collection
+	if prefix, _, _ := strings.Cut(id, "_"); prefix != idPrefixes[collection] || len(id) != len(prefix)+37 {
+		return fault("INVALID_REQUEST", "", "Invalid object ID.")
+	}
+	if c.assigned == nil {
+		c.assigned = map[int]string{}
+	}
+	c.assigned[opIndex] = id
+	return nil
+}
+
 // Before places the single created rule of c ahead of the rule id.
 func (c Changes) Before(id string) (Changes, error) {
 	if len(c.Operations) != 1 || c.Operations[0].Op != "create" || id == "" {
@@ -160,7 +191,7 @@ func initialState() savedState {
 var (
 	orderedCollections = []string{"rules", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons", "pki.cas", "pki.certificates", "pki.tlsCryptKeys"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -175,6 +206,13 @@ func versionOf(s *savedState, key objectKey) objectVersion {
 	}
 	return objectVersion{Version: "0"}
 }
+
+// idPrefixes are the prefixes of the IDs the engine assigns, by collection.
+var idPrefixes = map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto", "pki.cas": "ca", "pki.certificates": "crt", "pki.tlsCryptKeys": "tck"}
+
+// NewID allocates an ID for a new object of collection, as a create does.
+func NewID(collection string) (string, error) { return newID(collection) }
+
 func newID(collection string) (string, error) {
 	var b [16]byte
 	if _, e := rand.Read(b[:]); e != nil {
@@ -182,7 +220,7 @@ func newID(collection string) (string, error) {
 	}
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
-	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
+	prefix := idPrefixes[collection]
 	return fmt.Sprintf("%s_%x-%x-%x-%x-%x", prefix, b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 func rank(code string) int {
@@ -252,6 +290,15 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	if d.DNS != nil {
 		m[listKey("dns")] = d.DNS
+	}
+	for i := range d.PKI.CAs {
+		m[objectKey{"pki.cas", d.PKI.CAs[i].ID}] = &d.PKI.CAs[i]
+	}
+	for i := range d.PKI.Certificates {
+		m[objectKey{"pki.certificates", d.PKI.Certificates[i].ID}] = &d.PKI.Certificates[i]
+	}
+	for i := range d.PKI.TLSCryptKeys {
+		m[objectKey{"pki.tlsCryptKeys", d.PKI.TLSCryptKeys[i].ID}] = &d.PKI.TLSCryptKeys[i]
 	}
 	return m
 }
@@ -479,6 +526,13 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 			if e != nil {
 				return empty, fault("STORE_UNAVAILABLE", "", "Identity allocation failed.")
 			}
+			if assigned := input.assigned[i]; assigned != "" {
+				if _, exists := before[objectKey{op.Collection, assigned}]; exists {
+					pick(fault("VALIDATION_FAILED", input.path(i, "/id", true), "Object already exists."), i)
+					continue
+				}
+				id = assigned
+			}
 			keys[i] = objectKey{op.Collection, id}
 			value["id"] = id
 			if op.LocalID != "" {
@@ -503,6 +557,8 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 	var createKeys []objectKey
 	changedSecrets := map[string]bool{}
 	setters := map[string]heldSecret{}
+	// A deleted PKI object's key is removed with it, unless something else still holds its name.
+	var droppedKeys []string
 	for i, op := range input.Operations {
 		key := keys[i]
 		origins[key] = i
@@ -510,6 +566,9 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 			deleted[key] = true
 			if op.Collection == "addons" {
 				delete(current.Secrets.Scopes, addonSecretScope(key.ID))
+			}
+			if ref := keyRefOf(before[key]); ref != nil {
+				droppedKeys = append(droppedKeys, ref.Secret)
 			}
 			continue
 		}
@@ -551,6 +610,9 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 					if op.Collection == "addons" && !heldUnresolved(before[key], f.path, name) {
 						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "An add-on secret must be set or exist.")
 					}
+					if slices.Contains(pkiCollections, op.Collection) && !heldUnresolved(before[key], f.path, name) {
+						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A private key must be set or exist.")
+					}
 					reference["unresolved"] = true
 				}
 				f.parent[f.name] = reference
@@ -558,6 +620,10 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 				if old, ok := before[key].(*link); ok && old.Password != nil {
 					value["password"] = old.Password
 				}
+			} else if ref := keyRefOf(before[key]); ref != nil && op.Op == "replace" {
+				value["keyRef"] = ref // a replace that leaves the key out keeps it: a CA never loses its key by a rename
+			} else if op.Op == "create" && (op.Collection == "pki.certificates" || op.Collection == "pki.tlsCryptKeys") {
+				return empty, fault("VALIDATION_FAILED", input.path(i, "/keyRef", true), "A private key is required.")
 			}
 		}
 		raw, e := json.Marshal(value)
@@ -595,6 +661,15 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 		return empty, e
 	}
 	if d.Addons, e = rewrite(d.Addons, "addons", writes, deleted, createKeys, func(x addonConfig) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.PKI.CAs, e = rewrite(d.PKI.CAs, "pki.cas", writes, deleted, createKeys, func(x pkiCA) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.PKI.Certificates, e = rewrite(d.PKI.Certificates, "pki.certificates", writes, deleted, createKeys, func(x pkiCertificate) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.PKI.TLSCryptKeys, e = rewrite(d.PKI.TLSCryptKeys, "pki.tlsCryptKeys", writes, deleted, createKeys, func(x tlsCryptKey) string { return x.ID }); e != nil {
 		return empty, e
 	}
 	// Prune optional add-on secrets dropped from settings so they do not linger in secrets.db or block re-adding.
@@ -705,6 +780,11 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 		normalizeDeclaration(&d)
 	}
 	held := heldSecrets(&d)
+	for _, name := range droppedKeys {
+		if !slices.ContainsFunc(held, func(h heldSecret) bool { return h.scope == "core" && h.ref.Secret == name }) {
+			delete(current.Secrets.Scopes["core"], name)
+		}
+	}
 	for _, h := range held {
 		if !h.ref.Unresolved {
 			if _, ok := current.Secrets.Scopes[h.scope][h.ref.Secret]; !ok {
@@ -740,6 +820,9 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 			path := fmt.Sprintf("/notifications/channels/%d/webhook/url", i)
 			return empty, rebaseValidation(validationError{{path, "Expected the secret to hold an http or https URL with a host."}}, &d, origins, input)
 		}
+	}
+	if keyErrs := checkPKIKeys(&d, current.Secrets, writes, changedSecrets); len(keyErrs) > 0 {
+		return empty, rebaseValidation(validationError(keyErrs), &d, origins, input)
 	}
 	if e = validateSecrets(current.Secrets, next); e != nil {
 		var failure validationError
@@ -963,7 +1046,7 @@ func owner(d *declaration, path string) (objectKey, string) {
 			return objectKey{}, ""
 		}
 		p = append([]string{"nat." + p[1]}, p[2:]...)
-	case "aliases", "notifications":
+	case "aliases", "notifications", "pki":
 		if len(p) < 2 {
 			return objectKey{}, ""
 		}
@@ -1006,6 +1089,12 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.NAT.PortForwards[n].ID
 	case col == "nat.oneToOne" && n < len(d.NAT.OneToOne):
 		id = d.NAT.OneToOne[n].ID
+	case col == "pki.cas" && n < len(d.PKI.CAs):
+		id = d.PKI.CAs[n].ID
+	case col == "pki.certificates" && n < len(d.PKI.Certificates):
+		id = d.PKI.Certificates[n].ID
+	case col == "pki.tlsCryptKeys" && n < len(d.PKI.TLSCryptKeys):
+		id = d.PKI.TLSCryptKeys[n].ID
 	}
 	if id == "" {
 		return objectKey{}, ""
@@ -1023,6 +1112,12 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 		case *segment:
 			return x.Name
 		case *zone:
+			return x.Name
+		case *pkiCA:
+			return x.Name
+		case *pkiCertificate:
+			return x.Name
+		case *tlsCryptKey:
 			return x.Name
 		}
 		return ""
@@ -1076,8 +1171,11 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 	return f
 }
 
-// heldUnresolved says whether old, a channel before the batch, holds name unresolved at path.
+// heldUnresolved says whether old, a channel, add-on or PKI object before the batch, holds name unresolved at path.
 func heldUnresolved(old any, path, name string) bool {
+	if ref := keyRefOf(old); ref != nil && path == "/keyRef" {
+		return ref.Secret == name && ref.Unresolved
+	}
 	switch obj := old.(type) {
 	case *channel:
 		for _, s := range obj.secrets() {

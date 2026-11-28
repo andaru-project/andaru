@@ -24,7 +24,7 @@ var layoutObjects = []layoutObject{
 	actor_kind TEXT NOT NULL CHECK(actor_kind IN ('system','account','token')),
 	actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 128),
 	source TEXT NOT NULL CHECK(length(source) BETWEEN 1 AND 128),
-	action TEXT NOT NULL CHECK(action IN ('login.success','login.failure','login.backoff','session.logout','session.revoked','permission.denied','account.created','account.updated','account.disabled','account.deleted','role.changed','password.changed','token.created','token.revoked','secret.exported','configuration.saved','configuration.applied','configuration.confirmed','configuration.rollback','backup.restored','setup.completed','recovery.completed','audit.queried','audit.health','audit.retention_pruned','addon.staged','addon.unstaged','addon.started','addon.stopped','addon.restarted')),
+	action TEXT NOT NULL CHECK(action IN ('login.success','login.failure','login.backoff','session.logout','session.revoked','permission.denied','account.created','account.updated','account.disabled','account.deleted','role.changed','password.changed','token.created','token.revoked','secret.exported','configuration.saved','configuration.applied','configuration.confirmed','configuration.rollback','backup.restored','setup.completed','recovery.completed','audit.queried','audit.health','audit.retention_pruned','addon.staged','addon.unstaged','addon.started','addon.stopped','addon.restarted','certificate.created','certificate.imported','certificate.deleted','certificate.renewed','acme.order.triggered','vpn.wireguard.psk_exported','vpn.ipsec.initiated','vpn.ipsec.terminated','vpn.openvpn.client_disconnected','vpn.openvpn.profile_exported')),
 	target TEXT NOT NULL CHECK(length(target)<=128),
 	result TEXT NOT NULL CHECK(result IN ('pending','success','failure','denied','committed','not_committed','unavailable','recovered','rolled_back')),
 	operation_id TEXT NOT NULL CHECK(length(operation_id)<=128),
@@ -188,9 +188,10 @@ func layoutDDL(name string) string {
 	panic("audit: missing layout DDL for " + name)
 }
 
-// migrateAuditV1 upgrades a v1 audit database to LayoutVersion 2 by expanding the events.action CHECK constraint
-// to include add-on lifecycle actions while preserving all existing events and metadata rows.
-func migrateAuditV1(ctx context.Context, db *sql.DB) error {
+// migrateAuditV2 upgrades a v1 or v2 audit database to LayoutVersion by rebuilding events with the current
+// action CHECK constraint (v2 added add-on lifecycle actions, v3 the certificate, ACME and VPN actions) while
+// preserving all existing events, metadata rows and the event sequence.
+func migrateAuditV2(ctx context.Context, db *sql.DB) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
@@ -210,7 +211,7 @@ func migrateAuditV1(ctx context.Context, db *sql.DB) error {
 
 	var oldSeq int64
 	if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0)`).Scan(&oldSeq); err != nil {
-		return fmt.Errorf("migrate audit v1: read sequence: %w", err)
+		return fmt.Errorf("migrate audit: read sequence: %w", err)
 	}
 
 	stmts := []string{
@@ -226,15 +227,15 @@ func migrateAuditV1(ctx context.Context, db *sql.DB) error {
 	}
 	for _, stmt := range stmts {
 		if _, err = tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("migrate audit v1: %w", err)
+			return fmt.Errorf("migrate audit: %w", err)
 		}
 	}
 	if oldSeq > 0 {
 		if _, err = tx.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name='events'`); err != nil {
-			return fmt.Errorf("migrate audit v1: clear sequence: %w", err)
+			return fmt.Errorf("migrate audit: clear sequence: %w", err)
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO sqlite_sequence(name,seq) VALUES('events',?)`, oldSeq); err != nil {
-			return fmt.Errorf("migrate audit v1: restore sequence: %w", err)
+			return fmt.Errorf("migrate audit: restore sequence: %w", err)
 		}
 	}
 	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
@@ -248,7 +249,7 @@ func migrateAuditV1(ctx context.Context, db *sql.DB) error {
 		return fkErr
 	}
 	if hasFKViolation {
-		return errors.New("audit v1 migration violated foreign key integrity")
+		return errors.New("audit migration violated foreign key integrity")
 	}
 	if err = tx.Commit(); err != nil {
 		return err

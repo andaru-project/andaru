@@ -79,6 +79,18 @@ type channelView struct {
 	Telegram *telegramView `json:"telegram,omitempty"`
 	Email    *emailView    `json:"email,omitempty"`
 }
+type pkiCAView struct {
+	pkiCA
+	KeyRef *secretView `json:"keyRef,omitempty"`
+}
+type pkiCertificateView struct {
+	pkiCertificate
+	KeyRef *secretView `json:"keyRef"`
+}
+type tlsCryptKeyView struct {
+	tlsCryptKey
+	KeyRef *secretView `json:"keyRef"`
+}
 type webhookView struct {
 	URL           *secretView `json:"url"`
 	Authorization *secretView `json:"authorization,omitempty"`
@@ -167,6 +179,24 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 			}
 		}
 		v = view
+	case *pkiCA:
+		view := pkiCAView{pkiCA: *x}
+		if view.KeyRef, e = viewSecret(x.KeyRef, secrets); e != nil {
+			return ObjectView{}, e
+		}
+		v = view
+	case *pkiCertificate:
+		view := pkiCertificateView{pkiCertificate: *x}
+		if view.KeyRef, e = viewSecret(&x.KeyRef, secrets); e != nil {
+			return ObjectView{}, e
+		}
+		v = view
+	case *tlsCryptKey:
+		view := tlsCryptKeyView{tlsCryptKey: *x}
+		if view.KeyRef, e = viewSecret(&x.KeyRef, secrets); e != nil {
+			return ObjectView{}, e
+		}
+		v = view
 	case *addonConfig:
 		view := *x
 		if len(x.Settings) > 0 {
@@ -222,6 +252,18 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 	if err != nil {
 		return SnapshotView{}, err
 	}
+	cas, err := viewSlice(s.Config.PKI.CAs, "pki.cas", func(c *pkiCA) string { return c.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
+	certificates, err := viewSlice(s.Config.PKI.Certificates, "pki.certificates", func(c *pkiCertificate) string { return c.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
+	tlsCryptKeys, err := viewSlice(s.Config.PKI.TLSCryptKeys, "pki.tlsCryptKeys", func(k *tlsCryptKey) string { return k.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
 	used := map[string]bool{}
 	for _, h := range heldSecrets(&s.Config) {
 		if h.scope == "core" && !h.ref.Unresolved {
@@ -247,6 +289,17 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 	}
 	if len(addons) > 0 {
 		if d["addons"], e = json.Marshal(addons); e != nil {
+			return SnapshotView{}, e
+		}
+	}
+	if len(cas)+len(certificates)+len(tlsCryptKeys) > 0 {
+		section := map[string]any{}
+		for name, items := range map[string][]json.RawMessage{"cas": cas, "certificates": certificates, "tlsCryptKeys": tlsCryptKeys} {
+			if len(items) > 0 {
+				section[name] = items
+			}
+		}
+		if d["pki"], e = json.Marshal(section); e != nil {
 			return SnapshotView{}, e
 		}
 	}
