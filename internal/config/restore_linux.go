@@ -231,16 +231,14 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 	if decoded.configuration != nil {
 		candidate = *decoded.configuration
 		candidate.Addons = slices.Clone(candidate.Addons)
-		var errs []FieldError
-		if decoded.ownSecrets {
-			// Schema upgrade: keep retired or manifest-changed add-ons restorable so Store.Upgrade never
-			// deadlocks under ErrUpgradePending; render.Network still gates apply fail-closed.
-			errs = validateAddonsWebUISeparation(cat, &candidate, managementHosts)
-		} else {
-			errs = validateRestoredAddonsAgainstCatalog(cat, &candidate, managementHosts)
-		}
-		if len(errs) > 0 {
-			return empty, preview, boundaryFault(validationError(errs))
+		if !decoded.ownSecrets {
+			// Backup restore: validate every cataloged enabled add-on (plus WebUI separation) while
+			// allowing retired/disabled add-ons from cross-version backups to restore cleanly.
+			// Schema upgrade (ownSecrets=true) skips catalog/WebUI checks so it never deadlocks under
+			// ErrUpgradePending; buildWebUI suppresses conflicting links and render.Network gates apply.
+			if errs := validateRestoredAddonsAgainstCatalog(cat, &candidate, managementHosts); len(errs) > 0 {
+				return empty, preview, boundaryFault(validationError(errs))
+			}
 		}
 	}
 	secrets := current.Secrets
