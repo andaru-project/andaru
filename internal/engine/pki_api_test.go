@@ -128,4 +128,11 @@ func TestCertSyncKeepsWebWhenDeletedInHead(t *testing.T) {
 	if !got.KeepWeb || got.Web != nil {
 		t.Fatalf("expected KeepWeb=true, Web=nil when cert deleted in head; got %+v", got)
 	}
+	// invalidate clears c.last so the next sync re-places files even with an unchanged live generation.
+	calls := 0
+	c.realize = func(context.Context, string) error { calls++; return nil }
+	c.invalidate()
+	if err := c.sync(context.Background()); err != nil || calls != 1 {
+		t.Fatalf("invalidate did not force re-sync: err=%v calls=%d", err, calls)
+	}
 }

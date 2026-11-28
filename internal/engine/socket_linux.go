@@ -148,6 +148,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	certs := newCertSync(stateDir, filepath.Dir(busSocket), catalog, store.CertificateBindings, func(ctx context.Context, file string) error {
 		return runner.Realize(ctx, "cert-sync", 0, file)
 	})
+	certs.events = events
 	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge(); hold.nudge(); certs.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
@@ -211,7 +212,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	// A load the consumer waits on stops before the consumer is waited for.
 	defer cancel(context.Canceled)
 	// The engine states its notifications once the head is in the current schema, and again as applies and saves go.
-	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.apply(); addonBus.nudge(); certs.nudge() })
+	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.apply(); addonBus.nudge(); certs.invalidate() })
 	if err != nil {
 		return fmt.Errorf("follow applies for notifications: %w", err)
 	}

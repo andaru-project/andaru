@@ -336,7 +336,13 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 							writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "Identity allocation failed.")
 							return
 						}
-						op.ID = allocated
+						if err := changes.AssignID(i, allocated); err != nil {
+							for _, fin := range pkiFinishes {
+								fin(audit.ResultFailure)
+							}
+							writeConfigurationError(w, r, err)
+							return
+						}
 						target = allocated
 					}
 				case "replace":
@@ -373,17 +379,25 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 			fin(audit.ResultSuccess)
 		}
 		if pkiHandler != nil && len(replacedCertIDs) > 0 {
-			if pkiHandler.certs != nil {
-				if err := pkiHandler.certs.sync(r.Context()); err != nil {
-					slog.Warn("cert-sync after certificate replacement", "error", err)
-					pkiHandler.certs.nudge()
-				}
-			}
+			var pending []pendingRenewal
 			for _, certID := range replacedCertIDs {
 				if obj, err := store.PKIObject(r.Context(), "pki.certificates", certID); err == nil {
 					if info, _, err := pki.Inspect([]byte(obj.CertPEM)); err == nil {
-						publishCertificateRenewed(pkiHandler.events, certID, renewal{name: obj.Name, info: info, source: "manual"})
+						pending = append(pending, pendingRenewal{id: certID, r: renewal{name: obj.Name, info: info, source: "manual"}})
 					}
+				}
+			}
+			if pkiHandler.certs != nil {
+				for _, item := range pending {
+					pkiHandler.certs.enqueueRenewal(item.id, item.r)
+				}
+				if err := pkiHandler.certs.sync(r.Context()); err != nil {
+					slog.Warn("cert-sync after certificate replacement; renewal event deferred until retry succeeds", "error", err)
+					pkiHandler.certs.nudge()
+				}
+			} else {
+				for _, item := range pending {
+					publishCertificateRenewed(pkiHandler.events, item.id, item.r)
 				}
 			}
 		}

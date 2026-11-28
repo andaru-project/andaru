@@ -40,6 +40,11 @@ const (
 // pkiKinds maps the PKI collections' path names to their collections.
 var pkiKinds = map[string]string{"cas": "pki.cas", "certificates": "pki.certificates", "tls-crypt-keys": "pki.tlsCryptKeys"}
 
+type pendingRenewal struct {
+	id string
+	r  renewal
+}
+
 // certSync keeps the certificates the live generation's services name in place, as the saved head holds them now:
 // on startup, after each activation or rollback, and when a certificate is renewed or replaced. It stages them for
 // andaru realize cert-sync, which opens no database.
@@ -49,10 +54,12 @@ type certSync struct {
 	catalog    *addon.Catalog
 	bindings   func(context.Context, config.Version) ([]config.CertificateConsumer, map[string]config.CertificateMaterial, error)
 	realize    func(ctx context.Context, file string) error
+	events     *bus.Bus
 
-	mu   sync.Mutex
-	last string // the live generation and payload last placed, hashed, so an unchanged sync spawns nothing
-	wake chan struct{}
+	mu              sync.Mutex
+	last            string // the live generation and payload last placed, hashed, so an unchanged sync spawns nothing
+	pendingRenewals []pendingRenewal
+	wake            chan struct{}
 }
 
 func newCertSync(stateDir, runtimeDir string, catalog *addon.Catalog,
@@ -71,6 +78,22 @@ func (c *certSync) nudge() {
 	case c.wake <- struct{}{}:
 	default:
 	}
+}
+
+// invalidate clears the cached placement hash before nudging, so even a failed activation that restored the
+// previous generation's stale certificate files without changing Pointers.Live still re-syncs renewed certs.
+func (c *certSync) invalidate() {
+	c.mu.Lock()
+	c.last = ""
+	c.mu.Unlock()
+	c.nudge()
+}
+
+// enqueueRenewal queues a certificate/renewed bus event to be published only after cert-sync succeeds on disk.
+func (c *certSync) enqueueRenewal(id string, r renewal) {
+	c.mu.Lock()
+	c.pendingRenewals = append(c.pendingRenewals, pendingRenewal{id: id, r: r})
+	c.mu.Unlock()
 }
 
 // run syncs on each nudge, and again after a failure.
@@ -115,6 +138,7 @@ func (c *certSync) sync(ctx context.Context) error {
 	// The generation is part of the key: an activation or rollback places its own copies, which must be replaced.
 	sum := sha256.Sum256(append([]byte(fmt.Sprintf("%d\x00", live)), raw...))
 	if hex.EncodeToString(sum[:]) == c.last {
+		c.drainRenewalsLocked()
 		return nil
 	}
 	f, err := os.CreateTemp(c.runtimeDir, certSyncTempGlob)
@@ -139,7 +163,19 @@ func (c *certSync) sync(ctx context.Context) error {
 		return err
 	}
 	c.last = hex.EncodeToString(sum[:])
+	c.drainRenewalsLocked()
 	return nil
+}
+
+func (c *certSync) drainRenewalsLocked() {
+	if len(c.pendingRenewals) == 0 {
+		return
+	}
+	queued := c.pendingRenewals
+	c.pendingRenewals = nil
+	for _, item := range queued {
+		publishCertificateRenewed(c.events, item.id, item.r)
+	}
 }
 
 // payload is what the live generation's services name: management.certificate and the certificate-reference

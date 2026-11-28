@@ -31,8 +31,8 @@ type Changes struct {
 	Operations           []Operation `json:"operations"`
 	single               bool
 	wire                 any
-	// assigned is the ID a single create takes instead of a fresh one: an engine route that allocated it beforehand.
-	assigned string
+	// assigned maps create-operation indices to pre-allocated IDs (used by engine routes that audit before saving).
+	assigned map[int]string
 }
 type Current struct {
 	Kind       string          `json:"kind"`
@@ -106,11 +106,26 @@ func ObjectCreateWithID(collection, id string, body []byte) (Changes, error) {
 	if e != nil {
 		return c, e
 	}
-	if prefix, _, _ := strings.Cut(id, "_"); prefix != idPrefixes[collection] || len(id) != len(prefix)+37 {
-		return c, fault("INVALID_REQUEST", "", "Invalid object ID.")
+	if err := c.AssignID(0, id); err != nil {
+		return c, err
 	}
-	c.assigned = id
 	return c, nil
+}
+
+// AssignID binds a pre-allocated ID to the create operation at opIndex so audited creates use the exact ID recorded in audit.
+func (c *Changes) AssignID(opIndex int, id string) error {
+	if opIndex < 0 || opIndex >= len(c.Operations) || c.Operations[opIndex].Op != "create" {
+		return fault("INVALID_REQUEST", "", "AssignID requires a create operation.")
+	}
+	collection := c.Operations[opIndex].Collection
+	if prefix, _, _ := strings.Cut(id, "_"); prefix != idPrefixes[collection] || len(id) != len(prefix)+37 {
+		return fault("INVALID_REQUEST", "", "Invalid object ID.")
+	}
+	if c.assigned == nil {
+		c.assigned = map[int]string{}
+	}
+	c.assigned[opIndex] = id
+	return nil
 }
 
 // Before places the single created rule of c ahead of the rule id.
@@ -511,11 +526,12 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 			if e != nil {
 				return empty, fault("STORE_UNAVAILABLE", "", "Identity allocation failed.")
 			}
-			if input.assigned != "" {
-				if _, exists := before[objectKey{op.Collection, input.assigned}]; exists {
-					return empty, fault("VALIDATION_FAILED", input.path(i, "/id", true), "Object already exists.")
+			if assigned := input.assigned[i]; assigned != "" {
+				if _, exists := before[objectKey{op.Collection, assigned}]; exists {
+					pick(fault("VALIDATION_FAILED", input.path(i, "/id", true), "Object already exists."), i)
+					continue
 				}
-				id = input.assigned
+				id = assigned
 			}
 			keys[i] = objectKey{op.Collection, id}
 			value["id"] = id
