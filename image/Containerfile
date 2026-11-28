@@ -41,7 +41,7 @@ LABEL org.opencontainers.image.title="Andaru" \
 # stays too: its os-release carries the Fedora CoreOS build and stream (OSTREE_VERSION, RELEASE_TYPE) the ISO build reads.
 RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
     dnf -y versionlock add $(rpm -qa --qf '%{NAME}\n' | grep -E '^(systemd|grub2|shim|dracut|kernel|fedora-release)') && \
-    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn wireguard-tools qemu-guest-agent traceroute ethtool man-db && \
+    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn wireguard-tools strongswan qemu-guest-agent traceroute ethtool man-db && \
     dnf -y remove moby-engine containerd && \
     dnf clean all && \
     rm /etc/dnf/versionlock.toml && \
@@ -58,6 +58,7 @@ COPY packaging/systemd/andaru-*.service packaging/systemd/andaru-*.path packagin
 COPY packaging/systemd/kea-dhcp4.service.d/ /usr/lib/systemd/system/kea-dhcp4.service.d/
 COPY packaging/systemd/kea-dhcp6.service.d/ /usr/lib/systemd/system/kea-dhcp6.service.d/
 COPY packaging/systemd/unbound.service.d/ /usr/lib/systemd/system/unbound.service.d/
+COPY packaging/systemd/strongswan.service.d/ /usr/lib/systemd/system/strongswan.service.d/
 COPY packaging/systemd/networkd.conf.d/ /usr/lib/systemd/networkd.conf.d/
 COPY packaging/iproute2/andaru.conf /usr/share/iproute2/rt_protos.d/andaru.conf
 COPY packaging/tmpfiles.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
@@ -65,6 +66,7 @@ COPY packaging/sysusers.d/andaru.conf /usr/lib/sysusers.d/andaru.conf
 COPY packaging/sysctl.d/50-andaru-proxy-arp.conf /usr/lib/sysctl.d/50-andaru-proxy-arp.conf
 COPY packaging/kea/andaru-lease-event /usr/share/kea/scripts/andaru-lease-event
 COPY packaging/unbound/andaru.conf /etc/unbound/conf.d/andaru.conf
+COPY packaging/strongswan/50-andaru.conf /etc/strongswan/strongswan.d/50-andaru.conf
 COPY image/files/ /
 COPY ${COSIGN_PUB} /etc/pki/containers/andaru.pub
 # Nightlies are signed with their own key, which the policy trusts only for the andaru-nightly repository.
@@ -78,7 +80,7 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
     systemctl enable systemd-networkd.service andaru-engine.service andaru-outbound.service andaru-network-boot.service \
         andaru-factory-reset.service andaru-install-cleanup.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer \
         andaru-update-check.timer kea-dhcp4.service kea-dhcp6.service unbound.service && \
-    systemctl disable sshd.service zincati.service andaru-web.service && \
+    systemctl disable sshd.service zincati.service andaru-web.service strongswan.service && \
     # Masked, not disabled: enabling systemd-networkd, as presets do on first boot, enables wait-online with it. Every
     # link Andaru writes is RequiredForOnline=no, so it would only wait out its timeout on every boot.
     # unbound-keygen fails on this base and only makes TLS keys for remote control, which uses a Unix socket here.
