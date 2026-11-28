@@ -200,6 +200,7 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 		// Nor does it hold private keys: the web interface serves its bootstrap certificate, and add-ons lose the
 		// certificates they named, until the certificates are set up again.
 		delete(d, "pki")
+		delete(d, "acme") // its orders name the certificates and accounts the copy does not hold
 		if raw, ok := d["management"]; ok {
 			var m map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &m); err != nil {

@@ -13,6 +13,8 @@ andaru realize [OPTIONS] addon\-stage|addon\-unstage SLUG
 andaru realize [OPTIONS] addon\-ctl start|stop|restart SLUG
 andaru realize [OPTIONS] addon\-bus\-tokens|cert\-sync PATH
 andaru realize [OPTIONS] addon\-log SLUG NAME LINES PATH
+andaru realize [OPTIONS] acme\-http01\-open IFACE...
+andaru realize [OPTIONS] acme\-http01\-close
 andaru realize [OPTIONS] update\-check|update\-stage
 andaru realize [OPTIONS] update\-rollback|update\-reboot
 andaru realize [OPTIONS] set\-hostname NAME
@@ -37,6 +39,8 @@ Privileged host steps. The engine runs them in transient systemd units, and Anda
   cert\-sync F          Place the certificates in file F where their services
                        read them, and reload the web server; F is removed
   addon\-log S N L F    Read bounded tail of file log N for add\-on S into file F
+  acme\-http01\-open I.. Redirect port 80 on interfaces I to the HTTP\-01 responder
+  acme\-http01\-close    Stop redirecting port 80 to the HTTP\-01 responder
   factory\-reset        Run or resume the factory reset ctl factory\-reset planned
   update\-check         Check for signed appliance image updates and cache status
   update\-stage         Download and stage the next signed appliance image

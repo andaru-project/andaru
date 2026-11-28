@@ -8,7 +8,7 @@ andaru\-outbound \- the service that talks to the outside world for Andaru
 andaru outbound [\-\-bus\-socket PATH] [\-\-cache\-dir PATH]
 .fi
 .SH DESCRIPTION
-Run andaru\-outbound, the unprivileged service that talks to the outside world for the engine: it reads delivery jobs from the event bus and sends them, and fetches the lists of the address aliases fed from a URL or from host names. Its systemd unit runs it as the andaru\-outbound user.
+Run andaru\-outbound, the unprivileged service that talks to the outside world for the engine: it reads delivery jobs from the event bus and sends them, fetches the lists of the address aliases fed from a URL or from host names, and runs ACME orders, answering HTTP\-01 challenges on port 8480 while one is open. Its systemd unit runs it as the andaru\-outbound user.
 .SH OPTIONS
 .nf
 .in 0

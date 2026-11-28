@@ -202,6 +202,8 @@ func TestRealizeUsageErrors(t *testing.T) {
 		{"realize", "activate", "01"}, {"realize", "activate", "abc"}, {"realize", "activate", "1", "extra"},
 		{"realize", "rollback", "3"}, {"realize", "confirm"}, {"realize", "boot", "1"},
 		{"realize", "addons-release-hold", "1"},
+		{"realize", "acme-http01-open"}, {"realize", "acme-http01-open", "bad name"}, {"realize", "acme-http01-open", "../x"},
+		{"realize", "acme-http01-open", "averyveryverylongname"}, {"realize", "acme-http01-close", "ens18"},
 		{"realize", "--state-dir", "relative", "boot"},
 	} {
 		var out, diagnostics bytes.Buffer
@@ -268,6 +270,11 @@ func (f *fakeVerbs) SyncCertificates(_ context.Context, s generation.CertSync) e
 	return f.err
 }
 
+func (f *fakeVerbs) ACMEHTTP01(_ context.Context, ifaces []string) error {
+	f.calls = append(f.calls, strings.TrimSpace("acme-http01 "+strings.Join(ifaces, " ")))
+	return f.err
+}
+
 func (f *fakeVerbs) Fence(_ context.Context, denyAll bool) error {
 	f.calls = append(f.calls, fmt.Sprint("fence ", denyAll))
 	return f.err
@@ -295,6 +302,8 @@ func TestRealizeExitCodes(t *testing.T) {
 		{[]string{"addons-release-hold"}, errors.New("busy"), "addons-release-hold", 1},
 		{[]string{"addon-ctl", "restart", "tailscale"}, nil, "addon-ctl restart tailscale", 0},
 		{[]string{"addon-ctl", "start", "tailscale"}, generation.ErrSafeModeActive, "addon-ctl start tailscale", 1},
+		{[]string{"acme-http01-open", "ens18", "br0.10"}, nil, "acme-http01 ens18 br0.10", 0},
+		{[]string{"acme-http01-close"}, nil, "acme-http01", 0},
 	} {
 		verbs := &fakeVerbs{err: row.err}
 		var diagnostics bytes.Buffer

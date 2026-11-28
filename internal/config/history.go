@@ -541,6 +541,39 @@ func realized(value json.RawMessage) []byte {
 	}
 	delete(d, "notifications")
 	delete(d, "pki") // its certificates are served where they are named, by cert-sync
+	// Of the ACME orders, only an enabled HTTP-01 order's segments are realized: the packet filter redirects port 80
+	// for them, and the engine opens the redirect on the segments the live generation holds.
+	if raw, ok := d["acme"]; ok {
+		delete(d, "acme")
+		var a struct {
+			Orders []struct {
+				ID        string `json:"id"`
+				Enabled   bool   `json:"enabled"`
+				Challenge struct {
+					Type   string `json:"type"`
+					HTTP01 *struct {
+						ListenSegments []string `json:"listenSegments"`
+					} `json:"http01"`
+				} `json:"challenge"`
+			} `json:"orders"`
+		}
+		if json.Unmarshal(raw, &a) != nil {
+			return value
+		}
+		listens := map[string][]string{}
+		for _, o := range a.Orders {
+			if o.Enabled && o.Challenge.Type == "http-01" && o.Challenge.HTTP01 != nil {
+				listens[o.ID] = o.Challenge.HTTP01.ListenSegments
+			}
+		}
+		if len(listens) > 0 {
+			b, err := json.Marshal(listens)
+			if err != nil {
+				return value
+			}
+			d["acmeHttp01"] = b
+		}
+	}
 	// A secret view says when its secret last changed; the secret itself is compared in SameRealization, so a
 	// secret changed and changed back realizes as before.
 	var links []map[string]json.RawMessage

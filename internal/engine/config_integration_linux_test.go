@@ -168,6 +168,9 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/pki/cas/generate": {"post"}, "/api/v1/pki/certificates/generate": {"post"},
 		"/api/v1/pki/certificates/import": {"post"}, "/api/v1/pki/tls-crypt-keys/generate": {"post"},
 		"/api/v1/pki/cas/{id}/pem": {"get", "head"}, "/api/v1/pki/certificates/{id}/pem": {"get", "head"},
+		"/api/v1/config/acme/accounts": {"get", "head", "post"}, "/api/v1/config/acme/accounts/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/acme/orders": {"get", "head", "post"}, "/api/v1/config/acme/orders/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/status/acme": {"get", "head"}, "/api/v1/acme/orders/{id}/renew": {"post"}, "/api/v1/acme/orders/{id}/test-staging": {"post"},
 	}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))

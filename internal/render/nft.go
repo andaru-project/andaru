@@ -15,6 +15,13 @@ import (
 // nftPath labels the packet filter in a generation; it is loaded with nft, never written to /run.
 const nftPath = "nft:inet/andaru"
 
+// acmeMark marks the connections the HTTP-01 redirect took, so only those reach the responder's port.
+const acmeMark = "0x41434d45"
+
+// ACMEHTTP01Prefix starts the filter's comment line naming each enabled HTTP-01 order's interfaces, which the engine
+// opens the redirect on while the order's challenge runs.
+const ACMEHTTP01Prefix = "# acme-http01 "
+
 // setName turns an object ID, which already names its kind, into an nft identifier; nft allows no "-".
 func setName(id string) string { return strings.ReplaceAll(id, "-", "_") }
 
@@ -154,7 +161,17 @@ func (r *renderer) filterChains() {
 			input = append(input, fmt.Sprintf("iifname %q %s saddr @%s tcp dport 22 accept", mgmt, ipKey(fam), set))
 		}
 	}
+	// While an HTTP-01 challenge runs, the engine fills acme_http01_active with its segments' interfaces: port 80 to
+	// the firewall there goes to andaru-outbound's responder. Empty, it redirects nothing.
+	acmeLines, acmeHTTP01 := r.acmeHTTP01()
+	var acmeRedirect []string
+	if len(acmeLines) > 0 {
+		f.set("acme_http01_active", "ifname", "", nil, "")
+		acmeRedirect = []string{"iifname @acme_http01_active fib daddr . iif type local tcp dport 80 ct mark set " + acmeMark + " redirect to :8480"}
+		input = append(input, "iifname @acme_http01_active ct mark "+acmeMark+" tcp dport 8480 accept")
+	}
 	prerouting, boundForward, boundInput := f.portForwards()
+	prerouting = append(acmeRedirect, prerouting...)
 	binat, postrouting := f.oneToOne()
 	prerouting = append(prerouting, binat...)
 	if f.reflection {
@@ -225,10 +242,13 @@ func (r *renderer) filterChains() {
 			fmt.Fprintf(&cards, "# interface %s %s\n", r.name[l.ID], l.PermanentMac)
 		}
 	}
-	script := cards.String() + head + "\tcomment \"sha256:" + hex.EncodeToString(sum[:]) + "\"\n" + body.String() + "}\n"
+	script := cards.String() + acmeHTTP01 + head + "\tcomment \"sha256:" + hex.EncodeToString(sum[:]) + "\"\n" + body.String() + "}\n"
 	nftSources := []string{"/rules", "/aliases", "/nat", "/management"}
 	if hasAddonZones {
 		nftSources = append(nftSources, "/addons")
+	}
+	if len(acmeLines) > 0 {
+		nftSources = append(nftSources, "/acme")
 	}
 	r.file(nftPath, "0644", script, nftSources)
 }
@@ -596,4 +616,28 @@ func serviceMatch(s service, fam family) (string, bool) {
 		return s.Protocol + " type { " + strings.Join(s.Types, ", ") + " }", true
 	}
 	return "", false
+}
+
+// acmeHTTP01 is each enabled HTTP-01 order with the interfaces of its segments, as comment lines.
+func (r *renderer) acmeHTTP01() ([]string, string) {
+	var lines []string
+	for _, o := range r.d.ACME.Orders {
+		if !o.Enabled || o.Challenge.Type != "http-01" || o.Challenge.HTTP01 == nil {
+			continue
+		}
+		var names []string
+		for _, id := range o.Challenge.HTTP01.ListenSegments {
+			for _, s := range r.d.Segments {
+				if s.ID == id && r.usable[s.Link] {
+					names = append(names, r.name[s.Link])
+				}
+			}
+		}
+		slices.Sort(names)
+		lines = append(lines, ACMEHTTP01Prefix+o.ID+" "+strings.Join(slices.Compact(names), " "))
+	}
+	if len(lines) == 0 {
+		return nil, ""
+	}
+	return lines, strings.Join(lines, "\n") + "\n"
 }

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/acme"
 	"github.com/andaru-project/andaru/internal/addon"
 	"github.com/andaru-project/andaru/internal/aliasfeed"
 	"github.com/andaru-project/andaru/internal/audit"
@@ -275,6 +276,18 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	}
 	addonsHandler := newAddonsAPI(catalog, store, stateDir, systemRoot, webOrigins, runner, coordinator)
 	pkiHandler := &pkiAPI{store: store, coordinator: coordinator, events: events, certs: certs}
+	// ACME orders run through andaru-outbound, which has the network; the engine keeps each order's key.
+	acmeOrders := newACMECoordinator(store, stateDir, systemRoot, events, certs, audits, func(ctx context.Context, verb string, args ...string) error {
+		return runner.Realize(ctx, verb, 0, args...)
+	})
+	stopACME, err := events.Subscribe(acme.ResultFilter, acmeOrders.onResult)
+	if err != nil {
+		return fmt.Errorf("follow ACME results: %w", err)
+	}
+	defer stopACME()
+	acmeDone := make(chan struct{})
+	go func() { defer close(acmeDone); acmeOrders.run(lifetime) }()
+	defer func() { cancel(context.Canceled); <-acmeDone }()
 	configuration := newSavedHandlerWithPKI(store, host.ReadLinks, readFacts, applies, backups, pkiHandler)
 	rootAPI := newHandlerWithDeps(handlerDeps{
 		readLinks:        host.ReadLinks,
@@ -289,6 +302,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		aliasesAPI:       aliasesAPI{feeds: feeds},
 		addonsAPI:        addonsHandler,
 		pkiAPI:           pkiHandler,
+		acmeAPI:          &acmeAPI{acme: acmeOrders, audits: audits},
 		stateDir:         stateDir,
 	})
 	if web == nil {

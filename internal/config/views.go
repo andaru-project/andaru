@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/andaru-project/andaru/internal/authz"
 )
@@ -197,6 +198,10 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 			return ObjectView{}, e
 		}
 		v = view
+	case *acmeAccount, *acmeOrder:
+		if v, e = acmeView(x, secrets); e != nil {
+			return ObjectView{}, e
+		}
 	case *addonConfig:
 		view := *x
 		if len(x.Settings) > 0 {
@@ -264,6 +269,14 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 	if err != nil {
 		return SnapshotView{}, err
 	}
+	acmeAccounts, err := viewSlice(s.Config.ACME.Accounts, "acme.accounts", func(a *acmeAccount) string { return a.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
+	acmeOrders, err := viewSlice(s.Config.ACME.Orders, "acme.orders", func(o *acmeOrder) string { return o.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
 	used := map[string]bool{}
 	for _, h := range heldSecrets(&s.Config) {
 		if h.scope == "core" && !h.ref.Unresolved {
@@ -300,6 +313,17 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 			}
 		}
 		if d["pki"], e = json.Marshal(section); e != nil {
+			return SnapshotView{}, e
+		}
+	}
+	if len(acmeAccounts)+len(acmeOrders) > 0 {
+		section := map[string]any{}
+		for name, items := range map[string][]json.RawMessage{"accounts": acmeAccounts, "orders": acmeOrders} {
+			if len(items) > 0 {
+				section[name] = items
+			}
+		}
+		if d["acme"], e = json.Marshal(section); e != nil {
 			return SnapshotView{}, e
 		}
 	}
@@ -343,4 +367,34 @@ func resultView(p preparedChange) (SaveResult, error) {
 		result.Items = append(result.Items, item)
 	}
 	return result, nil
+}
+
+// acmeView is an ACME object with each secret reference shown as its view.
+func acmeView(v any, secrets secretDocument) (map[string]any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	for _, s := range acmeSecrets(v) {
+		if s.ref == nil {
+			continue
+		}
+		view, err := viewSecret(s.ref, secrets)
+		if err != nil {
+			return nil, err
+		}
+		tokens := strings.Split(strings.TrimPrefix(s.path, "/"), "/")
+		parent := m
+		for _, t := range tokens[:len(tokens)-1] {
+			parent, _ = parent[t].(map[string]any)
+		}
+		if parent != nil {
+			parent[tokens[len(tokens)-1]] = view
+		}
+	}
+	return m, nil
 }

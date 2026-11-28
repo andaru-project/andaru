@@ -636,6 +636,10 @@ func TestResumeAtEveryStep(t *testing.T) {
 func TestWipeKeepsMountPoint(t *testing.T) {
 	b := newBox(t)
 	op := b.plan("")
+	// The ACME orders' runtime state goes with the rest: registered accounts and errors of a box being reset.
+	if err := os.MkdirAll(filepath.Join(b.env.StateDir, "acme"), 0o700); err != nil || os.WriteFile(filepath.Join(b.env.StateDir, "acme", "state.json"), []byte(`{}`), 0o600) != nil {
+		t.Fatal("seed the ACME state")
+	}
 	before, _ := os.Stat(b.env.StateDir)
 	if err := wipe(b.env.StateDir, MarkerName, nil); err != nil {
 		t.Fatal(err)

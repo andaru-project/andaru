@@ -1,5 +1,5 @@
 [Unit]
-Description=Andaru outbound service: sends notifications and fetches alias lists for the engine
+Description=Andaru outbound service: sends notifications, fetches alias lists and runs ACME orders for the engine
 After=andaru-engine.service
 Wants=andaru-engine.service
 
