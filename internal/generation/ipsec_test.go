@@ -563,3 +563,20 @@ func TestIPsecRollbackTerminatesRejectedGenerationSA(t *testing.T) {
 		t.Fatalf("rejected generation's SA not terminated on rollback: %q", b.net.argv)
 	}
 }
+
+func TestIPsecUnreadableReplacedConfigEndsEverySA(t *testing.T) {
+	b := newBench(t)
+	b.net.strongswan = true
+	b.net.sas = sasOf(ipsA)
+	conf := "connections {\n\t" + ipsA + " {\n\t\tchildren {\n\t\t\t" + ipsA + " {\n\t\t\t}\n\t\t}\n\t}\n}\n"
+	writeFile(t, b.net.root+ipsecConf, conf)
+	// A rejected generation whose stored swanctl.conf failed to load: its path, but no content to fingerprint.
+	from := []placed{{path: ipsecConf}}
+	to := []placed{{path: ipsecConf, data: []byte(conf)}}
+	if err := b.r.ipsec(t.Context(), from, to); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("swanctl --terminate --ike "+ipsA+" --force --timeout 5") != 1 {
+		t.Fatalf("SA of a connection whose old config is unknown kept: %q", b.net.argv)
+	}
+}

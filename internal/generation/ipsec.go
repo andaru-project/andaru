@@ -273,6 +273,11 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 	if endAll {
 		slog.Warn("end every IPsec SA: the pending terminations are unreadable", "error", err)
 	}
+	// Without the replaced swanctl.conf's content no change is provable, so none is assumed absent.
+	if old, ok := find(from, ipsecConf); ok && old.data == nil {
+		endAll = true
+		slog.Warn("end every IPsec SA: the replaced connections are unreadable")
+	}
 	if _, err := r.Run(ctx, swanctl, "--load-all", "--clear", "--file", ipsecConf, "--noprompt"); err != nil {
 		return fmt.Errorf("load the IPsec connections: %w", err)
 	}
