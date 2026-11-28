@@ -1280,17 +1280,35 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 					}
 				}
 			}
-		} else if i < 0 && key.Collection == "vpn.ipsec" && (tail == "/ifname" || tail == "/xfrmIfId") {
+		} else if i < 0 && key.Collection == "vpn.ipsec" {
 			if existing, ok := index[key].(*ipsecConnection); ok {
 				for candidate, op := range origins {
 					c, ok := index[candidate].(*ipsecConnection)
 					if !ok || candidate.Collection != "vpn.ipsec" {
 						continue
 					}
-					match := (tail == "/ifname" && c.Ifname == existing.Ifname) || (tail == "/xfrmIfId" && c.XFRMIfID == existing.XFRMIfID)
-					if match && (i < 0 || op < i) {
-						i = op
-						path = input.path(op, tail, true)
+					switch {
+					case (tail == "/ifname" && c.Ifname == existing.Ifname) || (tail == "/xfrmIfId" && c.XFRMIfID == existing.XFRMIfID):
+						if i < 0 || op < i {
+							i = op
+							path = input.path(op, tail, true)
+						}
+					case (tail == "/auth/localId" || tail == "/auth/remoteId") &&
+						normalizeSwanIdentity(c.Auth.LocalID) == normalizeSwanIdentity(existing.Auth.LocalID) &&
+						normalizeSwanIdentity(c.Auth.RemoteID) == normalizeSwanIdentity(existing.Auth.RemoteID):
+						if i < 0 || op < i {
+							i = op
+							path = input.path(op, tail, true)
+						}
+					case strings.HasPrefix(tail, "/auth/eapUsers/") && strings.HasSuffix(tail, "/username"):
+						idxStr := strings.TrimSuffix(strings.TrimPrefix(tail, "/auth/eapUsers/"), "/username")
+						if idx, err := strconv.Atoi(idxStr); err == nil && idx >= 0 && idx < len(existing.Auth.EAPUsers) {
+							dupUser := existing.Auth.EAPUsers[idx].Username
+							if j := slices.IndexFunc(c.Auth.EAPUsers, func(u ipsecEAPUser) bool { return u.Username == dupUser }); j >= 0 && (i < 0 || op < i) {
+								i = op
+								path = input.path(op, fmt.Sprintf("/auth/eapUsers/%d/username", j), true)
+							}
+						}
 					}
 				}
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,12 +17,13 @@ import (
 )
 
 const (
-	ipsecDir           = "/run/andaru-ipsec"
-	ipsecConf          = ipsecDir + "/swanctl.conf"
-	ipsecReloadPending = ipsecDir + "/.reload-pending"
-	strongswanUnit     = "strongswan.service"
-	swanctl            = "/usr/bin/swanctl"
-	restorecon         = "/usr/sbin/restorecon"
+	ipsecDir              = "/run/andaru-ipsec"
+	ipsecConf             = ipsecDir + "/swanctl.conf"
+	ipsecReloadPending    = ipsecDir + "/.reload-pending"
+	ipsecTerminatePending = ipsecDir + "/.terminate-pending"
+	strongswanUnit        = "strongswan.service"
+	swanctl               = "/usr/bin/swanctl"
+	restorecon            = "/usr/sbin/restorecon"
 )
 
 // ipsecCredential is a CA, intermediate chain certificate, leaf certificate or certificate key in the directories
@@ -33,13 +35,27 @@ const uuidPattern = `[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 // ipsecConnName is a connection ID, which names its connection, child and IKE SAs in swanctl.conf.
 var ipsecConnName = regexp.MustCompile(`^ips_` + uuidPattern + `$`)
 
+// ipsecSubConnName also matches per-EAP-user connection sections ("<ips_uuid>-eap-<n>").
+var ipsecSubConnName = regexp.MustCompile(`^ips_` + uuidPattern + `(?:-eap-[0-9]+)?$`)
+
 // ValidIPsecConnection says whether name is a connection swanctl.conf may hold.
 func ValidIPsecConnection(name string) bool { return ipsecConnName.MatchString(name) }
+
+// ipsecConnOwner maps either "<ips_uuid>" or "<ips_uuid>-eap-<n>" back to its owning connection ID.
+func ipsecConnOwner(name string) string {
+	if ipsecConnName.MatchString(name) {
+		return name
+	}
+	if i := strings.Index(name, "-eap-"); i > 0 && ipsecSubConnName.MatchString(name) {
+		return name[:i]
+	}
+	return ""
+}
 
 func isIPsecFile(path string) bool { return path == ipsecConf || ipsecCredential.MatchString(path) }
 
 // ipsecConnectionFingerprints returns a per-connection digest covering its swanctl.conf connection, pool and secret
-// blocks plus the contents of any credential files it references, along with each connection's start_action.
+// blocks plus the digests of any credential files it references, along with each connection's start_action.
 func ipsecConnectionFingerprints(files []placed) (digests map[string]string, startActions map[string]string) {
 	digests = map[string]string{}
 	startActions = map[string]string{}
@@ -132,9 +148,7 @@ func ipsecConnectionFingerprints(files []placed) (digests map[string]string, sta
 func ipsecBlockOwner(section, name string) string {
 	switch section {
 	case "connections":
-		if ipsecConnName.MatchString(name) {
-			return name
-		}
+		return ipsecConnOwner(name)
 	case "pools":
 		if i := strings.LastIndexByte(name, '-'); i > 0 && ipsecConnName.MatchString(name[:i]) {
 			return name[:i]
@@ -178,9 +192,9 @@ func (r Realizer) ipsecCredentialDirs(ctx context.Context) error {
 	return nil
 }
 
-// removeIPsecRuntimeFiles wipes swanctl.conf, any reload-pending marker, and credential directories under ipsecDir.
+// removeIPsecRuntimeFiles wipes swanctl.conf, pending markers, and credential directories under ipsecDir.
 func (r Realizer) removeIPsecRuntimeFiles() error {
-	for _, path := range []string{ipsecConf, ipsecReloadPending} {
+	for _, path := range []string{ipsecConf, ipsecReloadPending, ipsecTerminatePending} {
 		if err := os.Remove(r.Root + path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
@@ -193,19 +207,45 @@ func (r Realizer) removeIPsecRuntimeFiles() error {
 	return nil
 }
 
-// cleanupIPsecOnTeardownIfPresent stops strongSwan if it is running and wipes /run/andaru-ipsec files during a
-// factory reset when p.Live is nil (for instance after an interrupted first-ever activation), without touching hosts
-// where Andaru never placed IPsec files.
+// cleanupIPsecOnTeardownIfPresent stops strongSwan (including queued or activating starts) and wipes /run/andaru-ipsec
+// files when Andaru placed IPsec files on disk, without touching hosts where Andaru never ran IPsec.
 func (r Realizer) cleanupIPsecOnTeardownIfPresent(ctx context.Context) error {
 	if _, err := os.Stat(r.Root + ipsecDir); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", strongswanUnit); err == nil {
-		if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", strongswanUnit); err != nil {
-			return fmt.Errorf("stop strongSwan: %w", err)
-		}
+	if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", strongswanUnit); err != nil {
+		return fmt.Errorf("stop strongSwan: %w", err)
 	}
 	return r.removeIPsecRuntimeFiles()
+}
+
+func (r Realizer) readPendingTerminations() []string {
+	raw, err := os.ReadFile(r.Root + ipsecTerminatePending)
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	if json.Unmarshal(raw, &ids) != nil {
+		return nil
+	}
+	return ids
+}
+
+func (r Realizer) writePendingTerminations(ids []string) error {
+	path := r.Root + ipsecTerminatePending
+	if len(ids) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, append(raw, '\n'), 0o600)
 }
 
 // ipsec starts strongSwan on the connections to declares, or reloads them into a running one, and ends the SAs of
@@ -215,7 +255,7 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 	_, had := find(from, ipsecConf)
 	if !want {
 		if !had {
-			return nil
+			return r.cleanupIPsecOnTeardownIfPresent(ctx)
 		}
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", strongswanUnit); err != nil {
 			return fmt.Errorf("stop strongSwan: %w", err)
@@ -231,47 +271,87 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 			return fmt.Errorf("start strongSwan: %w", err)
 		}
 		_ = os.Remove(r.Root + ipsecReloadPending)
+		_ = os.Remove(r.Root + ipsecTerminatePending)
 		return nil
 	}
 	if _, err := r.Run(ctx, swanctl, "--load-all", "--clear", "--file", ipsecConf, "--noprompt"); err != nil {
 		return fmt.Errorf("load the IPsec connections: %w", err)
 	}
-	_ = os.Remove(r.Root + ipsecReloadPending)
 	// --clear unloads a removed connection and updates changed configs for future handshakes, but live SAs stay up
 	// (including on stale xfrmIfId, shifted reqid, or rotated secrets) until they are ended.
+	oldFP, _ := ipsecConnectionFingerprints(from)
+	newFP, newStart := ipsecConnectionFingerprints(to)
+	pendingSet := map[string]bool{}
+	for _, id := range r.readPendingTerminations() {
+		pendingSet[id] = true
+	}
+	for id, oldDigest := range oldFP {
+		if newDigest, kept := newFP[id]; !kept || newDigest != oldDigest {
+			pendingSet[id] = true
+		}
+	}
+	if len(pendingSet) > 0 {
+		if err := r.writePendingTerminations(slices.Sorted(keysOf(pendingSet))); err != nil {
+			return err
+		}
+	}
 	out, err := r.Run(ctx, swanctl, "--list-sas", "--pretty")
 	if err != nil {
-		slog.Warn("list the IPsec SAs", "error", err)
-		return nil
+		return fmt.Errorf("list the IPsec SAs: %w", err)
 	}
 	sas, err := ParseSwanctlSAs(out)
 	if err != nil {
-		slog.Warn("read the IPsec SAs", "error", err)
-		return nil
+		return fmt.Errorf("read the IPsec SAs: %w", err)
 	}
-	oldFP, _ := ipsecConnectionFingerprints(from)
-	newFP, newStart := ipsecConnectionFingerprints(to)
 	var ended []string
 	var reinit []string
+	failedOwners := map[string]bool{}
+	var termErr error
 	for _, sa := range sas {
-		newDigest, kept := newFP[sa.Name]
-		changed := kept && oldFP[sa.Name] != newDigest
-		if (!kept || changed) && !slices.Contains(ended, sa.Name) {
-			ended = append(ended, sa.Name)
-			if _, err := r.Run(ctx, swanctl, "--terminate", "--ike", sa.Name, "--timeout", "5"); err != nil {
-				slog.Warn("end the SAs of a removed or changed IPsec connection", "connection", sa.Name, "error", err)
+		owner := sa.Name
+		connName := sa.ConnName
+		if connName == "" {
+			connName = sa.Name
+		}
+		_, kept := newFP[owner]
+		needsEnd := !kept || pendingSet[owner]
+		if needsEnd && !slices.Contains(ended, connName) {
+			ended = append(ended, connName)
+			if _, err := r.Run(ctx, swanctl, "--terminate", "--ike", connName, "--timeout", "5"); err != nil {
+				failedOwners[owner] = true
+				if termErr == nil {
+					termErr = fmt.Errorf("end the SAs of IPsec connection %s: %w", connName, err)
+				}
+				continue
 			}
-			if changed && newStart[sa.Name] == "start" {
-				reinit = append(reinit, sa.Name)
+			if kept && newStart[owner] == "start" && !slices.Contains(reinit, owner) {
+				reinit = append(reinit, owner)
 			}
 		}
 	}
+	if err := r.writePendingTerminations(slices.Sorted(keysOf(failedOwners))); err != nil && termErr == nil {
+		termErr = err
+	}
+	if termErr != nil {
+		return termErr
+	}
+	_ = os.Remove(r.Root + ipsecReloadPending)
 	for _, id := range reinit {
 		if _, err := r.Run(ctx, swanctl, "--initiate", "--child", id, "--timeout", "5"); err != nil {
 			slog.Warn("re-initiate a changed IPsec connection", "connection", id, "error", err)
 		}
 	}
 	return nil
+}
+
+func keysOf(m map[string]bool) func(func(string) bool) {
+	return func(yield func(string) bool) {
+		for k := range m {
+			if !yield(k) {
+				return
+			}
+		}
+	}
 }
 
 // bootIPsec starts strongSwan behind the boot that placed its files: strongswan.service is ordered after
@@ -294,9 +374,10 @@ type IPsecStatus struct {
 	SAs           []IPsecSA `json:"sas"`
 }
 
-// IPsecSA is one IKE SA; Name is its connection's.
+// IPsecSA is one IKE SA; Name is its owning connection ID and ConnName is the raw swanctl section name.
 type IPsecSA struct {
 	Name           string         `json:"name"`
+	ConnName       string         `json:"-"`
 	UniqueID       string         `json:"uniqueId"`
 	State          string         `json:"state"`
 	LocalHost      string         `json:"localHost"`
@@ -338,7 +419,13 @@ func ReadIPsecStatus(ctx context.Context, run func(ctx context.Context, name str
 			continue
 		}
 		for _, c := range event.kids {
-			status.Connections = append(status.Connections, c.name)
+			owner := ipsecConnOwner(c.name)
+			if owner == "" {
+				owner = c.name
+			}
+			if !slices.Contains(status.Connections, owner) {
+				status.Connections = append(status.Connections, owner)
+			}
 		}
 	}
 	if out, err = run(ctx, swanctl, "--list-sas", "--pretty"); err != nil {
@@ -428,7 +515,11 @@ func ParseSwanctlSAs(data []byte) ([]IPsecSA, error) {
 			continue
 		}
 		for _, ike := range event.kids {
-			sa := IPsecSA{Name: ike.name, UniqueID: ike.values["uniqueid"], State: ike.values["state"], LocalHost: ike.values["local-host"],
+			owner := ipsecConnOwner(ike.name)
+			if owner == "" {
+				owner = ike.name
+			}
+			sa := IPsecSA{Name: owner, ConnName: ike.name, UniqueID: ike.values["uniqueid"], State: ike.values["state"], LocalHost: ike.values["local-host"],
 				RemoteHost: ike.values["remote-host"], EstablishedSec: number(ike.values["established"]), ChildSAs: []IPsecChildSA{}}
 			for _, section := range ike.kids {
 				if section.name != "child-sas" {
@@ -453,8 +544,8 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// ControlIPsec initiates a connection's CHILD_SA, which brings its IKE SA up first, or terminates its IKE SA with its
-// CHILD_SAs. It takes no lock: strongSwan's own state is all it changes.
+// ControlIPsec initiates a connection's CHILD_SA, which brings its IKE SA up first, or terminates its IKE SA(s)
+// (including any per-EAP-user sub-connections) with their CHILD_SAs. It takes no lock: strongSwan's own state is all it changes.
 func ControlIPsec(ctx context.Context, run func(ctx context.Context, name string, args ...string) ([]byte, error), action, name string) error {
 	if !ValidIPsecConnection(name) {
 		return fmt.Errorf("invalid IPsec connection %q", name)
@@ -464,8 +555,32 @@ func ControlIPsec(ctx context.Context, run func(ctx context.Context, name string
 		_, err := run(ctx, swanctl, "--initiate", "--child", name, "--timeout", "15")
 		return err
 	case "terminate":
-		_, err := run(ctx, swanctl, "--terminate", "--ike", name, "--timeout", "15")
-		return err
+		// Terminate any per-EAP-user sub-connection SAs owned by this connection ID as well as exact matches.
+		var targets []string
+		if out, err := run(ctx, swanctl, "--list-sas", "--pretty"); err == nil {
+			if sas, perr := ParseSwanctlSAs(out); perr == nil {
+				for _, sa := range sas {
+					if sa.Name == name {
+						cn := sa.ConnName
+						if cn == "" {
+							cn = sa.Name
+						}
+						if !slices.Contains(targets, cn) {
+							targets = append(targets, cn)
+						}
+					}
+				}
+			}
+		}
+		if len(targets) == 0 {
+			targets = []string{name}
+		}
+		for _, target := range targets {
+			if _, err := run(ctx, swanctl, "--terminate", "--ike", target, "--timeout", "15"); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return fmt.Errorf("unknown IPsec action %q", action)
 }

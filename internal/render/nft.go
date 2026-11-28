@@ -242,13 +242,22 @@ func (r *renderer) filterChains() {
 		}
 	}
 	allPolicyReqids := slices.Sorted(maps.Values(reqids))
+	// Tag decrypted policy-based IPsec packets before port-forward translation/acceptance and user rules so
+	// interface-based uplink matches never apply to policy-based tunnels.
+	if len(allPolicyReqids) > 0 {
+		reqMatch := formatReqidMatch(allPolicyReqids)
+		inTag := "meta ipsec exists ipsec in " + reqMatch + " meta mark set meta mark | " + ipsecPolicyInMark
+		if len(prerouting) > 0 {
+			prerouting = append([]string{inTag}, prerouting...)
+		}
+		input = append(input, inTag)
+	}
 	// A forward's own rule comes before the rules, so no later rule can shadow it.
 	input = append(input, boundInput...)
 	// The clamp comes first: conntrack counts a SYN-ACK as established, and the accept would skip it.
 	forward := slices.Concat(f.clampMSS(), []string{"ct state established,related accept", "ct state invalid drop"})
 	if len(allPolicyReqids) > 0 {
 		reqMatch := formatReqidMatch(allPolicyReqids)
-		input = append(input, "meta ipsec exists ipsec in "+reqMatch+" meta mark set meta mark | "+ipsecPolicyInMark)
 		forward = append(forward,
 			"meta ipsec exists ipsec in "+reqMatch+" meta mark set meta mark | "+ipsecPolicyInMark,
 			"ipsec out "+reqMatch+" meta mark set meta mark | "+ipsecPolicyOutMark,

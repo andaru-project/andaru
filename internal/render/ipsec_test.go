@@ -152,3 +152,48 @@ func TestIPsecCertificateChainSplit(t *testing.T) {
 		t.Fatalf("chain-1: %q", got)
 	}
 }
+
+// Port forwards use policy-aware ingress matching when policy-based IPsec connections exist: WAN forwards exclude
+// decrypted policy-based packets, and forwards naming a policy-based zone match its inbound reqid.
+func TestIPsecPolicyPortForwardIsolation(t *testing.T) {
+	req := strconv.Itoa(ipsecReqid("ips_00000002-0000-4000-8000-000000000002", map[int]bool{}))
+	r := render(t, change(t, fixture(t, "ipsec"), func(d map[string]any) {
+		nat := d["nat"].(map[string]any)
+		nat["portForwards"] = []any{
+			map[string]any{
+				"id":           "pfw_00000001-0000-4000-8000-000000000001",
+				"name":         "wan-https",
+				"enabled":      true,
+				"ingressZones": []any{"zon_00000001-0000-4000-8000-000000000001"},
+				"protocol":     "tcp",
+				"from":         []any{},
+				"to":           map[string]any{"self": true},
+				"ports":        "443",
+				"target":       map[string]any{"address": "192.0.2.10"},
+				"filterRule":   "auto",
+			},
+			map[string]any{
+				"id":           "pfw_00000002-0000-4000-8000-000000000002",
+				"name":         "branch-http",
+				"enabled":      true,
+				"ingressZones": []any{"zon_00000004-0000-4000-8000-000000000004"},
+				"protocol":     "tcp",
+				"from":         []any{},
+				"to":           map[string]any{"self": true},
+				"ports":        "8080",
+				"target":       map[string]any{"address": "192.0.2.20"},
+				"filterRule":   "auto",
+			},
+		}
+	}))
+	script := fileEnding(t, r, nftPath).Content
+	for _, want := range []string{
+		"meta ipsec exists ipsec in reqid " + req + " meta mark set meta mark | " + ipsecPolicyInMark,
+		"meta mark & " + ipsecPolicyInMark + " == 0 iifname @zon_00000001_0000_4000_8000_000000000001",
+		"meta ipsec exists ipsec in reqid " + req + " meta nfproto ipv4 fib daddr . iif type local tcp dport 8080",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("missing %q in:\n%s", want, script)
+		}
+	}
+}

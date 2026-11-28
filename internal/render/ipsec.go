@@ -17,6 +17,13 @@ const IPsecDir = "/run/andaru-ipsec/"
 // IPsecConfig is the swanctl.conf of the enabled IPsec connections.
 const IPsecConfig = IPsecDir + "swanctl.conf"
 
+// Explicit modern IKEv2 and ESP proposal suites emitted whenever a connection omits custom proposals,
+// preventing strongSwan from falling back to its built-in default suite (which includes 3DES and SHA1).
+const (
+	defaultIPsecIKEProposals = "aes256gcm16-prfsha384-ecp384,aes256gcm16-prfsha256-curve25519,aes256-sha256-modp2048"
+	defaultIPsecESPProposals = "aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048"
+)
+
 type ipsecConnection struct {
 	ID              string   `json:"id"`
 	Enabled         bool     `json:"enabled"`
@@ -140,9 +147,11 @@ func (r *renderer) ipsec() {
 			conn = append(conn, "local_addrs = "+c.LocalAddress)
 		}
 		conn = append(conn, "remote_addrs = "+cmp.Or(c.RemoteAddress, "%any"))
+		ikeProposals := defaultIPsecIKEProposals
 		if len(c.Proposals) > 0 {
-			conn = append(conn, "proposals = "+strings.Join(c.Proposals, ","))
+			ikeProposals = strings.Join(c.Proposals, ",")
 		}
+		conn = append(conn, "proposals = "+ikeProposals)
 		if c.DPDDelaySeconds != nil && *c.DPDDelaySeconds > 0 {
 			conn = append(conn, fmt.Sprintf("dpd_delay = %ds", *c.DPDDelaySeconds))
 		}
@@ -165,15 +174,12 @@ func (r *renderer) ipsec() {
 		if c.Auth.LocalType == "cert" {
 			local = append(local, "certs = "+r.ipsecCertificate(c.Auth.LocalCertID, path, credentials))
 		}
-		remote := []string{"auth = " + swanAuth(c.Auth.RemoteType)}
+		remoteBase := []string{"auth = " + swanAuth(c.Auth.RemoteType)}
 		if c.Auth.RemoteID != "" {
-			remote = append(remote, "id = "+quote(c.Auth.RemoteID))
-		}
-		if c.Auth.RemoteType == "eap-mschapv2" {
-			remote = append(remote, "eap_id = %any")
+			remoteBase = append(remoteBase, "id = "+quote(c.Auth.RemoteID))
 		}
 		if c.Auth.RemoteType == "cert" {
-			remote = append(remote, "cacerts = "+r.ipsecCA(c.Auth.CAID, path, credentials))
+			remoteBase = append(remoteBase, "cacerts = "+r.ipsecCA(c.Auth.CAID, path, credentials))
 		}
 		everything := "0.0.0.0/0,::/0"
 		localTS, remoteTS := everything, everything
@@ -186,10 +192,11 @@ func (r *renderer) ipsec() {
 		if c.Mode == "road-warrior" {
 			remoteTS = "dynamic"
 		}
-		child := []string{"local_ts = " + localTS, "remote_ts = " + remoteTS}
+		espProposals := defaultIPsecESPProposals
 		if len(c.ESPProposals) > 0 {
-			child = append(child, "esp_proposals = "+strings.Join(c.ESPProposals, ","))
+			espProposals = strings.Join(c.ESPProposals, ",")
 		}
+		child := []string{"local_ts = " + localTS, "remote_ts = " + remoteTS, "esp_proposals = " + espProposals}
 		if !c.xfrm() {
 			child = append(child, fmt.Sprintf("reqid = %d", ipsecReqid(c.ID, usedReqids)))
 		}
@@ -202,8 +209,24 @@ func (r *renderer) ipsec() {
 			}
 		}
 		child = append(child, "start_action = "+startAction, "dpd_action = "+map[string]string{"trap": "trap", "start": "restart", "none": "clear"}[startAction])
-		conn = append(conn, block("local", local...), block("remote", remote...), block("children", block(c.ID, child...)))
-		connections = append(connections, block(c.ID, conn...))
+		localBlock := block("local", local...)
+		childrenBlock := block("children", block(c.ID, child...))
+		if c.Auth.RemoteType == "eap-mschapv2" && len(c.Auth.EAPUsers) > 0 {
+			// Bind each EAP user explicitly via eap_id so users listed on one connection can never authenticate
+			// into another connection's zone, virtual pool, or XFRM interface.
+			for j, u := range c.Auth.EAPUsers {
+				connName := c.ID
+				if len(c.Auth.EAPUsers) > 1 {
+					connName = fmt.Sprintf("%s-eap-%d", c.ID, j)
+				}
+				remote := append(slices.Clone(remoteBase), "eap_id = "+quote(u.Username))
+				entry := append(slices.Clone(conn), localBlock, block("remote", remote...), childrenBlock)
+				connections = append(connections, block(connName, entry...))
+			}
+		} else {
+			entry := append(slices.Clone(conn), localBlock, block("remote", remoteBase...), childrenBlock)
+			connections = append(connections, block(c.ID, entry...))
+		}
 
 		add := func(name, field string, ref secretRef, ids ...string) {
 			secret = true

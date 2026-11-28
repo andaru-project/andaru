@@ -295,8 +295,13 @@ func TestReadIPsecStatus(t *testing.T) {
 
 func TestControlIPsec(t *testing.T) {
 	var ran []string
+	var sasOut string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
-		ran = append(ran, filepath.Base(name)+" "+strings.Join(args, " "))
+		cmd := filepath.Base(name) + " " + strings.Join(args, " ")
+		ran = append(ran, cmd)
+		if cmd == "swanctl --list-sas --pretty" {
+			return []byte(sasOut), nil
+		}
 		return nil, nil
 	}
 	if err := ControlIPsec(t.Context(), run, "initiate", ipsA); err != nil {
@@ -305,8 +310,25 @@ func TestControlIPsec(t *testing.T) {
 	if err := ControlIPsec(t.Context(), run, "terminate", ipsA); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(ran, []string{"swanctl --initiate --child " + ipsA + " --timeout 15", "swanctl --terminate --ike " + ipsA + " --timeout 15"}) {
+	if !slices.Equal(ran, []string{
+		"swanctl --initiate --child " + ipsA + " --timeout 15",
+		"swanctl --list-sas --pretty",
+		"swanctl --terminate --ike " + ipsA + " --timeout 15",
+	}) {
 		t.Fatalf("%q", ran)
+	}
+	// Multi-user EAP sub-connections ("<id>-eap-0", "<id>-eap-1") are all terminated by owning ID.
+	ran = nil
+	sasOut = sasOf(ipsA+"-eap-0", ipsA+"-eap-1", ipsB)
+	if err := ControlIPsec(t.Context(), run, "terminate", ipsA); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ran, []string{
+		"swanctl --list-sas --pretty",
+		"swanctl --terminate --ike " + ipsA + "-eap-0 --timeout 15",
+		"swanctl --terminate --ike " + ipsA + "-eap-1 --timeout 15",
+	}) {
+		t.Fatalf("eap terminate: %q", ran)
 	}
 	for _, c := range [][2]string{{"initiate", "ips_1"}, {"initiate", "--all"}, {"reload", ipsA}, {"terminate", ipsA + " x"}} {
 		if err := ControlIPsec(t.Context(), run, c[0], c[1]); err == nil {
@@ -318,13 +340,24 @@ func TestControlIPsec(t *testing.T) {
 // cert-sync rewrites a changed IPsec certificate and key while strongSwan runs them, and has charon load them.
 func TestSyncIPsecCertificates(t *testing.T) {
 	root := t.TempDir()
-	running := true
+	state := "active\n"
+	probeErr := error(nil)
+	failReload := false
 	var ran []string
 	r := Realizer{Root: root, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
 		command := filepath.Base(name) + " " + strings.Join(args, " ")
 		ran = append(ran, command)
-		if command == "systemctl is-active --quiet strongswan.service" && !running {
-			return nil, errors.New("inactive")
+		if command == "systemctl is-active strongswan.service" {
+			if probeErr != nil {
+				return nil, probeErr
+			}
+			if strings.TrimSpace(state) != "active" {
+				return []byte(state), errors.New("exit status 3")
+			}
+			return []byte(state), nil
+		}
+		if strings.HasPrefix(command, "swanctl --load-all") && failReload {
+			return nil, errors.New("vici timeout")
 		}
 		return nil, nil
 	}}
@@ -346,24 +379,13 @@ func TestSyncIPsecCertificates(t *testing.T) {
 			t.Fatalf("%s: %v %v", path, info, err)
 		}
 	}
-	// Unchanged, nothing reloads; stopped, nothing is told.
+	// Unchanged, nothing reloads.
 	ran = nil
 	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: files}); err != nil || len(ran) != 0 {
 		t.Fatalf("unchanged: %q %v", ran, err)
 	}
 	// Transient swanctl failure leaves .reload-pending so next retry reloads even without new file changes.
-	failReload := true
-	r.Run = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		command := filepath.Base(name) + " " + strings.Join(args, " ")
-		ran = append(ran, command)
-		if command == "systemctl is-active --quiet strongswan.service" && !running {
-			return nil, errors.New("inactive")
-		}
-		if strings.HasPrefix(command, "swanctl --load-all") && failReload {
-			return nil, errors.New("vici timeout")
-		}
-		return nil, nil
-	}
+	failReload = true
 	retryFiles := maps.Clone(files)
 	retryFiles["x509ca/"+ipsCrt+"-chain-0.pem"] = "CHAIN1\n"
 	retryFiles["x509ca/ca_00000001-0000-4000-8000-000000000001.pem"] = "CA2\n"
@@ -373,7 +395,17 @@ func TestSyncIPsecCertificates(t *testing.T) {
 	if _, err := os.Stat(root + ipsecReloadPending); err != nil {
 		t.Fatalf("reload-pending marker missing: %v", err)
 	}
+	// Probe failure (no confirmed inactivity) returns error and keeps .reload-pending.
 	failReload = false
+	probeErr = errors.New("context deadline exceeded")
+	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: retryFiles}); err == nil {
+		t.Fatal("expected probe error")
+	}
+	if _, err := os.Stat(root + ipsecReloadPending); err != nil {
+		t.Fatalf("reload-pending cleared on probe failure: %v", err)
+	}
+	// Recovery succeeds and clears .reload-pending.
+	probeErr = nil
 	ran = nil
 	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: retryFiles}); err != nil {
 		t.Fatalf("retry failed: %v", err)
@@ -391,12 +423,16 @@ func TestSyncIPsecCertificates(t *testing.T) {
 	if _, err := os.Stat(root + ipsecDir + "/x509ca/" + ipsCrt + "-chain-0.pem"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale chain file not removed: %v", err)
 	}
-	running = false
+	// Confirmed inactivity clears .reload-pending without invoking swanctl.
+	state = "inactive\n"
 	ran = nil
 	changed := maps.Clone(files)
 	changed["private/"+ipsCrt+".key"] = "KEY3\n"
 	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: changed}); err != nil || slices.ContainsFunc(ran, func(c string) bool { return strings.HasPrefix(c, "swanctl") }) {
 		t.Fatalf("stopped: %q %v", ran, err)
+	}
+	if _, err := os.Stat(root + ipsecReloadPending); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reload-pending left after confirmed inactive: %v", err)
 	}
 	for _, bad := range []string{"swanctl.conf", "../x509/" + ipsCrt + ".pem", "private/x.key"} {
 		if err := (CertSync{IPsec: map[string]string{bad: "X"}}).Validate(); err == nil {

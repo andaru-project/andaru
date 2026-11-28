@@ -133,10 +133,11 @@ func swanText(s string, limit int) bool {
 	})
 }
 
-// validIPsecProposal rejects malformed hyphenated proposals and weak or deprecated algorithms
-// (DES, 3DES, Blowfish, CAST, NULL, MD5, SHA1, MODP768/1024/1536, ECP192, NONE).
+// validIPsecProposal rejects malformed hyphenated proposals, the strongSwan "default" keyword (which enables
+// legacy 3DES/SHA1 algorithms), and weak or deprecated algorithms (DES, 3DES, Blowfish, CAST, NULL, MD5, SHA1,
+// MODP768/1024/1536, ECP192, NONE).
 func validIPsecProposal(proposal string) bool {
-	if proposal == "" {
+	if proposal == "" || proposal == "default" {
 		return false
 	}
 	tokens := strings.Split(proposal, "-")
@@ -145,7 +146,7 @@ func validIPsecProposal(proposal string) bool {
 			return false
 		}
 		switch tok {
-		case "des", "3des", "null", "none", "modpnone",
+		case "default", "des", "3des", "null", "none", "modpnone",
 			"md5", "prfmd5", "sha1", "prfsha1",
 			"modp768", "modp1024", "modp1536", "modp1024s160", "modp2048s224", "modp2048s256", "ecp192":
 			return false
@@ -157,6 +158,75 @@ func validIPsecProposal(proposal string) bool {
 		}
 	}
 	return true
+}
+
+// reservedPoolRanges are special-use IPv4/IPv6 ranges that a road-warrior virtual IP pool must never overlap.
+var reservedPoolRanges = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("::/128"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+}
+
+func overlapsReservedPool(p netip.Prefix) bool {
+	if p.Bits() == 0 {
+		return true
+	}
+	for _, r := range reservedPoolRanges {
+		if p.Overlaps(r) {
+			return true
+		}
+	}
+	return false
+}
+// normalizeSwanIdentity maps equivalent strongSwan identity spellings (such as "gw.example.com", "@gw.example.com",
+// "fqdn:gw.example.com", "ipv4:...", "@@user", "email:...", "rfc822:...", "userfqdn:...", "dn:...", "asn1dn:...")
+// onto one canonical key so PSK identity-pair collision detection matches strongSwan's parser.
+func normalizeSwanIdentity(s string) string {
+	if s == "" {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	switch {
+	case strings.HasPrefix(lower, "ipv4:"), strings.HasPrefix(lower, "ipv6:"):
+		rest := s[5:]
+		if a, err := netip.ParseAddr(rest); err == nil {
+			return "ip:" + a.String()
+		}
+		return "ip:" + strings.ToLower(rest)
+	case strings.HasPrefix(lower, "fqdn:"):
+		return "fqdn:" + strings.ToLower(s[5:])
+	case strings.HasPrefix(lower, "email:"):
+		return "rfc822:" + strings.ToLower(s[6:])
+	case strings.HasPrefix(lower, "rfc822:"):
+		return "rfc822:" + strings.ToLower(s[7:])
+	case strings.HasPrefix(lower, "userfqdn:"):
+		return "rfc822:" + strings.ToLower(s[9:])
+	case strings.HasPrefix(lower, "asn1dn:"):
+		return "dn:" + s[7:]
+	case strings.HasPrefix(lower, "dn:"):
+		return "dn:" + s[3:]
+	case strings.HasPrefix(lower, "keyid:"):
+		return "keyid:" + strings.ToLower(s[6:])
+	case strings.HasPrefix(s, "@@"):
+		return "rfc822:" + strings.ToLower(s[2:])
+	case strings.HasPrefix(s, "@"):
+		return "fqdn:" + strings.ToLower(s[1:])
+	}
+	if a, err := netip.ParseAddr(s); err == nil {
+		return "ip:" + a.String()
+	}
+	if strings.ContainsRune(s, '=') {
+		return "dn:" + s
+	}
+	if strings.ContainsRune(s, '@') {
+		return "rfc822:" + lower
+	}
+	return "fqdn:" + lower
 }
 
 func validateIPsec(d *declaration) []FieldError {
@@ -264,6 +334,7 @@ func validateIPsec(d *declaration) []FieldError {
 			for j, s := range list {
 				x, err := netip.ParsePrefix(s)
 				fp := fmt.Sprintf("%s/%s/%d", p, field, j)
+				m := x.Masked()
 				switch {
 				case err != nil || x.Addr().Is4In6() || x.Addr().Zone() != "":
 					bad(fp, "Expected an IPv4 or IPv6 prefix in CIDR notation.")
@@ -271,11 +342,11 @@ func validateIPsec(d *declaration) []FieldError {
 				case host && !validUnicast(x.Addr()):
 					bad(fp, "Expected a unicast IPv4 or IPv6 address with its prefix length.")
 					continue
-				case pool && (x.Bits() == 0 || x.Addr().IsLoopback() || x.Addr().IsMulticast() || x.Addr().IsLinkLocalUnicast() || x.Addr().IsLinkLocalMulticast()):
+				case pool && overlapsReservedPool(m):
 					bad(fp, "Virtual pool must be a routable non-default unicast prefix.")
 					continue
 				}
-				key := x.Masked()
+				key := m
 				if host {
 					key = x
 				}
@@ -323,7 +394,7 @@ func validateIPsec(d *declaration) []FieldError {
 		} else if !psk && a.PSKRef != nil {
 			bad(ap+"/pskRef", "A pre-shared key is used only with psk authentication.")
 		} else if psk && a.LocalID != "" && a.PSKRef != nil {
-			pairKey := a.LocalID + "\x00" + a.RemoteID
+			pairKey := normalizeSwanIdentity(a.LocalID) + "\x00" + normalizeSwanIdentity(a.RemoteID)
 			if prev, exists := pskPairs[pairKey]; exists && prev != a.PSKRef.Secret {
 				field := "/remoteId"
 				if a.RemoteID == "" {

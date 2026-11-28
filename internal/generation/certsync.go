@@ -299,8 +299,14 @@ func (r Realizer) syncIPsecCertificates(ctx context.Context, files map[string]st
 			return fmt.Errorf("cert-sync: %s is not a real directory", dir)
 		}
 	}
-	changed := false
+	pendingPath := r.Root + ipsecReloadPending
+	_, pendingErr := os.Lstat(pendingPath)
+	reloadPending := pendingErr == nil
+
+	// Determine whether any credential or chain file differs before mutating disk so we persist .reload-pending
+	// before the first write/removal (matching syncWebCertificate's crash/failure recovery invariant).
 	syncedCertIDs := map[string]bool{}
+	var toWrite []string
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		if rest, ok := strings.CutPrefix(name, "x509/"); ok && strings.HasSuffix(rest, ".pem") {
 			syncedCertIDs[strings.TrimSuffix(rest, ".pem")] = true
@@ -309,18 +315,11 @@ func (r Realizer) syncIPsecCertificates(ctx context.Context, files map[string]st
 		if strings.HasPrefix(name, "private/") {
 			mode = 0o400
 		}
-		if sameRegularFile(path, []byte(files[name]), mode) {
-			continue
+		if !sameRegularFile(path, []byte(files[name]), mode) {
+			toWrite = append(toWrite, name)
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return err
-		}
-		if err := writeAtomic(path, []byte(files[name]), mode); err != nil {
-			return fmt.Errorf("place IPsec credential %s: %w", name, err)
-		}
-		changed = true
 	}
-	// Remove stale intermediate chain files when a synced certificate's chain shrank.
+	var toRemove []string
 	if len(syncedCertIDs) > 0 {
 		entries, err := os.ReadDir(r.Root + ipsecDir + "/x509ca")
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -332,29 +331,55 @@ func (r Realizer) syncIPsecCertificates(ctx context.Context, files map[string]st
 				certID := name[:idx]
 				rel := "x509ca/" + name
 				if syncedCertIDs[certID] && files[rel] == "" {
-					if err := os.Remove(r.Root + ipsecDir + "/" + rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
-						return err
-					}
-					changed = true
+					toRemove = append(toRemove, rel)
 				}
 			}
 		}
 	}
-	pendingPath := r.Root + ipsecReloadPending
-	_, pendingErr := os.Lstat(pendingPath)
-	reloadPending := pendingErr == nil
-	if !changed && !reloadPending {
+	if len(toWrite) == 0 && len(toRemove) == 0 && !reloadPending {
 		return nil
+	}
+	if err := writeAtomic(pendingPath, []byte("1\n"), 0o600); err != nil {
+		return fmt.Errorf("mark IPsec reload pending: %w", err)
+	}
+	for _, name := range toWrite {
+		path, mode := r.Root+ipsecDir+"/"+name, fs.FileMode(0o644)
+		if strings.HasPrefix(name, "private/") {
+			mode = 0o400
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		if err := writeAtomic(path, []byte(files[name]), mode); err != nil {
+			return fmt.Errorf("place IPsec credential %s: %w", name, err)
+		}
+	}
+	for _, rel := range toRemove {
+		if err := os.Remove(r.Root + ipsecDir + "/" + rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 	if err := r.ipsecCredentialDirs(ctx); err != nil {
 		return err
 	}
-	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", strongswanUnit); err != nil {
-		_ = os.Remove(pendingPath)
-		return nil // a charon that starts later loads them itself
-	}
-	if err := writeAtomic(pendingPath, []byte("1\n"), 0o600); err != nil {
-		return fmt.Errorf("mark IPsec reload pending: %w", err)
+	stateOut, stateErr := r.Run(ctx, "/usr/bin/systemctl", "is-active", strongswanUnit)
+	state := strings.TrimSpace(string(stateOut))
+	switch state {
+	case "inactive", "dead", "deactivating", "failed", "unknown":
+		// Confirmed inactive: charon will load the updated credentials when next started.
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	case "active":
+		if stateErr != nil {
+			return fmt.Errorf("probe strongSwan state: %w", stateErr)
+		}
+	default:
+		if stateErr != nil {
+			return fmt.Errorf("probe strongSwan state: %w", stateErr)
+		}
+		return fmt.Errorf("strongSwan is %q; deferring credential reload", state)
 	}
 	if _, err := r.Run(ctx, swanctl, "--load-all", "--clear", "--file", ipsecConf, "--noprompt"); err != nil {
 		return fmt.Errorf("reload the IPsec credentials: %w", err)

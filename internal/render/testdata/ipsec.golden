@@ -38,6 +38,7 @@ connections {
 		version = 2
 		local_addrs = 203.0.113.2
 		remote_addrs = branch.example.net
+		proposals = aes256gcm16-prfsha384-ecp384,aes256gcm16-prfsha256-curve25519,aes256-sha256-modp2048
 		mobike = no
 		local {
 			auth = pubkey
@@ -53,15 +54,17 @@ connections {
 			ips_00000002-0000-4000-8000-000000000002 {
 				local_ts = 192.0.2.0/24
 				remote_ts = 10.30.0.0/16,fd00:30::/64
+				esp_proposals = aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048
 				reqid = 1084142763
 				start_action = start
 				dpd_action = restart
 			}
 		}
 	}
-	ips_00000003-0000-4000-8000-000000000003 {
+	ips_00000003-0000-4000-8000-000000000003-eap-0 {
 		version = 2
 		remote_addrs = %any
+		proposals = aes256gcm16-prfsha384-ecp384,aes256gcm16-prfsha256-curve25519,aes256-sha256-modp2048
 		dpd_delay = 30s
 		if_id_in = 43
 		if_id_out = 43
@@ -73,12 +76,40 @@ connections {
 		}
 		remote {
 			auth = eap-mschapv2
-			eap_id = %any
+			eap_id = "alice"
 		}
 		children {
 			ips_00000003-0000-4000-8000-000000000003 {
 				local_ts = 0.0.0.0/0,::/0
 				remote_ts = dynamic
+				esp_proposals = aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048
+				start_action = none
+				dpd_action = clear
+			}
+		}
+	}
+	ips_00000003-0000-4000-8000-000000000003-eap-1 {
+		version = 2
+		remote_addrs = %any
+		proposals = aes256gcm16-prfsha384-ecp384,aes256gcm16-prfsha256-curve25519,aes256-sha256-modp2048
+		dpd_delay = 30s
+		if_id_in = 43
+		if_id_out = 43
+		pools = ips_00000003-0000-4000-8000-000000000003-0,ips_00000003-0000-4000-8000-000000000003-1
+		local {
+			auth = pubkey
+			id = "gw.example.com"
+			certs = /run/andaru-ipsec/x509/crt_00000001-0000-4000-8000-000000000001.pem
+		}
+		remote {
+			auth = eap-mschapv2
+			eap_id = "bob"
+		}
+		children {
+			ips_00000003-0000-4000-8000-000000000003 {
+				local_ts = 0.0.0.0/0,::/0
+				remote_ts = dynamic
+				esp_proposals = aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048
 				start_action = none
 				dpd_action = clear
 			}
@@ -141,6 +172,7 @@ connections {
 		version = 2
 		local_addrs = 203.0.113.2
 		remote_addrs = branch.example.net
+		proposals = aes256gcm16-prfsha384-ecp384,aes256gcm16-prfsha256-curve25519,aes256-sha256-modp2048
 		mobike = no
 		local {
 			auth = pubkey
@@ -156,15 +188,17 @@ connections {
 			ips_00000002-0000-4000-8000-000000000002 {
 				local_ts = 192.0.2.0/24
 				remote_ts = 10.30.0.0/16,fd00:30::/64
+				esp_proposals = aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048
 				reqid = 1084142763
 				start_action = start
 				dpd_action = restart
 			}
 		}
 	}
-	ips_00000003-0000-4000-8000-000000000003 {
+	ips_00000003-0000-4000-8000-000000000003-eap-0 {
 		version = 2
 		remote_addrs = %any
+		proposals = aes256gcm16-prfsha384-ecp384,aes256gcm16-prfsha256-curve25519,aes256-sha256-modp2048
 		dpd_delay = 30s
 		if_id_in = 43
 		if_id_out = 43
@@ -176,12 +210,40 @@ connections {
 		}
 		remote {
 			auth = eap-mschapv2
-			eap_id = %any
+			eap_id = "alice"
 		}
 		children {
 			ips_00000003-0000-4000-8000-000000000003 {
 				local_ts = 0.0.0.0/0,::/0
 				remote_ts = dynamic
+				esp_proposals = aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048
+				start_action = none
+				dpd_action = clear
+			}
+		}
+	}
+	ips_00000003-0000-4000-8000-000000000003-eap-1 {
+		version = 2
+		remote_addrs = %any
+		proposals = aes256gcm16-prfsha384-ecp384,aes256gcm16-prfsha256-curve25519,aes256-sha256-modp2048
+		dpd_delay = 30s
+		if_id_in = 43
+		if_id_out = 43
+		pools = ips_00000003-0000-4000-8000-000000000003-0,ips_00000003-0000-4000-8000-000000000003-1
+		local {
+			auth = pubkey
+			id = "gw.example.com"
+			certs = /run/andaru-ipsec/x509/crt_00000001-0000-4000-8000-000000000001.pem
+		}
+		remote {
+			auth = eap-mschapv2
+			eap_id = "bob"
+		}
+		children {
+			ips_00000003-0000-4000-8000-000000000003 {
+				local_ts = 0.0.0.0/0,::/0
+				remote_ts = dynamic
+				esp_proposals = aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048
 				start_action = none
 				dpd_action = clear
 			}

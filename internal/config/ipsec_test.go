@@ -291,15 +291,24 @@ func TestIPsecReferences(t *testing.T) {
 		t.Fatal(faultText(err))
 	}
 	s = p.State
-	issuer, _ := pki.ParseIssuer(ca.CertPEM, ca.KeyPEM)
-	leaf, _ := pki.NewLeaf(pki.LeafRequest{CommonName: "gw.example.com", Usage: "server", KeyAlgorithm: "ecdsa-p256", ValidDays: 30}, issuer)
-	crtID, p, err := pkiCreate(t, &s, "pki.certificates", pkiBody(t, "gw", leaf, map[string]any{"caId": caID, "sans": leaf.Info.SANs, "keyAlgorithm": "ecdsa-p256", "keyRef": keyWrite("pki_gw", leaf.KeyPEM)}), "9")
+	peerCA, err := pki.NewCA(pki.CARequest{CommonName: "IPsec Peer CA", KeyAlgorithm: "ecdsa-p256", ValidDays: 365}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerCAID, p, err := pkiCreate(t, &s, "pki.cas", pkiBody(t, "peer-ca", peerCA, nil), "9")
 	if err != nil {
 		t.Fatal(faultText(err))
 	}
 	s = p.State
-	// A connection, and a route through it by its label, in one batch.
-	auth := `,"localSegment":"` + wanSeg + `","auth":{"localType":"cert","remoteType":"cert","localId":"CN=gw","localCertId":"` + crtID + `","caId":"` + caID + `"}`
+	issuer, _ := pki.ParseIssuer(ca.CertPEM, ca.KeyPEM)
+	leaf, _ := pki.NewLeaf(pki.LeafRequest{CommonName: "gw.example.com", Usage: "server", KeyAlgorithm: "ecdsa-p256", ValidDays: 30}, issuer)
+	crtID, p, err := pkiCreate(t, &s, "pki.certificates", pkiBody(t, "gw", leaf, map[string]any{"caId": caID, "sans": leaf.Info.SANs, "keyAlgorithm": "ecdsa-p256", "keyRef": keyWrite("pki_gw", leaf.KeyPEM)}), "10")
+	if err != nil {
+		t.Fatal(faultText(err))
+	}
+	s = p.State
+	// A connection (using a separate peerCAID referenced ONLY by IPsec), and a route through it by its label, in one batch.
+	auth := `,"localSegment":"` + wanSeg + `","auth":{"localType":"cert","remoteType":"cert","localId":"CN=gw","localCertId":"` + crtID + `","caId":"` + peerCAID + `"}`
 	p = mustRun(t, &s, `{"operations":[`+ipsecCreate("ips", auth)+`,{"op":"create","collection":"routes","value":{"name":"site","destination":"10.40.0.0/16","target":{"kind":"ipsec","id":"@ips"},"enabled":true}}]}`)
 	id := p.Created["ips"]
 	if s.Config.Routes[0].Target.ID != id {
@@ -310,7 +319,7 @@ func TestIPsecReferences(t *testing.T) {
 	}
 	check := func(t *testing.T) {
 		for name, batch := range map[string]string{
-			"zone": del("zones", lanZone), "segment": del("segments", wanSeg), "ca": del("pki.cas", caID),
+			"zone": del("zones", lanZone), "segment": del("segments", wanSeg), "ca": del("pki.cas", peerCAID),
 			"certificate": del("pki.certificates", crtID), "connection": del("vpn.ipsec", id),
 		} {
 			t.Run(name, func(t *testing.T) {
@@ -480,8 +489,8 @@ func TestIPsecSecurityValidation(t *testing.T) {
 			}}},
 		}
 	}
-	// Weak/deprecated IKE & ESP proposals rejected.
-	for _, prop := range []string{"3des-md5-modp1024", "aes128-sha1-modp2048", "blowfish128-sha256-ecp256", "null-sha256", "aes256--ecp256", "aes256-sha256-modp768"} {
+	// Weak/deprecated IKE & ESP proposals (including strongSwan's "default") rejected.
+	for _, prop := range []string{"default", "3des-md5-modp1024", "aes128-sha1-modp2048", "blowfish128-sha256-ecp256", "null-sha256", "aes256--ecp256", "aes256-sha256-modp768"} {
 		d := base()
 		d.VPN.IPsec[0].Proposals = []string{prop}
 		if errs := validateIPsec(d); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/0/proposals/0" {
@@ -500,8 +509,8 @@ func TestIPsecSecurityValidation(t *testing.T) {
 	if errs := validateIPsec(dGood); len(errs) != 0 {
 		t.Fatalf("modern proposals rejected: %+v", errs)
 	}
-	// Unusable virtualPool prefixes rejected.
-	for _, badPool := range []string{"0.0.0.0/0", "::/0", "127.0.0.0/8", "224.0.0.0/4", "fe80::/64"} {
+	// Unusable virtualPool prefixes (including fec0::1/9 -> fe80::/9 and 126.0.0.0/7 overlapping 127.0.0.0/8) rejected.
+	for _, badPool := range []string{"0.0.0.0/0", "::/0", "0.0.0.1/8", "126.0.0.0/7", "127.0.0.0/8", "224.0.0.0/4", "fe80::/64", "fec0::1/9"} {
 		d := base()
 		d.VPN.IPsec[0].Mode = "road-warrior"
 		d.VPN.IPsec[0].RemoteAddress = "%any"
@@ -510,14 +519,16 @@ func TestIPsecSecurityValidation(t *testing.T) {
 			t.Errorf("bad virtualPool %q accepted: %+v", badPool, errs)
 		}
 	}
-	// Cross-connection PSK (localId, remoteId) collision with distinct secrets rejected.
+	// Cross-connection PSK (localId, remoteId) collision with equivalent strongSwan identity spellings rejected.
 	dPSK := base()
 	dup := dPSK.VPN.IPsec[0]
 	dup.ID, dup.Name, dup.Ifname, dup.XFRMIfID = ipsB, "site-b", "ipsec1", 2
+	dup.Auth.LocalID = "@GW.example.com"
+	dup.Auth.RemoteID = "fqdn:peer-a.example.com"
 	dup.Auth.PSKRef = &secretReference{Secret: "P_B"}
 	dPSK.VPN.IPsec = append(dPSK.VPN.IPsec, dup)
 	if errs := validateIPsec(dPSK); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/1/auth/remoteId" {
-		t.Errorf("PSK identity collision accepted: %+v", errs)
+		t.Errorf("equivalent PSK identity collision accepted: %+v", errs)
 	}
 	// Cross-connection EAP username collision rejected.
 	dEAP := base()

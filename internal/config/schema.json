@@ -5443,9 +5443,17 @@
       "type": "string",
       "pattern": "^ca_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
+    "caRef": {
+      "type": "string",
+      "pattern": "^(ca_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
     "certificateID": {
       "type": "string",
       "pattern": "^crt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "certificateRef": {
+      "type": "string",
+      "pattern": "^(crt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
     },
     "tlsCryptKeyID": {
       "type": "string",
@@ -6657,12 +6665,6 @@
           "minLength": 1,
           "maxLength": 255,
           "pattern": "^[^\\s{}\"'#\\\\]+$"
-        },
-        "localCertId": {
-          "$ref": "#/$defs/certificateID"
-        },
-        "caId": {
-          "$ref": "#/$defs/caID"
         }
       },
       "required": [
@@ -6832,6 +6834,12 @@
         {
           "type": "object",
           "properties": {
+            "localCertId": {
+              "$ref": "#/$defs/certificateID"
+            },
+            "caId": {
+              "$ref": "#/$defs/caID"
+            },
             "pskRef": {
               "$ref": "#/$defs/secretRef"
             },
@@ -6901,6 +6909,12 @@
         {
           "type": "object",
           "properties": {
+            "localCertId": {
+              "$ref": "#/$defs/certificateRef"
+            },
+            "caId": {
+              "$ref": "#/$defs/caRef"
+            },
             "pskRef": {
               "oneOf": [
                 {
@@ -6967,6 +6981,12 @@
         {
           "type": "object",
           "properties": {
+            "localCertId": {
+              "$ref": "#/$defs/certificateID"
+            },
+            "caId": {
+              "$ref": "#/$defs/caID"
+            },
             "pskRef": {
               "$ref": "#/$defs/secretView"
             },

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -466,10 +467,11 @@ func TestWireGuardFilterLoads(t *testing.T) {
 func TestIPsecFilterLoads(t *testing.T) {
 	l := newLab(t)
 	l.load(fixture(t, "ipsec"))
+	req := strconv.Itoa(ipsecReqid("ips_00000002-0000-4000-8000-000000000002", map[int]bool{}))
 	for chain, want := range map[string][]string{
-		"input":       {"iifname @uplinks udp dport { 500, 4500 } accept", "meta ipsec exists ipsec in reqid 100", `iifname "ens18" udp dport 500 accept`},
-		"forward":     {"ipsec out reqid 100"},
-		"postrouting": {"ipsec out reqid 100 accept"},
+		"input":       {"iifname @uplinks udp dport { 500, 4500 } accept", "meta ipsec exists ipsec in reqid " + req, `iifname "ens18" udp dport 500 accept`},
+		"forward":     {"ipsec out reqid " + req},
+		"postrouting": {"ipsec out reqid " + req + " accept"},
 	} {
 		out, err := l.run(l.fw, "nft", "list", "chain", "inet", "andaru", chain)
 		for _, line := range want {
