@@ -98,4 +98,34 @@ func TestCertSyncStagesLiveBindings(t *testing.T) {
 	if err := c.sync(context.Background()); err != nil || len(placed) != 3 || asked[len(asked)-1] != "6" {
 		t.Fatalf("activation not followed: %v %d %v", err, len(placed), asked)
 	}
+	if placed[2].ExpectedLive == nil || *placed[2].ExpectedLive == 0 {
+		t.Fatalf("expected ExpectedLive set on payload, got %+v", placed[2])
+	}
+}
+
+func TestCertSyncKeepsWebWhenDeletedInHead(t *testing.T) {
+	stateDir, runtimeDir := t.TempDir(), t.TempDir()
+	dir := generation.Dir(stateDir)
+	id, err := generation.Create(dir, generation.Manifest{SavedVersion: "5"}, map[string][]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"confirmed": id, "lastKnownGood": nil, "pending": nil, "live": id})
+	if err := os.WriteFile(filepath.Join(dir, "pointers.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bindings := func(_ context.Context, _ config.Version) ([]config.CertificateConsumer, map[string]config.CertificateMaterial, error) {
+		return []config.CertificateConsumer{{Kind: "management", CertificateID: "crt_deleted"}}, map[string]config.CertificateMaterial{}, nil
+	}
+	var got generation.CertSync
+	c := newCertSync(stateDir, runtimeDir, nil, bindings, func(_ context.Context, file string) error {
+		b, _ := os.ReadFile(file)
+		return json.Unmarshal(b, &got)
+	})
+	if err := c.sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !got.KeepWeb || got.Web != nil {
+		t.Fatalf("expected KeepWeb=true, Web=nil when cert deleted in head; got %+v", got)
+	}
 }

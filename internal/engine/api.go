@@ -176,7 +176,7 @@ func newHandlerWithDeps(d handlerDeps) http.Handler {
 			addonsAPI.ServeHTTP(w, r)
 			return
 		}
-		if (strings.HasPrefix(r.URL.Path, pkiAPIPrefix+"/") || strings.HasPrefix(r.URL.Path, pkiConfigPrefix) && r.Method == http.MethodDelete) && d.pkiAPI != nil {
+		if strings.HasPrefix(r.URL.Path, pkiAPIPrefix+"/") && d.pkiAPI != nil {
 			d.pkiAPI.ServeHTTP(w, r)
 			return
 		}

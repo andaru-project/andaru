@@ -273,8 +273,8 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		webOrigins = web.Origins
 	}
 	addonsHandler := newAddonsAPI(catalog, store, stateDir, systemRoot, webOrigins, runner, coordinator)
-	configuration := newSavedHandler(store, host.ReadLinks, readFacts, applies, backups)
-	pkiHandler := &pkiAPI{store: store, coordinator: coordinator, events: events, certs: certs, configuration: configuration}
+	pkiHandler := &pkiAPI{store: store, coordinator: coordinator, events: events, certs: certs}
+	configuration := newSavedHandlerWithPKI(store, host.ReadLinks, readFacts, applies, backups, pkiHandler)
 	rootAPI := newHandlerWithDeps(handlerDeps{
 		readLinks:        host.ReadLinks,
 		configuration:    configuration,

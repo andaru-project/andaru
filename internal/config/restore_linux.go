@@ -324,6 +324,11 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 	if err := validateSecrets(secrets, next); err != nil {
 		return empty, preview, boundaryFault(err)
 	}
+	if decoded.secrets != nil && !decoded.ownSecrets {
+		if errs := checkAllPKIKeys(&candidate, secrets); len(errs) > 0 {
+			return empty, preview, &Fault{Code: "VALIDATION_FAILED", Details: errs}
+		}
+	}
 	configBody := current.configBody
 	if decoded.configuration != nil {
 		var err error

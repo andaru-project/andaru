@@ -606,6 +606,8 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 				}
 			} else if ref := keyRefOf(before[key]); ref != nil && op.Op == "replace" {
 				value["keyRef"] = ref // a replace that leaves the key out keeps it: a CA never loses its key by a rename
+			} else if op.Op == "create" && (op.Collection == "pki.certificates" || op.Collection == "pki.tlsCryptKeys") {
+				return empty, fault("VALIDATION_FAILED", input.path(i, "/keyRef", true), "A private key is required.")
 			}
 		}
 		raw, e := json.Marshal(value)
@@ -1094,6 +1096,12 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 		case *segment:
 			return x.Name
 		case *zone:
+			return x.Name
+		case *pkiCA:
+			return x.Name
+		case *pkiCertificate:
+			return x.Name
+		case *tlsCryptKey:
 			return x.Name
 		}
 		return ""

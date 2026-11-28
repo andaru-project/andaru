@@ -169,9 +169,18 @@ func (c *certSync) payload(ctx context.Context) (int, generation.CertSync, error
 			realized[strings.TrimSuffix(rest, ".container")] = true
 		}
 	}
+	liveID := g.ID
+	payload.ExpectedLive = &liveID
 	for _, consumer := range consumers {
 		m, ok := material[consumer.CertificateID]
-		if !ok || m.Unresolved || m.Key == "" {
+		if !ok {
+			if consumer.Kind == "management" {
+				// Certificate deleted in saved head after this live generation was applied: keep the live web cert until Apply.
+				payload.KeepWeb = true
+			}
+			continue
+		}
+		if m.Unresolved || m.Key == "" {
 			continue // with no key there is nothing to serve: management falls back to the bootstrap certificate
 		}
 		switch consumer.Kind {
@@ -209,14 +218,12 @@ func joinPEM(certPEM, chainPEM string) string {
 	return out
 }
 
-// pkiAPI serves the imperative PKI routes, and audits deleting a PKI object through the configuration routes.
+// pkiAPI serves the imperative PKI routes and supplies PKI audit/sync hooks to config routes.
 type pkiAPI struct {
 	store       *config.Store
 	coordinator *securityCoordinator
 	events      *bus.Bus
 	certs       *certSync
-	// configuration is the configuration handler a delete is passed to.
-	configuration http.Handler
 }
 
 type apiFailure struct {
@@ -238,10 +245,6 @@ func invalidField(path, message string) *apiFailure {
 }
 
 func (a *pkiAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, pkiConfigPrefix) && r.Method == http.MethodDelete {
-		a.auditedDelete(w, r)
-		return
-	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, pkiAPIPrefix+"/"), "/")
 	switch {
 	case len(parts) == 2 && parts[1] == "generate" && (parts[0] == "cas" || parts[0] == "certificates" || parts[0] == "tls-crypt-keys"),
@@ -351,13 +354,6 @@ func (a *pkiAPI) create(w http.ResponseWriter, r *http.Request, kind, verb strin
 	}
 	finish(audit.ResultSuccess)
 	if renewed != nil {
-		// Placed before the event, so a subscriber reloading on it reads the new certificate.
-		if a.certs != nil {
-			if err := a.certs.sync(r.Context()); err != nil {
-				slog.Warn("cert-sync after a new certificate", "error", err)
-				a.certs.nudge()
-			}
-		}
 		publishCertificateRenewed(a.events, id, *renewed)
 	}
 	w.Header().Set("Andaru-Saved-Version", string(result.SavedVersion))
@@ -441,6 +437,9 @@ func (a *pkiAPI) generateCA(raw []byte) func(context.Context, string) (map[strin
 			return nil, nil, invalidField("", err.Error()+".")
 		}
 		value := certFields(req.Name, issued.CertPEM, issued.Info)
+		if req.ParentCAID != "" {
+			value["parentCaId"] = req.ParentCAID
+		}
 		value["keyRef"] = keyWrite(id, issued.KeyPEM)
 		return value, nil, nil
 	}
@@ -536,7 +535,7 @@ func (a *pkiAPI) importCertificate(raw []byte) func(context.Context, string) (ma
 			return nil, nil, invalidField("", err.Error()+".") // never the key itself
 		}
 		value := certFields(req.Name, imported.CertPEM, imported.Info)
-		value["sans"], value["keyAlgorithm"], value["keyRef"] = imported.Info.SANs, imported.Info.KeyAlgorithm, keyWrite(id, []byte(req.PrivateKeyPEM))
+		value["sans"], value["keyAlgorithm"], value["keyRef"] = imported.Info.SANs, imported.Info.KeyAlgorithm, keyWrite(id, imported.KeyPEM)
 		if len(imported.ChainPEM) > 0 {
 			value["chainPem"] = string(imported.ChainPEM)
 		}
@@ -606,44 +605,4 @@ func (a *pkiAPI) beginAudit(w http.ResponseWriter, r *http.Request, actor reques
 			slog.Warn("pki: finish audit outcome", "action", action, "target", target, "operationId", opID, "error", err)
 		}
 	}, true
-}
-
-// statusRecorder keeps the status a handler wrote.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (s *statusRecorder) WriteHeader(status int) {
-	s.status = status
-	s.ResponseWriter.WriteHeader(status)
-}
-
-// auditedDelete passes a delete of a PKI object to the configuration routes, audited as certificate.deleted.
-func (a *pkiAPI) auditedDelete(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, pkiConfigPrefix), "/")
-	if len(parts) != 2 || pkiKinds[parts[0]] == "" || parts[1] == "" {
-		a.configuration.ServeHTTP(w, r)
-		return
-	}
-	actor, ok := actorFromRequest(r)
-	if !ok {
-		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
-		return
-	}
-	if !audit.ValidTarget(audit.ActionCertificateDeleted, parts[1]) {
-		a.configuration.ServeHTTP(w, r) // not an ID the store holds: the store answers
-		return
-	}
-	finish, ok := a.beginAudit(w, r, actor, audit.ActionCertificateDeleted, parts[1])
-	if !ok {
-		return
-	}
-	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-	a.configuration.ServeHTTP(recorder, r)
-	if recorder.status >= 300 {
-		finish(audit.ResultFailure)
-		return
-	}
-	finish(audit.ResultSuccess)
 }

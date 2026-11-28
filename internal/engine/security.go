@@ -94,9 +94,9 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.NotificationsManage, "/api/v1/config/notifications/channels/{id}", http.MethodPut, http.MethodDelete)
 	for _, kind := range []string{"cas", "certificates", "tls-crypt-keys"} {
 		add(authz.ConfigurationRead, "/api/v1/config/pki/"+kind, read...)
-		add(authz.ConfigurationWrite, "/api/v1/config/pki/"+kind, http.MethodPost)
+		add(authz.CertificatesManage, "/api/v1/config/pki/"+kind, http.MethodPost)
 		add(authz.ConfigurationRead, "/api/v1/config/pki/"+kind+"/{id}", read...)
-		add(authz.ConfigurationWrite, "/api/v1/config/pki/"+kind+"/{id}", http.MethodPut, http.MethodDelete)
+		add(authz.CertificatesManage, "/api/v1/config/pki/"+kind+"/{id}", http.MethodPut, http.MethodDelete)
 	}
 	add(authz.CertificatesManage, "/api/v1/pki/cas/generate", http.MethodPost)
 	add(authz.CertificatesManage, "/api/v1/pki/certificates/generate", http.MethodPost)

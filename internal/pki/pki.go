@@ -111,6 +111,12 @@ func NewCA(req CARequest, parent *Issuer) (Issued, error) {
 		if !parent.Cert.IsCA {
 			return Issued{}, errors.New("the parent is not a CA")
 		}
+		if parent.Cert.KeyUsage != 0 && parent.Cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return Issued{}, errors.New("the parent CA cannot sign certificates")
+		}
+		if parent.Cert.MaxPathLenZero || parent.Cert.MaxPathLen == 0 {
+			return Issued{}, errors.New("the parent CA cannot sign intermediate CAs")
+		}
 		template.MaxPathLen, template.MaxPathLenZero = 0, true
 	}
 	return issue(template, req.KeyAlgorithm, req.ValidDays, parent)
@@ -145,17 +151,30 @@ func NewLeaf(req LeafRequest, issuer Issuer) (Issued, error) {
 	if len(sans) > 100 {
 		return Issued{}, errors.New("at most 100 subject alternative names")
 	}
+	seenDNS := map[string]bool{}
+	seenIP := map[string]bool{}
 	for _, san := range sans {
 		if a, err := netip.ParseAddr(san); err == nil && a.Zone() == "" {
-			template.IPAddresses = append(template.IPAddresses, net.IP(a.AsSlice()))
+			key := a.Unmap().String()
+			if !seenIP[key] {
+				seenIP[key] = true
+				template.IPAddresses = append(template.IPAddresses, net.IP(a.AsSlice()))
+			}
 		} else if validSAN(san) {
-			template.DNSNames = append(template.DNSNames, strings.ToLower(san))
+			lower := strings.ToLower(san)
+			if !seenDNS[lower] {
+				seenDNS[lower] = true
+				template.DNSNames = append(template.DNSNames, lower)
+			}
 		} else {
 			return Issued{}, fmt.Errorf("subject alternative name %q is neither a DNS name nor an IP address", san)
 		}
 	}
 	if !issuer.Cert.IsCA {
 		return Issued{}, errors.New("the issuer is not a CA")
+	}
+	if issuer.Cert.KeyUsage != 0 && issuer.Cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return Issued{}, errors.New("the issuer CA cannot sign certificates")
 	}
 	return issue(template, req.KeyAlgorithm, req.ValidDays, &issuer)
 }
@@ -175,9 +194,14 @@ func issue(template *x509.Certificate, algorithm string, days int, parent *Issue
 	template.NotAfter = start.AddDate(0, 0, days)
 	signerCert, signerKey := template, crypto.Signer(key)
 	if parent != nil {
+		if !parent.Cert.NotAfter.After(start) {
+			return Issued{}, errors.New("the signing CA has expired")
+		}
 		signerCert, signerKey = parent.Cert, parent.Key
 		// A certificate never outlives the CA that signs it.
-		template.NotAfter = minTime(template.NotAfter, parent.Cert.NotAfter)
+		if parent.Cert.NotAfter.Before(template.NotAfter) {
+			template.NotAfter = parent.Cert.NotAfter
+		}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, signerCert, key.Public(), signerKey)
 	if err != nil {
@@ -193,13 +217,6 @@ func issue(template *x509.Certificate, algorithm string, days int, parent *Issue
 		return Issued{}, err
 	}
 	return Issued{CertPEM: certPEM, KeyPEM: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), Info: info}, nil
-}
-
-func minTime(a, b time.Time) time.Time {
-	if b.Before(a) {
-		return b
-	}
-	return a
 }
 
 func checkName(cn string) error {
@@ -218,6 +235,9 @@ func Certificates(data []byte) ([]*x509.Certificate, error) {
 	var out []*x509.Certificate
 	rest := bytes.TrimSpace(data)
 	for len(rest) > 0 {
+		if len(out) >= 10 {
+			return nil, errors.New("at most 10 certificates per PEM document")
+		}
 		block, next := pem.Decode(rest)
 		// pem.Decode skips text before a block; none is allowed.
 		if block == nil || !bytes.HasPrefix(rest, []byte("-----BEGIN ")) || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
@@ -347,12 +367,13 @@ func ParseIssuer(certPEM, keyPEM []byte) (Issuer, error) {
 // Imported is an external certificate checked and split into its leaf and chain.
 type Imported struct {
 	CertPEM, ChainPEM []byte
+	KeyPEM            []byte
 	Info              Info
 }
 
 // Import checks an external leaf certificate, its optional chain and its private key: every block parses, the key is
-// the leaf's, the leaf is current, and each certificate is signed by the next. Certificates after the first in
-// certPEM are taken as the start of the chain.
+// the leaf's, the leaf is not a CA and is current, and each chain certificate is a current CA that signed the previous
+// certificate. Certificates after the first in certPEM are taken as the start of the chain.
 func Import(certPEM, chainPEM, keyPEM []byte) (Imported, error) {
 	certs, err := Certificates(certPEM)
 	if err != nil {
@@ -373,23 +394,40 @@ func Import(certPEM, chainPEM, keyPEM []byte) (Imported, error) {
 		return Imported{}, err
 	}
 	leaf := certs[0]
+	if leaf.IsCA {
+		return Imported{}, errors.New("expected a leaf certificate, not a CA")
+	}
 	if !Matches(leaf, key) {
 		return Imported{}, errors.New("the private key does not match the certificate")
 	}
-	if now().After(leaf.NotAfter) {
+	currentTime := now()
+	if currentTime.After(leaf.NotAfter) {
 		return Imported{}, errors.New("the certificate has expired")
+	}
+	if leaf.SerialNumber == nil || leaf.SerialNumber.Sign() <= 0 || len(fmt.Sprintf("%x", leaf.SerialNumber)) > 64 {
+		return Imported{}, errors.New("the certificate has an invalid serial number")
 	}
 	for i := 1; i < len(certs); i++ {
 		if !certs[i].IsCA {
 			return Imported{}, fmt.Errorf("chain certificate %d is not a CA", i)
 		}
+		if currentTime.After(certs[i].NotAfter) {
+			return Imported{}, fmt.Errorf("chain certificate %d has expired", i)
+		}
 		if err := certs[i-1].CheckSignatureFrom(certs[i]); err != nil {
 			return Imported{}, fmt.Errorf("chain certificate %d did not sign the certificate before it", i)
 		}
 	}
-	out := Imported{CertPEM: encode(certs[:1])}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return Imported{}, fmt.Errorf("encode private key: %w", err)
+	}
+	out := Imported{
+		CertPEM: Encode(certs[:1]...),
+		KeyPEM:  pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+	}
 	if len(certs) > 1 {
-		out.ChainPEM = encode(certs[1:])
+		out.ChainPEM = Encode(certs[1:]...)
 	}
 	if out.Info, _, err = Inspect(out.CertPEM); err != nil {
 		return Imported{}, err
@@ -398,9 +436,7 @@ func Import(certPEM, chainPEM, keyPEM []byte) (Imported, error) {
 }
 
 // Encode is certs as PEM.
-func Encode(certs ...*x509.Certificate) []byte { return encode(certs) }
-
-func encode(certs []*x509.Certificate) []byte {
+func Encode(certs ...*x509.Certificate) []byte {
 	var b bytes.Buffer
 	for _, c := range certs {
 		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
@@ -430,7 +466,8 @@ func TLSCryptKey() ([]byte, error) {
 
 // ValidTLSCryptKey reports whether key is an OpenVPN 2048-bit static key: 16 lines of 32 hex digits between its markers.
 func ValidTLSCryptKey(key []byte) bool {
-	lines := strings.Split(strings.TrimSpace(string(key)), "\n")
+	normalized := strings.ReplaceAll(string(key), "\r\n", "\n")
+	lines := strings.Split(strings.TrimSpace(normalized), "\n")
 	if len(lines) != 18 || lines[0] != staticKeyBegin || lines[17] != staticKeyEnd {
 		return false
 	}

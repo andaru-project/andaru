@@ -180,8 +180,39 @@ func TestPKIReplaceKeepsKey(t *testing.T) {
 		t.Fatalf("bad tls-crypt key: %s", faultText(err))
 	}
 	raw, _ := json.Marshal(map[string]any{"name": "tc", "keyRef": keyWrite("pki_tc", key)})
-	if _, _, err := pkiCreate(t, &s, "pki.tlsCryptKeys", raw, "10"); err != nil {
+	tckID, p, err := pkiCreate(t, &s, "pki.tlsCryptKeys", raw, "10")
+	if err != nil {
 		t.Fatalf("tls-crypt key: %s", faultText(err))
+	}
+	s = p.State
+	// Replacing tls-crypt key without keyRef keeps its stored key.
+	tckVer := s.Versions[objectKey{"pki.tlsCryptKeys", tckID}].Version
+	c, _ = ObjectChange("replace", "pki.tlsCryptKeys", tckID, &tckVer, []byte(`{"name":"tc-renamed"}`))
+	s = mustSave(t, s, c, "11")
+	if s.Config.PKI.TLSCryptKeys[0].Name != "tc-renamed" || s.Config.PKI.TLSCryptKeys[0].KeyRef.Secret != "pki_tc" {
+		t.Fatalf("tlsCryptKey after rename: %+v", s.Config.PKI.TLSCryptKeys[0])
+	}
+	// Creating tls-crypt key without keyRef is still rejected.
+	if _, _, err := pkiCreate(t, &s, "pki.tlsCryptKeys", []byte(`{"name":"no-key"}`), "12"); !strings.Contains(faultText(err), "key") {
+		t.Fatalf("create tls-crypt without keyRef: %s", faultText(err))
+	}
+	// Replacing a leaf certificate without keyRef keeps its stored key.
+	issuer, _ := pki.ParseIssuer(ca.CertPEM, ca.KeyPEM)
+	leaf, _ := pki.NewLeaf(pki.LeafRequest{CommonName: "web.lan", Usage: "server", KeyAlgorithm: "ecdsa-p256", ValidDays: 30}, issuer)
+	crtID, p, err := pkiCreate(t, &s, "pki.certificates", pkiBody(t, "web", leaf, map[string]any{
+		"caId": caID, "sans": leaf.Info.SANs, "keyAlgorithm": leaf.Info.KeyAlgorithm, "keyRef": keyWrite("pki_leaf", leaf.KeyPEM),
+	}), "12")
+	if err != nil {
+		t.Fatalf("create leaf: %s", faultText(err))
+	}
+	s = p.State
+	crtVer := s.Versions[objectKey{"pki.certificates", crtID}].Version
+	c, _ = ObjectChange("replace", "pki.certificates", crtID, &crtVer, pkiBody(t, "web-renamed", leaf, map[string]any{
+		"caId": caID, "sans": leaf.Info.SANs, "keyAlgorithm": leaf.Info.KeyAlgorithm,
+	}))
+	s = mustSave(t, s, c, "13")
+	if s.Config.PKI.Certificates[0].Name != "web-renamed" || s.Config.PKI.Certificates[0].KeyRef.Secret != "pki_leaf" {
+		t.Fatalf("certificate after rename: %+v", s.Config.PKI.Certificates[0])
 	}
 }
 

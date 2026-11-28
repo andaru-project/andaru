@@ -45,13 +45,19 @@ type certificate struct {
 }
 
 // load reads the override pair when both of its files exist, otherwise the configured one. A pair that does not
-// load leaves the one being served in place.
+// load leaves the one being served in place. If an override file vanishes between the existence check and load
+// (concurrent cert-sync removal), load falls back to the bootstrap pair.
 func (c *certificate) load() error {
+	usingOverride := c.config.TLSCertificateOverride != "" && exists(c.config.TLSCertificateOverride) && exists(c.config.TLSKeyOverride)
 	certPath, keyPath := c.config.TLSCertificate, c.config.TLSKey
-	if c.config.TLSCertificateOverride != "" && exists(c.config.TLSCertificateOverride) && exists(c.config.TLSKeyOverride) {
+	if usingOverride {
 		certPath, keyPath = c.config.TLSCertificateOverride, c.config.TLSKeyOverride
 	}
 	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil && usingOverride && errors.Is(err, os.ErrNotExist) {
+		certPath, keyPath = c.config.TLSCertificate, c.config.TLSKey
+		pair, err = tls.LoadX509KeyPair(certPath, keyPath)
+	}
 	if err != nil {
 		return fmt.Errorf("load TLS certificate %s: %w", certPath, err)
 	}
@@ -83,21 +89,25 @@ func Serve(ctx context.Context, config Config) error {
 	if err != nil {
 		return err
 	}
-	served := &certificate{config: config}
-	if err := served.load(); err != nil {
-		// A managed certificate that does not load must not keep the web interface down: serve the bootstrap one.
-		bootstrap := &certificate{config: config}
-		bootstrap.config.TLSCertificateOverride, bootstrap.config.TLSKeyOverride = "", ""
-		if bootstrap.load() != nil {
-			return errors.New("load configured TLS certificate and key")
-		}
-		slog.Warn("andaru-web: serving the bootstrap certificate", "error", err)
-		served.current.Store(bootstrap.current.Load())
-	}
-	// SIGHUP (systemctl reload) reads the certificate again; open connections keep the one they started with.
+	// Register SIGHUP before startup I/O so an early reload signal never terminates the process.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
+
+	served := &certificate{config: config}
+	if err := served.load(); err != nil {
+		// A managed certificate that does not load must not keep the web interface down: serve the bootstrap one.
+		if config.TLSCertificateOverride == "" {
+			return errors.New("load configured TLS certificate and key")
+		}
+		pair, berr := tls.LoadX509KeyPair(config.TLSCertificate, config.TLSKey)
+		if berr != nil {
+			return errors.New("load configured TLS certificate and key")
+		}
+		slog.Warn("andaru-web: serving the bootstrap certificate", "error", err)
+		served.current.Store(&pair)
+	}
+	// SIGHUP (systemctl reload) reads the certificate again; open connections keep the one they started with.
 	go func() {
 		for {
 			select {

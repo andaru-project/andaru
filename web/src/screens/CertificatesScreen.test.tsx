@@ -84,7 +84,7 @@ describe('CertificatesScreen', () => {
       },
       'DELETE /api/v1/config/pki/certificates/crt_web': (init) => {
         deletedCertHeader = new Headers(init?.headers).get('If-Match');
-        return new Response(null, { status: 204 });
+        return jsonResponse(200, { state: 'saved', savedVersion: '6' });
       },
     });
 

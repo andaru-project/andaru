@@ -49,7 +49,7 @@ func TestReadAddonBusTokensFileValidation(t *testing.T) {
 	}
 
 	if os.Geteuid() != 0 {
-		return
+		t.Skip("requires root")
 	}
 	// Root-only valid & malformed JSON checks in a root-owned 0700 directory.
 	rootDir, err := os.MkdirTemp("/var/tmp", "andaru-tok-")

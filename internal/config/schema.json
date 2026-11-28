@@ -1376,6 +1376,15 @@
         },
         {
           "$ref": "#/$defs/channelWrite"
+        },
+        {
+          "$ref": "#/$defs/pkiCAWrite"
+        },
+        {
+          "$ref": "#/$defs/pkiCertificateWrite"
+        },
+        {
+          "$ref": "#/$defs/tlsCryptKeyWrite"
         }
       ]
     },
@@ -3162,6 +3171,15 @@
         },
         {
           "$ref": "#/$defs/addonView"
+        },
+        {
+          "$ref": "#/$defs/pkiCAView"
+        },
+        {
+          "$ref": "#/$defs/pkiCertificateView"
+        },
+        {
+          "$ref": "#/$defs/tlsCryptKeyView"
         }
       ]
     },
@@ -4926,6 +4944,9 @@
             "id": {
               "$ref": "#/$defs/caID"
             },
+            "parentCaId": {
+              "$ref": "#/$defs/caID"
+            },
             "subject": {
               "type": "string",
               "maxLength": 1024
@@ -5138,10 +5159,7 @@
             "keyRef": {
               "$ref": "#/$defs/secretWrite"
             }
-          },
-          "required": [
-            "keyRef"
-          ]
+          }
         }
       ],
       "unevaluatedProperties": false
@@ -5197,10 +5215,7 @@
             "keyRef": {
               "$ref": "#/$defs/secretWrite"
             }
-          },
-          "required": [
-            "keyRef"
-          ]
+          }
         }
       ],
       "unevaluatedProperties": false

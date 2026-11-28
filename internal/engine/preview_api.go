@@ -22,7 +22,11 @@ type previewResponse struct {
 
 // newSavedHandler serves everything that reads the saved store.
 func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), applies, backups http.Handler) http.Handler {
-	configuration, preview := newConfigurationHandler(store), newPreviewHandler(store, readLinks, readFacts)
+	return newSavedHandlerWithPKI(store, readLinks, readFacts, applies, backups, nil)
+}
+
+func newSavedHandlerWithPKI(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), applies, backups http.Handler, pki *pkiAPI) http.Handler {
+	configuration, preview := newConfigurationHandlerWithPKI(store, pki), newPreviewHandler(store, readLinks, readFacts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isAppliesPath(r.URL.Path) {
 			applies.ServeHTTP(w, r)

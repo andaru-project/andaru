@@ -33,6 +33,7 @@ type pkiCertInfo struct {
 // pkiCA is a CA; one without a key is a trust anchor only, which signs nothing.
 type pkiCA struct {
 	identity
+	ParentCAID string `json:"parentCaId,omitempty"`
 	pkiCertInfo
 	KeyRef *secretReference `json:"keyRef,omitempty"`
 }
@@ -132,6 +133,11 @@ func validatePKI(d *declaration) []FieldError {
 			matches(p, info, ca.pkiCertInfo)
 		}
 	}
+	for i, ca := range d.PKI.CAs {
+		if ca.ParentCAID != "" && (!cas[ca.ParentCAID] || ca.ParentCAID == ca.ID) {
+			bad(fmt.Sprintf("/pki/cas/%d/parentCaId", i), "Expected another certificate authority of this configuration.")
+		}
+	}
 	seen := map[string]bool{}
 	for i, c := range d.PKI.Certificates {
 		p := fmt.Sprintf("/pki/certificates/%d", i)
@@ -165,17 +171,28 @@ func validatePKI(d *declaration) []FieldError {
 		bad("/management/certificate", "Expected a certificate of this configuration.")
 	}
 	for i := range d.Addons {
-		for _, id := range addonCertificateRefs(&d.Addons[i]) {
-			if !seen[id] {
-				for k, v := range d.Addons[i].Settings {
-					if v == id {
-						bad(fmt.Sprintf("/addons/%d/settings/%s", i, escapeJSONPointer(k)), "Expected a certificate of this configuration.")
-					}
-				}
+		for _, k := range slices.Sorted(maps.Keys(d.Addons[i].Settings)) {
+			if id, ok := d.Addons[i].Settings[k].(string); ok && certificateIDPattern.MatchString(id) && !seen[id] {
+				bad(fmt.Sprintf("/addons/%d/settings/%s", i, escapeJSONPointer(k)), "Expected a certificate of this configuration.")
 			}
 		}
 	}
 	return out
+}
+
+// checkAllPKIKeys checks every resolved PKI secret in secrets against its PKI object in d (used on backup restore).
+func checkAllPKIKeys(d *declaration, secrets secretDocument) []FieldError {
+	written := map[objectKey][]byte{}
+	for _, ca := range d.PKI.CAs {
+		written[objectKey{"pki.cas", ca.ID}] = nil
+	}
+	for _, c := range d.PKI.Certificates {
+		written[objectKey{"pki.certificates", c.ID}] = nil
+	}
+	for _, k := range d.PKI.TLSCryptKeys {
+		written[objectKey{"pki.tlsCryptKeys", k.ID}] = nil
+	}
+	return checkPKIKeys(d, secrets, written, nil)
 }
 
 // checkPKIKeys checks each PKI key a batch writes or sets: a CA's or certificate's key is the private key of its

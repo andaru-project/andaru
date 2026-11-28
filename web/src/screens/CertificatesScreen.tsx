@@ -93,7 +93,6 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
   const timeZone = useTimeZone();
   const capabilities = useMemo(() => new Set(session.capabilities), [session.capabilities]);
   const canReadConfig = capabilities.has('configuration.read');
-  const canWriteConfig = capabilities.has('configuration.write');
   const canReadCerts = capabilities.has('certificates.read');
   const canManageCerts = capabilities.has('certificates.manage');
 
@@ -102,10 +101,7 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
   const [actionError, setActionError] = useState('');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
-  const [createCaOpen, setCreateCaOpen] = useState(false);
-  const [generateCertOpen, setGenerateCertOpen] = useState(false);
-  const [importCertOpen, setImportCertOpen] = useState(false);
-  const [generateTlsCryptOpen, setGenerateTlsCryptOpen] = useState(false);
+  const [activeModal, setActiveModal] = useState<'ca' | 'cert' | 'import' | 'tls-crypt' | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -133,7 +129,7 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
 
   const casById = useMemo(() => new Map(cas.map((c) => [c.value.id, c.value])), [cas]);
   const signingCAs = useMemo(
-    () => cas.filter((c) => Boolean(c.value.keyRef && !c.value.keyRef.unresolved)),
+    () => cas.filter((c) => Boolean(c.value.keyRef && !c.value.keyRef.unresolved)).map((c) => c.value),
     [cas],
   );
 
@@ -174,6 +170,9 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
         onSessionLost();
         return;
       }
+      if (error instanceof ApiError && error.status === 412) {
+        void resource.reload();
+      }
       setDeleteError(saveFailure(error, new Map(), 'PKI object'));
     } finally {
       setDeleting(false);
@@ -199,21 +198,21 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
         <Group gap="xs">
           {canManageCerts && activeTab === 'certificates' && (
             <>
-              <Button size="xs" variant="default" onClick={() => setImportCertOpen(true)}>
+              <Button size="xs" variant="default" onClick={() => setActiveModal('import')}>
                 Import PEM
               </Button>
-              <Button size="xs" onClick={() => setGenerateCertOpen(true)}>
+              <Button size="xs" onClick={() => setActiveModal('cert')}>
                 Generate certificate
               </Button>
             </>
           )}
           {canManageCerts && activeTab === 'cas' && (
-            <Button size="xs" onClick={() => setCreateCaOpen(true)}>
+            <Button size="xs" onClick={() => setActiveModal('ca')}>
               Create CA
             </Button>
           )}
           {canManageCerts && activeTab === 'tls-crypt' && (
-            <Button size="xs" onClick={() => setGenerateTlsCryptOpen(true)}>
+            <Button size="xs" onClick={() => setActiveModal('tls-crypt')}>
               Generate TLS-Crypt key
             </Button>
           )}
@@ -315,7 +314,7 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
                                     Download PEM
                                   </Button>
                                 )}
-                                {canWriteConfig && (
+                                {canManageCerts && (
                                   <Button
                                     size="xs"
                                     variant="light"
@@ -403,7 +402,7 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
                                     Download PEM
                                   </Button>
                                 )}
-                                {canWriteConfig && (
+                                {canManageCerts && (
                                   <Button
                                     size="xs"
                                     variant="light"
@@ -456,7 +455,7 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
                               </Badge>
                             </Table.Td>
                             <Table.Td data-label="Actions">
-                              {canWriteConfig && (
+                              {canManageCerts && (
                                 <Button
                                   size="xs"
                                   variant="light"
@@ -482,50 +481,50 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
         )}
       </Loaded>
 
-      {createCaOpen && (
+      {activeModal === 'ca' && (
         <CreateCAModal
           api={api}
-          signingCAs={signingCAs.map((c) => c.value)}
-          onClose={() => setCreateCaOpen(false)}
+          signingCAs={signingCAs}
+          onClose={() => setActiveModal(null)}
           onCreated={(created) => {
-            setCreateCaOpen(false);
+            setActiveModal(null);
             handleCreated(`Created certificate authority "${created.value.name}".`);
           }}
           onSessionLost={onSessionLost}
         />
       )}
 
-      {generateCertOpen && (
+      {activeModal === 'cert' && (
         <GenerateCertModal
           api={api}
-          signingCAs={signingCAs.map((c) => c.value)}
-          onClose={() => setGenerateCertOpen(false)}
+          signingCAs={signingCAs}
+          onClose={() => setActiveModal(null)}
           onCreated={(created) => {
-            setGenerateCertOpen(false);
+            setActiveModal(null);
             handleCreated(`Generated certificate "${created.value.name}".`);
           }}
           onSessionLost={onSessionLost}
         />
       )}
 
-      {importCertOpen && (
+      {activeModal === 'import' && (
         <ImportCertModal
           api={api}
-          onClose={() => setImportCertOpen(false)}
+          onClose={() => setActiveModal(null)}
           onCreated={(created) => {
-            setImportCertOpen(false);
+            setActiveModal(null);
             handleCreated(`Imported certificate "${created.value.name}".`);
           }}
           onSessionLost={onSessionLost}
         />
       )}
 
-      {generateTlsCryptOpen && (
+      {activeModal === 'tls-crypt' && (
         <GenerateTlsCryptModal
           api={api}
-          onClose={() => setGenerateTlsCryptOpen(false)}
+          onClose={() => setActiveModal(null)}
           onCreated={(created) => {
-            setGenerateTlsCryptOpen(false);
+            setActiveModal(null);
             handleCreated(`Generated TLS-Crypt key "${created.value.name}".`);
           }}
           onSessionLost={onSessionLost}
@@ -619,7 +618,9 @@ function CreateCAModal({ api, signingCAs, onClose, onCreated, onSessionLost }: C
       }
       const fields = fieldErrors(error, pkiFieldPattern);
       setErrors(fields);
-      setFailure(saveFailure(error, fields, 'certificate authority'));
+      setFailure(error instanceof ApiError && error.code === 'CA_KEY_UNAVAILABLE'
+        ? error.message
+        : saveFailure(error, fields, 'certificate authority'));
     } finally {
       submitting.current = false;
       setBusy(false);
@@ -768,7 +769,9 @@ function GenerateCertModal({ api, signingCAs, onClose, onCreated, onSessionLost 
       }
       const fields = fieldErrors(error, pkiFieldPattern);
       setErrors(fields);
-      setFailure(saveFailure(error, fields, 'certificate'));
+      setFailure(error instanceof ApiError && error.code === 'CA_KEY_UNAVAILABLE'
+        ? error.message
+        : saveFailure(error, fields, 'certificate'));
     } finally {
       submitting.current = false;
       setBusy(false);
@@ -921,7 +924,9 @@ function ImportCertModal({ api, onClose, onCreated, onSessionLost }: ImportCertM
       }
       const fields = fieldErrors(error, pkiFieldPattern);
       setErrors(fields);
-      setFailure(saveFailure(error, fields, 'certificate'));
+      setFailure(error instanceof ApiError && error.code === 'CA_KEY_UNAVAILABLE'
+        ? error.message
+        : saveFailure(error, fields, 'certificate'));
     } finally {
       submitting.current = false;
       setBusy(false);

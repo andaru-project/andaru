@@ -52,9 +52,9 @@ func TestPKIRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stop()
-	configuration := newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, http.NotFoundHandler(), nil)
-	h := newHandlerWithDeps(handlerDeps{readLinks: host.ReadLinks, configuration: configuration,
-		pkiAPI: &pkiAPI{store: store, coordinator: newSecurityCoordinator(nil, audits, stateDir), events: events, configuration: configuration}})
+	pkiH := &pkiAPI{store: store, coordinator: newSecurityCoordinator(nil, audits, stateDir), events: events}
+	configuration := newSavedHandlerWithPKI(store, host.ReadLinks, host.ReadRealizerFacts, http.NotFoundHandler(), nil, pkiH)
+	h := newHandlerWithDeps(handlerDeps{readLinks: host.ReadLinks, configuration: configuration, pkiAPI: pkiH})
 	call := func(method, path, body, tag string) *httptest.ResponseRecorder {
 		r := rootRequest(method, path)
 		r.Body = io.NopCloser(strings.NewReader(body))
@@ -123,8 +123,25 @@ func TestPKIRoutes(t *testing.T) {
 		t.Fatalf("list: %d %s", w.Code, w.Body)
 	}
 	tag := func(path string) string { return call("GET", path, "", "").Header().Get("ETag") }
+	if w := call("DELETE", "/api/v1/config/pki/cas/"+rootID, "", tag("/api/v1/config/pki/cas/"+rootID)); w.Code != 422 {
+		t.Fatalf("delete root CA with intermediate: %d %s", w.Code, w.Body)
+	}
 	if w := call("DELETE", "/api/v1/config/pki/cas/"+interID, "", tag("/api/v1/config/pki/cas/"+interID)); w.Code != 422 {
 		t.Fatalf("delete referenced CA: %d %s", w.Code, w.Body)
+	}
+	// Replacing a certificate without keyRef keeps its key and emits certificate.renewed + bus event.
+	crtObj := call("GET", "/api/v1/config/pki/certificates/"+crtID, "", "")
+	var crtView struct {
+		Value map[string]any `json:"value"`
+	}
+	if err := json.Unmarshal(crtObj.Body.Bytes(), &crtView); err != nil {
+		t.Fatal(err)
+	}
+	delete(crtView.Value, "keyRef")
+	crtView.Value["name"] = "fw-renamed"
+	renameBody, _ := json.Marshal(crtView.Value)
+	if w := call("PUT", "/api/v1/config/pki/certificates/"+crtID, string(renameBody), crtObj.Header().Get("ETag")); w.Code != 200 {
+		t.Fatalf("PUT certificate without keyRef: %d %s", w.Code, w.Body)
 	}
 	if w := call("DELETE", "/api/v1/config/pki/tls-crypt-keys/"+tckID, "", tag("/api/v1/config/pki/tls-crypt-keys/"+tckID)); w.Code != 200 {
 		t.Fatalf("delete tls-crypt key: %d %s", w.Code, w.Body)
@@ -132,7 +149,7 @@ func TestPKIRoutes(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(renewed) != 2 || renewed[0].Type != "certificate.renewed.v1" {
+	if len(renewed) != 3 || renewed[0].Type != "certificate.renewed.v1" {
 		t.Fatalf("renewed events %+v", renewed)
 	}
 	data, _ := json.Marshal(renewed[1].Data)
@@ -149,8 +166,8 @@ func TestPKIRoutes(t *testing.T) {
 	}
 	for _, want := range []string{
 		"certificate.created " + rootID + " success", "certificate.created " + crtID + " success",
-		"certificate.imported " + importedID + " success", "certificate.deleted " + interID + " failure",
-		"certificate.deleted " + tckID + " success",
+		"certificate.imported " + importedID + " success", "certificate.renewed " + crtID + " success",
+		"certificate.deleted " + interID + " failure", "certificate.deleted " + tckID + " success",
 	} {
 		if seen[want] == 0 {
 			t.Errorf("audit lacks %q: %v", want, seen)

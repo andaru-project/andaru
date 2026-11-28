@@ -18,18 +18,11 @@ interface ManagementPanelProps {
 
 const fieldPattern = /^\/(?:management\/)?(segment|allowedSources|certificate)(?:\/|$)/;
 
-function CertificatesLink({ children }: { children: string }) {
+function SectionLink({ to, children }: { to: string; children: string }) {
   const inRouter = useInRouterContext();
   return inRouter
-    ? <Anchor component={Link} to="/system/certificates" size="sm">{children}</Anchor>
-    : <Anchor href="/system/certificates" size="sm">{children}</Anchor>;
-}
-
-function AliasesLink({ children }: { children: string }) {
-  const inRouter = useInRouterContext();
-  return inRouter
-    ? <Anchor component={Link} to="/firewall/aliases" size="sm">{children}</Anchor>
-    : <Anchor href="/firewall/aliases" size="sm">{children}</Anchor>;
+    ? <Anchor component={Link} to={to} size="sm">{children}</Anchor>
+    : <Anchor href={to} size="sm">{children}</Anchor>;
 }
 
 function isLinkChainEnabled(linkId: string, linksById: Map<string, SavedLink>): boolean {
@@ -65,6 +58,7 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
   const [segmentId, setSegmentId] = useState(initial?.value.segment ?? '');
   const [allowedSources, setAllowedSources] = useState<string[]>(() => Array.from(new Set(initial?.value.allowedSources ?? [])));
   const [certificateId, setCertificateId] = useState(initial?.value.certificate ?? '');
+  const [openedAt] = useState(() => Date.now());
   const [errors, setErrors] = useState(new Map<string, string>());
   const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
@@ -102,6 +96,9 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
   if (certificateId && !certificateOptions.some((o) => o.value === certificateId)) {
     certificateOptions.push({ value: certificateId, label: `${certificateId} (missing)` });
   }
+  const selectedCert = (snapshot.value.pki?.certificates ?? []).find((c) => c.id === certificateId);
+  const selectedCertExpired = Boolean(selectedCert && Number.isFinite(Date.parse(selectedCert.notAfter)) && Date.parse(selectedCert.notAfter) <= openedAt);
+  const selectedCertUnresolved = Boolean(selectedCert?.keyRef?.unresolved);
 
   const selectedSegment = snapshot.value.segments.find((s) => s.id === segmentId);
   const movingSegment = Boolean(initial?.value.segment && segmentId && initial.value.segment !== segmentId);
@@ -253,6 +250,16 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
                 error={errors.get('certificate')}
                 onChange={(value) => setCertificateId(value ?? '')}
               />
+              {selectedCertUnresolved && (
+                <Alert color="orange" role="status" title="Certificate private key is unresolved">
+                  This certificate&apos;s private key was not restored. Applying changes will be refused until the certificate is re-imported or replaced.
+                </Alert>
+              )}
+              {selectedCertExpired && (
+                <Alert color="orange" role="status" title="Selected certificate is expired">
+                  This certificate has passed its validity window. Browsers will show a security warning until it is renewed or replaced.
+                </Alert>
+              )}
               <Text size="xs" c="dimmed">
                 Manage certificates under{' '}
                 <Anchor href="/system/certificates" target="_blank" rel="noopener noreferrer" size="xs">System ▸ Certificates</Anchor>.
@@ -378,7 +385,7 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
                           </Badge>
                         );
                       })}
-                      <AliasesLink>Manage aliases</AliasesLink>
+                      <SectionLink to="/firewall/aliases">Manage aliases</SectionLink>
                     </>
                   )}
                 </Group>
@@ -391,7 +398,7 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
                   ) : (
                     <Text size="sm" className="error-text" ff="monospace">{mgmt.certificate} (missing)</Text>
                   )}
-                  <CertificatesLink>Manage certificates</CertificatesLink>
+                  <SectionLink to="/system/certificates">Manage certificates</SectionLink>
                 </Group>
               </Stack>
             )}
