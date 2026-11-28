@@ -452,4 +452,42 @@ func TestWireGuardReviewRegressions(t *testing.T) {
 	if f := requireFault(t, err, "VALIDATION_FAILED"); len(f.Details) != 1 || f.Details[0].Path != "/listenPort" {
 		t.Fatalf("expected /listenPort collision, got %+v", f)
 	}
+
+	// Swapping two enabled peers' PSK secret bindings changes realization even with the same Secrets map.
+	swapSecrets := map[string]string{"K": "k", "P": "p1", "Q": "p2"}
+	beforeSwap := RealizationInput{
+		Value:   json.RawMessage(`{"links":[],"vpn":{"wireguard":[{"id":"w1","ifname":"wg0","enabled":true,"listenPort":51820,"privateKeyRef":{"secret":"K"},"peers":[{"id":"p1","enabled":true,"publicKey":"a","presharedKeyRef":{"secret":"P"}},{"id":"p2","enabled":true,"publicKey":"b","presharedKeyRef":{"secret":"Q"}}]}]}}`),
+		Secrets: swapSecrets,
+	}
+	afterSwap := RealizationInput{
+		Value:   json.RawMessage(`{"links":[],"vpn":{"wireguard":[{"id":"w1","ifname":"wg0","enabled":true,"listenPort":51820,"privateKeyRef":{"secret":"K"},"peers":[{"id":"p1","enabled":true,"publicKey":"a","presharedKeyRef":{"secret":"Q"}},{"id":"p2","enabled":true,"publicKey":"b","presharedKeyRef":{"secret":"P"}}]}]}}`),
+		Secrets: swapSecrets,
+	}
+	if SameRealization(beforeSwap, afterSwap) {
+		t.Error("swapping two enabled peers' PSK secret bindings must not report SameRealization=true")
+	}
+
+	// Enabled peer with routeAllowedIps=true whose allowedIps covers its literal IP endpoint is refused; routeAllowedIps=false is accepted.
+	loopPeer := wgFixture(t, wgIface(map[string]any{
+		"peers": []any{wgPeer(map[string]any{
+			"endpoint":   "203.0.113.10:51820",
+			"allowedIps": []any{"128.0.0.0/1"},
+		})},
+	}))
+	refusedWith(t, loopPeer, "/vpn/wireguard/0/peers/0/allowedIps/0", "covers the peer's own endpoint")
+	nonLoopPeer := wgFixture(t, wgIface(map[string]any{
+		"peers": []any{wgPeer(map[string]any{
+			"endpoint":        "203.0.113.10:51820",
+			"allowedIps":      []any{"128.0.0.0/1"},
+			"routeAllowedIps": false,
+		})},
+	}))
+	accepted(t, nonLoopPeer)
+
+	// Reordered peer list with invalid PSK on submitted peer 0 (which sorts after peer 1) reports /peers/0/presharedKeyRef.
+	reordered, _ := ObjectChange("replace", "vpn.wireguard", wgA, &vA, []byte(`{"name":"first","ifname":"wg0","enabled":true,"zone":"`+lanZone+`","listenPort":51820,"addresses":["10.200.0.1/24"],"privateKeyRef":{},"peers":[{"id":"`+wgpB+`","name":"second-id-first","enabled":true,"publicKey":"`+wgKey(8)+`","allowedIps":["10.200.0.3/32"],"presharedKeyRef":{"secret":"BAD_PSK","set":"not-a-key","expectedVersion":"0"}},{"id":"`+wgpA+`","name":"first-id-second","enabled":true,"publicKey":"`+wgKey(9)+`","allowedIps":["10.200.0.2/32"]}]}`))
+	_, err = prepareChanges(&s, reordered, "10", fixedTime)
+	if f := requireFault(t, err, "VALIDATION_FAILED"); len(f.Details) != 1 || f.Details[0].Path != "/peers/0/presharedKeyRef" {
+		t.Fatalf("expected /peers/0/presharedKeyRef for submitted index 0, got %+v", f)
+	}
 }

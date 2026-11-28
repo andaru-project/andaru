@@ -83,7 +83,8 @@ func ParseWireGuardDump(data []byte, now time.Time) (WireGuardStatus, error) {
 			if allowed := none(f[4]); allowed != "" {
 				ips = strings.Split(allowed, ",")
 			}
-			online := handshake > 0 && now.Sub(time.Unix(handshake, 0)) <= WireGuardOnline
+			age := now.Sub(time.Unix(handshake, 0))
+			online := handshake > 0 && age >= 0 && age <= WireGuardOnline
 			status.Interfaces[last].Peers = append(status.Interfaces[last].Peers, WireGuardPeerRuntime{PublicKey: f[1], Endpoint: none(f[3]), AllowedIPs: ips,
 				LatestHandshake: handshake, RxBytes: rx, TxBytes: tx, Online: online})
 		default:

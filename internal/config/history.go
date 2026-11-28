@@ -601,10 +601,26 @@ func realized(value json.RawMessage) []byte {
 			return value
 		}
 		vpn.WireGuard = slices.DeleteFunc(vpn.WireGuard, func(w map[string]json.RawMessage) bool { return string(w["enabled"]) != "true" })
+		secretBinding := func(raw json.RawMessage) json.RawMessage {
+			var ref struct {
+				Secret     string `json:"secret"`
+				Unresolved bool   `json:"unresolved,omitempty"`
+			}
+			if json.Unmarshal(raw, &ref) != nil || ref.Secret == "" {
+				return raw
+			}
+			b, err := json.Marshal(ref)
+			if err != nil {
+				return raw
+			}
+			return b
+		}
 		for _, w := range vpn.WireGuard {
 			delete(w, "name")
 			delete(w, "description")
-			delete(w, "privateKeyRef")
+			if ref, has := w["privateKeyRef"]; has {
+				w["privateKeyRef"] = secretBinding(ref)
+			}
 			var peers []map[string]json.RawMessage
 			if json.Unmarshal(w["peers"], &peers) != nil {
 				continue
@@ -613,8 +629,8 @@ func realized(value json.RawMessage) []byte {
 			for _, p := range peers {
 				delete(p, "name")
 				delete(p, "description")
-				if _, has := p["presharedKeyRef"]; has {
-					p["presharedKeyRef"] = json.RawMessage("true") // its value is in Secrets; that it has one is rendered
+				if ref, has := p["presharedKeyRef"]; has {
+					p["presharedKeyRef"] = secretBinding(ref)
 				}
 			}
 			if len(peers) == 0 {

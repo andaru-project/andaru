@@ -75,7 +75,9 @@ func (r *renderer) filterChains() {
 		zones[s.Zone] = append(zones[s.Zone], name)
 		segmentZone[name] = s.Zone
 		l := d.Links[r.index[s.Link]]
-		if s.Addressing.IPv4.Gateway != "" || s.Addressing.IPv4.Mode == "dhcp" || l.Kind == "pppoe" {
+		if s.Addressing.IPv4.Gateway != "" || s.Addressing.IPv4.Mode == "dhcp" ||
+			s.Addressing.IPv6.Gateway != "" || s.Addressing.IPv6.Mode == "dhcpv6" || s.Addressing.IPv6.Mode == "slaac" ||
+			l.Kind == "pppoe" {
 			uplinks = append(uplinks, name)
 		}
 	}

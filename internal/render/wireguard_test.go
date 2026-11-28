@@ -69,4 +69,13 @@ func TestWireGuardListenWithoutUplinks(t *testing.T) {
 	if !strings.Contains(script, "set uplinks { type ifname; }") || !strings.Contains(script, "iifname @uplinks udp dport 51820 accept") {
 		t.Fatalf("listen rule:\n%s", script)
 	}
+	// An IPv6-only uplink (IPv4 none, IPv6 gateway) joins @uplinks for default WireGuard listener rules.
+	v6only := render(t, change(t, fixture(t, "wireguard"), func(d map[string]any) {
+		addr := item(d, "segments", 0)["addressing"].(map[string]any)
+		addr["ipv4"] = map[string]any{"mode": "none"}
+		addr["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"2001:db8:1::2/64"}, "gateway": "2001:db8:1::1"}
+	}))
+	if script := fileEnding(t, v6only, nftPath).Content; !strings.Contains(script, `set uplinks { type ifname; elements = { "ens18" }; }`) {
+		t.Fatalf("ipv6-only uplink missing from @uplinks:\n%s", script)
+	}
 }

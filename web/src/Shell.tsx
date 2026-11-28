@@ -141,6 +141,8 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
   const navigate = useNavigate();
   const [passwordUser, setPasswordUser] = useState<User | null>(null);
   const [accountError, setAccountError] = useState('');
+  // WireGuard client private keys generated in this authenticated session stay strictly in memory (never persisted or sent to the appliance) and are cleared on logout/session loss.
+  const [wgClientPrivateKeys, setWgClientPrivateKeys] = useState<Record<string, string>>({});
 
   const canReadChanges = capabilities.has('configuration.read');
   const loadChanges = useCallback(() => (canReadChanges ? loadChangeState(api) : Promise.resolve(undefined)), [api, canReadChanges]);
@@ -297,7 +299,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     ['/firewall/nat', <NatScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/zones', <ZonesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
-    ['/vpn/wireguard', <WireGuardScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/vpn/wireguard', <WireGuardScreen api={api} session={session} clientPrivateKeys={wgClientPrivateKeys} onClientPrivateKeysChange={setWgClientPrivateKeys} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/diagnostics/traffic-flow', <TrafficFlowScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} api={api} canRename={capabilities.has('configuration.apply')} onSessionLost={onSessionLost} />],

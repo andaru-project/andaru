@@ -76,12 +76,13 @@ describe('WireGuardScreen', () => {
     let exportBody: unknown;
     let deletedIfMatch: string | null = null;
     let currentIface: WireGuardInterface = sampleIface;
+    let currentVersion = '2';
 
     fetchRoutes({
       '/api/v1/config/vpn/wireguard': () => jsonResponse(200, {
         state: 'saved',
         savedVersion: '5',
-        items: [{ version: '2', value: currentIface }],
+        items: [{ version: currentVersion, value: currentIface }],
       }),
       '/api/v1/config/zones': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleZone] }),
       '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
@@ -128,6 +129,7 @@ describe('WireGuardScreen', () => {
       },
       [`PUT /api/v1/config/vpn/wireguard/${sampleIface.id}`]: (init) => {
         updatedPeerBody = JSON.parse(String(init?.body ?? '{}'));
+        currentVersion = '7';
         currentIface = {
           ...sampleIface,
           peers: [
@@ -174,6 +176,9 @@ describe('WireGuardScreen', () => {
       },
       [`DELETE /api/v1/config/vpn/wireguard/${sampleIface.id}`]: (init) => {
         deletedIfMatch = new Headers(init?.headers).get('If-Match');
+        if (deletedIfMatch !== `"${sampleIface.id}.${currentVersion}"`) {
+          return jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'Stale version.', details: [] } });
+        }
         return jsonResponse(200, { state: 'saved', savedVersion: '8' });
       },
     });
@@ -237,11 +242,11 @@ describe('WireGuardScreen', () => {
     expect(within(exportDialog).getByRole('img', { name: 'WireGuard QR code for Phone' })).toBeInTheDocument();
     await user.click(within(exportDialog).getByRole('button', { name: 'Done' }));
 
-    // Delete interface with If-Match.
+    // Delete interface with current If-Match version (7, after the peer PUT).
     await user.click(screen.getByRole('button', { name: 'Delete interface Remote Access' }));
     const deleteDialog = await screen.findByRole('dialog', { name: 'Delete WireGuard interface' });
     await user.click(within(deleteDialog).getByRole('button', { name: 'Delete' }));
-    await waitFor(() => expect(deletedIfMatch).toBe(`"${sampleIface.id}.2"`));
+    await waitFor(() => expect(deletedIfMatch).toBe(`"${sampleIface.id}.7"`));
     expect(onSaved).toHaveBeenCalled();
   });
 

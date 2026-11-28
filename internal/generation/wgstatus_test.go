@@ -48,4 +48,9 @@ func TestParseWireGuardDump(t *testing.T) {
 	if s, err := ReadWireGuardStatus(t.Context(), run, now); err != nil || len(s.Interfaces) != 2 {
 		t.Fatalf("%+v %v", s, err)
 	}
+	// A handshake timestamp in the future (backward clock jump) must not be treated as online.
+	futureDump := "wg0\tPRIVATE0=\tPUB0=\t51820\toff\nwg0\tPEER1=\t(none)\t(none)\t10.200.0.2/32\t1800000100\t0\t0\toff\n"
+	if got, err := ParseWireGuardDump([]byte(futureDump), now); err != nil || got.Interfaces[0].Peers[0].Online {
+		t.Fatalf("future handshake treated as online: %+v %v", got, err)
+	}
 }

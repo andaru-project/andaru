@@ -883,7 +883,7 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 			return empty, rebaseValidation(validationError{{path, "Expected the secret to hold an http or https URL with a host."}}, &d, origins, input)
 		}
 	}
-	if keyErrs := slices.Concat(checkPKIKeys(&d, current.Secrets, writes, changedSecrets), checkWireGuardKeys(&d, current.Secrets, writes, changedSecrets, true)); len(keyErrs) > 0 {
+	if keyErrs := slices.Concat(checkPKIKeys(&d, current.Secrets, writes, changedSecrets), remapWireGuardPeerPaths(checkWireGuardKeys(&d, current.Secrets, writes, changedSecrets, true), &d, writes)); len(keyErrs) > 0 {
 		return empty, rebaseValidation(validationError(keyErrs), &d, origins, input)
 	}
 	if e = validateSecrets(current.Secrets, next); e != nil {

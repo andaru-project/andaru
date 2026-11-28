@@ -21,7 +21,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
-import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
 import { triggerDownload } from '../download';
 import { bytes } from '../format';
@@ -47,6 +47,8 @@ import { Loaded } from './Loaded';
 interface WireGuardScreenProps {
   api: ApiClient;
   session: Session;
+  clientPrivateKeys?: Record<string, string>;
+  onClientPrivateKeysChange?: Dispatch<SetStateAction<Record<string, string>>>;
   onSaved(): void;
   onSessionLost(): void;
 }
@@ -151,7 +153,14 @@ function shortKey(key: string): string {
   return `${key.slice(0, 10)}…${key.slice(-6)}`;
 }
 
-export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGuardScreenProps) {
+export function WireGuardScreen({
+  api,
+  session,
+  clientPrivateKeys: controlledKeys,
+  onClientPrivateKeysChange,
+  onSaved,
+  onSessionLost,
+}: WireGuardScreenProps) {
   const canReadConfig = session.capabilities.includes('configuration.read');
   const canWrite = session.capabilities.includes('configuration.write');
   const canReadStatus = session.capabilities.includes('vpn.read');
@@ -165,8 +174,11 @@ export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGu
   const [deleteTarget, setDeleteTarget] = useState<DeleteWireGuardTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
-  // Client private keys generated in this browser session stay strictly in memory (never sent to the appliance).
-  const [clientPrivateKeys, setClientPrivateKeys] = useState<Record<string, string>>({});
+  const [deleteStale, setDeleteStale] = useState(false);
+  // Fallback local cache when rendered outside Shell (e.g. unit tests); Shell lifts this to authenticated-session memory.
+  const [localKeys, setLocalKeys] = useState<Record<string, string>>({});
+  const clientPrivateKeys = controlledKeys ?? localKeys;
+  const setClientPrivateKeys = onClientPrivateKeysChange ?? setLocalKeys;
 
   const loadConfig = useCallback(async (): Promise<LoadedWireGuardConfig | undefined> => {
     if (!canReadConfig) return undefined;
@@ -245,6 +257,7 @@ export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGu
         return;
       }
       if (error instanceof ApiError && (error.status === 404 || error.status === 412)) {
+        setDeleteStale(true);
         void configResource.reload();
       }
       setDeleteError(saveFailure(error, new Map(), deleteTarget.kind === 'interface' ? 'WireGuard interface' : 'WireGuard peer'));
@@ -401,6 +414,7 @@ export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGu
                                 aria-label={`Delete interface ${wg.name}`}
                                 onClick={() => {
                                   setDeleteError('');
+                                  setDeleteStale(false);
                                   setDeleteTarget({ kind: 'interface', iface: saved });
                                 }}
                               >
@@ -474,12 +488,19 @@ export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGu
                                         <Table.Td data-label="Live status">
                                           {!wg.enabled || !peer.enabled ? (
                                             <Badge size="xs" color="gray" variant="light">Disabled</Badge>
+                                          ) : !statusResource.data ? (
+                                            <Text size="xs" c="dimmed">
+                                              {statusResource.error ? 'Status unavailable' : 'Loading…'}
+                                            </Text>
                                           ) : livePeer && livePeer.applied !== false ? (
                                             <Stack gap={2}>
                                               <Group gap={6} wrap="nowrap">
                                                 <Badge size="xs" color={livePeer.online ? 'green' : 'gray'} variant="light">
                                                   {livePeer.online ? 'Online' : 'Idle'}
                                                 </Badge>
+                                                {statusResource.error && (
+                                                  <Badge size="xs" color="orange" variant="outline">Stale</Badge>
+                                                )}
                                                 <Text size="xs" className="tabular" c="dimmed">
                                                   ↓ {bytes(livePeer.rxBytes)} · ↑ {bytes(livePeer.txBytes)}
                                                 </Text>
@@ -491,7 +512,12 @@ export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGu
                                               </Text>
                                             </Stack>
                                           ) : (
-                                            <Text size="xs" c="dimmed">Not applied</Text>
+                                            <Group gap={6} wrap="nowrap">
+                                              <Text size="xs" c="dimmed">Not applied</Text>
+                                              {statusResource.error && (
+                                                <Badge size="xs" color="orange" variant="outline">Stale</Badge>
+                                              )}
+                                            </Group>
                                           )}
                                         </Table.Td>
                                       )}
@@ -525,6 +551,7 @@ export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGu
                                                   aria-label={`Delete peer ${peer.name}`}
                                                   onClick={() => {
                                                     setDeleteError('');
+                                                    setDeleteStale(false);
                                                     setDeleteTarget({ kind: 'peer', iface: saved, peer });
                                                   }}
                                                 >
@@ -559,17 +586,70 @@ export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGu
             }
             return (
               <Stack gap="md">
-                {items.map((wg) => (
-                  <Card key={wg.ifname} withBorder padding="md">
-                    <Stack gap="xs">
-                      <Group gap="xs">
-                        <Title order={3} size="h4" ff="monospace">{wg.ifname}</Title>
-                        <Text size="xs" c="dimmed">UDP {wg.listenPort}</Text>
-                      </Group>
-                      <Text size="xs" c="dimmed">{wg.peers.filter((p) => p.applied !== false).length} active peers</Text>
-                    </Stack>
-                  </Card>
-                ))}
+                {items.map((wg) => {
+                  const activePeers = wg.peers.filter((p) => p.applied !== false);
+                  return (
+                    <Card key={wg.ifname} withBorder padding="md">
+                      <Stack gap="sm">
+                        <Group gap="xs">
+                          <Title order={3} size="h4" ff="monospace">{wg.ifname}</Title>
+                          <Text size="xs" c="dimmed">UDP {wg.listenPort}</Text>
+                          <Badge size="xs" color="teal" variant="light">
+                            {activePeers.filter((p) => p.online).length}/{activePeers.length} online
+                          </Badge>
+                        </Group>
+                        {activePeers.length === 0 ? (
+                          <Text size="xs" c="dimmed">0 active peers</Text>
+                        ) : (
+                          <ScrollArea>
+                            <Table className="data-table" striped highlightOnHover>
+                              <Table.Thead>
+                                <Table.Tr>
+                                  <Table.Th>Peer</Table.Th>
+                                  <Table.Th>Endpoint</Table.Th>
+                                  <Table.Th>Live status</Table.Th>
+                                </Table.Tr>
+                              </Table.Thead>
+                              <Table.Tbody>
+                                {activePeers.map((peer) => (
+                                  <Table.Tr key={peer.publicKey}>
+                                    <Table.Td data-label="Peer">
+                                      <Text size="sm" fw={500}>{peer.name || shortKey(peer.publicKey)}</Text>
+                                    </Table.Td>
+                                    <Table.Td data-label="Endpoint">
+                                      {peer.endpoint ? (
+                                        <Text size="xs" ff="monospace">{peer.endpoint}</Text>
+                                      ) : (
+                                        <Text size="xs" c="dimmed">Dynamic</Text>
+                                      )}
+                                    </Table.Td>
+                                    <Table.Td data-label="Live status">
+                                      <Stack gap={2}>
+                                        <Group gap={6} wrap="nowrap">
+                                          <Badge size="xs" color={peer.online ? 'green' : 'gray'} variant="light">
+                                            {peer.online ? 'Online' : 'Idle'}
+                                          </Badge>
+                                          <Text size="xs" className="tabular" c="dimmed">
+                                            ↓ {bytes(peer.rxBytes)} · ↑ {bytes(peer.txBytes)}
+                                          </Text>
+                                        </Group>
+                                        <Text size="xs" c="dimmed">
+                                          {peer.latestHandshakeAt
+                                            ? `Handshake ${formatTimestamp(peer.latestHandshakeAt, timeZone)}`
+                                            : 'No handshake yet'}
+                                        </Text>
+                                      </Stack>
+                                    </Table.Td>
+                                  </Table.Tr>
+                                ))}
+                              </Table.Tbody>
+                            </Table>
+                          </ScrollArea>
+                        )}
+                      </Stack>
+                    </Card>
+                  );
+                })}
               </Stack>
             );
           }}
@@ -651,8 +731,10 @@ export function WireGuardScreen({ api, session, onSaved, onSessionLost }: WireGu
             </Text>
           )}
           <Group justify="flex-end" gap="xs">
-            <Button variant="default" disabled={deleting} onClick={() => setDeleteTarget(null)}>Cancel</Button>
-            <Button color="red" loading={deleting} onClick={() => void confirmDelete()}>Delete</Button>
+            <Button variant="default" disabled={deleting} onClick={() => setDeleteTarget(null)}>
+              {deleteStale ? 'Close' : 'Cancel'}
+            </Button>
+            <Button color="red" loading={deleting} disabled={deleteStale} onClick={() => void confirmDelete()}>Delete</Button>
           </Group>
         </Stack>
       </Modal>
@@ -705,6 +787,7 @@ function InterfaceModal({
   const [generatingKey, setGeneratingKey] = useState(false);
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
+  const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
 
@@ -794,6 +877,7 @@ function InterfaceModal({
         return;
       }
       if (error instanceof ApiError && (error.status === 404 || error.status === 412)) {
+        setStale(true);
         onConflict();
       }
       const fields = fieldErrors(error, ifaceFieldPattern);
@@ -808,15 +892,15 @@ function InterfaceModal({
   return (
     <Modal
       opened
-      onClose={() => { if (!busy) onClose(); }}
+      onClose={() => { if (!busy && !generatingKey) onClose(); }}
       title={existing ? `Edit WireGuard interface (${existing.value.ifname})` : 'Add WireGuard interface'}
       size="lg"
       centered
       lockScroll={false}
-      closeButtonProps={{ 'aria-label': 'Close', disabled: busy }}
+      closeButtonProps={{ 'aria-label': 'Close', disabled: busy || generatingKey }}
     >
       <form onSubmit={(event) => void submit(event)} noValidate>
-        <Fieldset disabled={busy} variant="unstyled">
+        <Fieldset disabled={busy || generatingKey || stale} variant="unstyled">
           <Stack gap="sm">
             {failure && <Alert color="red" role="alert" title="Could not save interface">{failure}</Alert>}
             <Group grow align="flex-start">
@@ -937,8 +1021,12 @@ function InterfaceModal({
               onChange={(event) => setEnabled(event.currentTarget.checked)}
             />
             <Group justify="flex-end" gap="xs" mt="xs">
-              <Button variant="default" disabled={busy} onClick={onClose}>Cancel</Button>
-              <Button type="submit" loading={busy}>{existing ? 'Save interface' : 'Add interface'}</Button>
+              <Button variant="default" disabled={busy || generatingKey} onClick={onClose}>
+                {stale ? 'Close' : 'Cancel'}
+              </Button>
+              <Button type="submit" loading={busy} disabled={generatingKey || stale}>
+                {existing ? 'Save interface' : 'Add interface'}
+              </Button>
             </Group>
           </Stack>
         </Fieldset>
@@ -988,6 +1076,7 @@ function PeerModal({
   const [generating, setGenerating] = useState(false);
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
+  const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
 
@@ -1076,6 +1165,7 @@ function PeerModal({
         return;
       }
       if (error instanceof ApiError && (error.status === 404 || error.status === 412)) {
+        setStale(true);
         onConflict();
       }
       const fields = fieldErrors(error, /^\/?(?:peers\/\d+\/)?(name|description|publicKey|presharedKeyRef|allowedIps|endpoint|persistentKeepalive)(?:\/|$)/);
@@ -1090,15 +1180,15 @@ function PeerModal({
   return (
     <Modal
       opened
-      onClose={() => { if (!busy) onClose(); }}
+      onClose={() => { if (!busy && !generating) onClose(); }}
       title={existing ? `Edit peer on ${iface.value.ifname}` : `Add peer to ${iface.value.ifname}`}
       size="lg"
       centered
       lockScroll={false}
-      closeButtonProps={{ 'aria-label': 'Close', disabled: busy }}
+      closeButtonProps={{ 'aria-label': 'Close', disabled: busy || generating }}
     >
       <form onSubmit={(event) => void submit(event)} noValidate>
-        <Fieldset disabled={busy} variant="unstyled">
+        <Fieldset disabled={busy || generating || stale} variant="unstyled">
           <Stack gap="sm">
             {failure && <Alert color="red" role="alert" title="Could not save peer">{failure}</Alert>}
             <Group grow align="flex-start">
@@ -1204,8 +1294,12 @@ function PeerModal({
               onChange={(event) => setEnabled(event.currentTarget.checked)}
             />
             <Group justify="flex-end" gap="xs" mt="xs">
-              <Button variant="default" disabled={busy} onClick={onClose}>Cancel</Button>
-              <Button type="submit" loading={busy}>{existing ? 'Save peer' : 'Add peer'}</Button>
+              <Button variant="default" disabled={busy || generating} onClick={onClose}>
+                {stale ? 'Close' : 'Cancel'}
+              </Button>
+              <Button type="submit" loading={busy} disabled={generating || stale}>
+                {existing ? 'Save peer' : 'Add peer'}
+              </Button>
             </Group>
           </Stack>
         </Fieldset>
@@ -1241,6 +1335,13 @@ function PeerExportModal({
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
+  const requestSeq = useRef(0);
+
+  function invalidateGenerated() {
+    requestSeq.current += 1;
+    setGenerated(null);
+    setCopied(false);
+  }
 
   const finalConfig = useMemo(() => {
     if (!generated) return '';
@@ -1248,16 +1349,26 @@ function PeerExportModal({
     return trimmedKey ? generated.text.replace('<PRIVATE_KEY>', () => trimmedKey) : generated.text;
   }, [generated, clientPrivateKey]);
 
+  const missingForQr = useMemo(() => {
+    if (!finalConfig) return [];
+    const missing: string[] = [];
+    if (finalConfig.includes('<PRIVATE_KEY>')) missing.push('client private key');
+    if (finalConfig.includes('<ENDPOINT>')) missing.push('appliance endpoint');
+    return missing;
+  }, [finalConfig]);
+
   const qrSvg = useMemo(() => {
-    if (!finalConfig) return null;
+    if (!finalConfig || missingForQr.length > 0) return null;
     try {
       return qrSvgPath(encodeQr(finalConfig), 4);
     } catch {
       return null;
     }
-  }, [finalConfig]);
+  }, [finalConfig, missingForQr]);
 
   async function generateConfig() {
+    const seq = ++requestSeq.current;
+    setGenerated(null);
     setLoading(true);
     setError('');
     setCopied(false);
@@ -1268,11 +1379,17 @@ function PeerExportModal({
         ...(dns.length > 0 ? { dns } : {}),
         ...(includePsk ? { includePsk: true } : {}),
       });
-      setGenerated(res);
+      if (seq === requestSeq.current) {
+        setGenerated(res);
+      }
     } catch (err) {
-      reportError(err, onSessionLost, setError);
+      if (seq === requestSeq.current) {
+        reportError(err, onSessionLost, setError);
+      }
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) {
+        setLoading(false);
+      }
     }
   }
 
@@ -1312,13 +1429,19 @@ function PeerExportModal({
             label="Appliance endpoint (optional)"
             placeholder={`vpn.example.com:${iface.listenPort}`}
             value={endpoint}
-            onChange={(event) => setEndpoint(event.currentTarget.value)}
+            onChange={(event) => {
+              setEndpoint(event.currentTarget.value);
+              invalidateGenerated();
+            }}
           />
           <TextInput
             label="DNS servers (optional)"
             placeholder="10.200.0.1, 1.1.1.1"
             value={dnsText}
-            onChange={(event) => setDnsText(event.currentTarget.value)}
+            onChange={(event) => {
+              setDnsText(event.currentTarget.value);
+              invalidateGenerated();
+            }}
           />
         </Group>
         <PasswordInput
@@ -1338,7 +1461,10 @@ function PeerExportModal({
               : 'Include preshared key (recorded in security audit log)'}
             disabled={pskUnresolved}
             checked={includePsk}
-            onChange={(event) => setIncludePsk(event.currentTarget.checked)}
+            onChange={(event) => {
+              setIncludePsk(event.currentTarget.checked);
+              invalidateGenerated();
+            }}
           />
         )}
         <Group justify="flex-end">
@@ -1350,7 +1476,11 @@ function PeerExportModal({
         {finalConfig && (
           <Stack gap="sm">
             <Code block fz="xs">{finalConfig}</Code>
-            {qrSvg ? (
+            {missingForQr.length > 0 ? (
+              <Text size="xs" c="dimmed">
+                Enter {missingForQr.join(' and ')} to render a scannable import QR code; you can still download or copy the template below.
+              </Text>
+            ) : qrSvg ? (
               <Group justify="center">
                 <svg
                   role="img"
@@ -1371,9 +1501,11 @@ function PeerExportModal({
             )}
             <Group justify="space-between">
               <Group gap="xs">
-                <Button size="sm" onClick={handleDownload}>Download .conf</Button>
+                <Button size="sm" onClick={handleDownload}>
+                  {missingForQr.length > 0 ? 'Download template .conf' : 'Download .conf'}
+                </Button>
                 <Button size="sm" variant="default" onClick={() => void handleCopy()}>
-                  {copied ? 'Copied' : 'Copy config'}
+                  {copied ? 'Copied' : missingForQr.length > 0 ? 'Copy template' : 'Copy config'}
                 </Button>
               </Group>
               <Button size="sm" variant="default" onClick={onClose}>Done</Button>

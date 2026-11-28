@@ -218,37 +218,12 @@ func (a *wireguardAPI) peerConfig(w http.ResponseWriter, r *http.Request, id, pe
 			return
 		}
 	}
-	ifaces, err := a.store.WireGuardInterfaces(r.Context())
-	if err != nil {
-		writeConfigurationError(w, r, err)
-		return
-	}
-	i := slices.IndexFunc(ifaces, func(x config.WireGuardInterface) bool { return x.ID == id })
-	if i < 0 {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "The WireGuard interface does not exist.")
-		return
-	}
-	iface := ifaces[i]
-	j := slices.IndexFunc(iface.Peers, func(p config.WireGuardPeer) bool { return p.ID == peerID })
-	if j < 0 {
-		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "The peer does not exist.")
-		return
-	}
-	peer := iface.Peers[j]
-	if iface.PublicKey == "" {
-		writeError(w, r, http.StatusConflict, "WIREGUARD_KEY_UNRESOLVED", "The interface's private key is unresolved; set it first.")
-		return
-	}
-	endpoint, _ := formatClientEndpoint(req.Endpoint, iface.ListenPort)
-	var b strings.Builder
-	b.WriteString("[Interface]\nPrivateKey = <PRIVATE_KEY>\n")
-	if len(peer.AllowedIPs) > 0 {
-		b.WriteString("Address = " + strings.Join(peer.AllowedIPs, ", ") + "\n")
-	}
-	if len(req.DNS) > 0 {
-		b.WriteString("DNS = " + strings.Join(req.DNS, ", ") + "\n")
-	}
-	b.WriteString("\n[Peer]\nPublicKey = " + iface.PublicKey + "\n")
+	var (
+		iface config.WireGuardInterface
+		peer  config.WireGuardPeer
+		psk   string
+		err   error
+	)
 	if req.IncludePSK {
 		actor, ok := actorFromRequest(r)
 		if !ok {
@@ -256,22 +231,55 @@ func (a *wireguardAPI) peerConfig(w http.ResponseWriter, r *http.Request, id, pe
 			return
 		}
 		// The intent is durable before the key is read; an export audit storage cannot record does not happen.
-		finish, err := beginAudit(r.Context(), a.audits, actor, audit.ActionWireGuardPSKExported, id)
-		if err != nil {
+		finish, aerr := beginAudit(r.Context(), a.audits, actor, audit.ActionWireGuardPSKExported, id)
+		if aerr != nil {
 			writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Security audit storage is unavailable.")
 			return
 		}
-		psk, err := a.store.WireGuardPresharedKey(r.Context(), id, peerID)
+		iface, peer, psk, err = a.store.WireGuardPeerExport(r.Context(), id, peerID, true)
 		if err != nil {
 			finish(audit.ResultFailure)
-			if errors.Is(err, config.ErrPresharedKeyUnavailable) {
-				writeError(w, r, http.StatusConflict, "PRESHARED_KEY_UNAVAILABLE", "The peer has no pre-shared key, or it is unresolved.")
-			} else {
-				writeConfigurationError(w, r, err)
-			}
-			return
+		} else {
+			finish(audit.ResultSuccess)
 		}
-		finish(audit.ResultSuccess)
+	} else {
+		iface, peer, psk, err = a.store.WireGuardPeerExport(r.Context(), id, peerID, false)
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, config.ErrPeerNotFound):
+			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "The peer does not exist.")
+		case errors.Is(err, config.ErrWireGuardKeyUnresolved):
+			writeError(w, r, http.StatusConflict, "WIREGUARD_KEY_UNRESOLVED", "The interface's private key is unresolved; set it first.")
+		case errors.Is(err, config.ErrPresharedKeyUnavailable):
+			writeError(w, r, http.StatusConflict, "PRESHARED_KEY_UNAVAILABLE", "The peer has no pre-shared key, or it is unresolved.")
+		default:
+			writeConfigurationError(w, r, err)
+		}
+		return
+	}
+	endpoint, _ := formatClientEndpoint(req.Endpoint, iface.ListenPort)
+	var b strings.Builder
+	b.WriteString("[Interface]\nPrivateKey = <PRIVATE_KEY>\n")
+	// Prefer host addresses (/32 or /128) for client Address = so site-to-site routed subnets are not assigned as interface addresses.
+	var hostAddrs []string
+	for _, s := range peer.AllowedIPs {
+		if x, perr := netip.ParsePrefix(s); perr == nil && x.Bits() == x.Addr().BitLen() {
+			hostAddrs = append(hostAddrs, s)
+		}
+	}
+	clientAddrs := hostAddrs
+	if len(clientAddrs) == 0 {
+		clientAddrs = peer.AllowedIPs
+	}
+	if len(clientAddrs) > 0 {
+		b.WriteString("Address = " + strings.Join(clientAddrs, ", ") + "\n")
+	}
+	if len(req.DNS) > 0 {
+		b.WriteString("DNS = " + strings.Join(req.DNS, ", ") + "\n")
+	}
+	b.WriteString("\n[Peer]\nPublicKey = " + iface.PublicKey + "\n")
+	if req.IncludePSK {
 		b.WriteString("PresharedKey = " + psk + "\n")
 	}
 	var allowed []string

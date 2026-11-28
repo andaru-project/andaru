@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdh"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -287,6 +288,17 @@ func validateWireGuard(d *declaration) []FieldError {
 			if len(peer.AllowedIPs) == 0 && peer.Enabled {
 				bad(pp+"/allowedIps", "An enabled peer needs an allowed IP prefix.")
 			}
+			var endpointAddr netip.Addr
+			if peer.Endpoint != "" {
+				if !validEndpoint(peer.Endpoint) {
+					bad(pp+"/endpoint", "Expected host:port or [IPv6]:port with a port of 1 to 65535.")
+				} else if host, _, err := net.SplitHostPort(peer.Endpoint); err == nil {
+					if a, err := netip.ParseAddr(host); err == nil {
+						endpointAddr = a
+					}
+				}
+			}
+			routeAllowed := peer.RouteAllowedIPs == nil || *peer.RouteAllowedIPs
 			peerPrefixes := map[netip.Prefix]bool{}
 			for k, a := range peer.AllowedIPs {
 				x, err := netip.ParsePrefix(a)
@@ -304,12 +316,12 @@ func validateWireGuard(d *declaration) []FieldError {
 				if peer.Enabled && routed[x] {
 					bad(fmt.Sprintf("%s/allowedIps/%d", pp, k), "Another enabled peer of this interface has this prefix.")
 				}
+				if peer.Enabled && routeAllowed && endpointAddr.IsValid() && x.Contains(endpointAddr) {
+					bad(fmt.Sprintf("%s/allowedIps/%d", pp, k), "Allowed IP prefix covers the peer's own endpoint while routeAllowedIps is enabled; disable routeAllowedIps or narrow allowedIps.")
+				}
 				if peer.Enabled {
 					routed[x] = true
 				}
-			}
-			if peer.Endpoint != "" && !validEndpoint(peer.Endpoint) {
-				bad(pp+"/endpoint", "Expected host:port or [IPv6]:port with a port of 1 to 65535.")
 			}
 		}
 	}
@@ -396,6 +408,54 @@ func checkWireGuardKeys(d *declaration, secrets secretDocument, written map[obje
 		}
 	}
 	return out
+}
+
+// remapWireGuardPeerPaths translates sorted peer indices in checkWireGuardKeys errors back to each peer's submitted order.
+func remapWireGuardPeerPaths(errs []FieldError, d *declaration, writes map[objectKey][]byte) []FieldError {
+	if len(errs) == 0 {
+		return errs
+	}
+	for i := range errs {
+		rest, ok := strings.CutPrefix(errs[i].Path, "/vpn/wireguard/")
+		if !ok {
+			continue
+		}
+		parts := strings.SplitN(rest, "/", 4)
+		if len(parts) < 3 || parts[1] != "peers" {
+			continue
+		}
+		wi, err1 := strconv.Atoi(parts[0])
+		pi, err2 := strconv.Atoi(parts[2])
+		if err1 != nil || err2 != nil || wi < 0 || wi >= len(d.VPN.WireGuard) || pi < 0 || pi >= len(d.VPN.WireGuard[wi].Peers) {
+			continue
+		}
+		w := &d.VPN.WireGuard[wi]
+		raw, ok := writes[objectKey{"vpn.wireguard", w.ID}]
+		if !ok {
+			continue
+		}
+		var submitted struct {
+			Peers []struct {
+				ID string `json:"id"`
+			} `json:"peers"`
+		}
+		if json.Unmarshal(raw, &submitted) != nil {
+			continue
+		}
+		orig := slices.IndexFunc(submitted.Peers, func(p struct {
+			ID string `json:"id"`
+		}) bool {
+			return p.ID == w.Peers[pi].ID
+		})
+		if orig >= 0 && orig != pi {
+			suffix := ""
+			if len(parts) == 4 {
+				suffix = "/" + parts[3]
+			}
+			errs[i].Path = fmt.Sprintf("/vpn/wireguard/%d/peers/%d%s", wi, orig, suffix)
+		}
+	}
+	return errs
 }
 
 // checkAllWireGuardKeys checks every interface's resolved keys, as a restore must.
@@ -493,8 +553,14 @@ func (s *Store) WireGuardInterfaces(ctx context.Context) (result []WireGuardInte
 	return
 }
 
-// WireGuardPresharedKey returns one peer's pre-shared key; it must never be logged.
-func (s *Store) WireGuardPresharedKey(ctx context.Context, id, peerID string) (psk string, err error) {
+// ErrWireGuardKeyUnresolved means the interface's private key is unresolved, so no public key is available.
+var ErrWireGuardKeyUnresolved = errors.New("the WireGuard interface private key is unresolved")
+
+// ErrPeerNotFound means the named WireGuard peer does not exist on the interface.
+var ErrPeerNotFound = errors.New("the WireGuard peer does not exist")
+
+// WireGuardPeerExport atomically reads one interface, one peer, and optionally its pre-shared key from a single saved head.
+func (s *Store) WireGuardPeerExport(ctx context.Context, id, peerID string, includePSK bool) (iface WireGuardInterface, peer WireGuardPeer, psk string, err error) {
 	err = s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
 		v, ok := objects(&state.Config)[objectKey{"vpn.wireguard", id}].(*wireguardInterface)
 		if !ok {
@@ -502,13 +568,24 @@ func (s *Store) WireGuardPresharedKey(ctx context.Context, id, peerID string) (p
 		}
 		j := slices.IndexFunc(v.Peers, func(p wireguardPeer) bool { return p.ID == peerID })
 		if j < 0 {
-			return fault("NOT_FOUND", "", "Object does not exist.")
+			return ErrPeerNotFound
 		}
-		ref := v.Peers[j].PresharedKeyRef
-		if ref == nil || ref.Unresolved {
-			return ErrPresharedKeyUnavailable
+		if v.PublicKey == "" {
+			return ErrWireGuardKeyUnresolved
 		}
-		psk = state.Secrets.Scopes["core"][ref.Secret].Value
+		p := v.Peers[j]
+		if includePSK {
+			ref := p.PresharedKeyRef
+			if ref == nil || ref.Unresolved {
+				return ErrPresharedKeyUnavailable
+			}
+			psk = state.Secrets.Scopes["core"][ref.Secret].Value
+		}
+		iface = WireGuardInterface{ID: v.ID, Name: v.Name, Ifname: v.Ifname, PublicKey: v.PublicKey, Enabled: v.Enabled, ListenPort: v.ListenPort, Addresses: slices.Clone(v.Addresses)}
+		peer = WireGuardPeer{ID: p.ID, Name: p.Name, PublicKey: p.PublicKey, Endpoint: p.Endpoint, Enabled: p.Enabled, AllowedIPs: slices.Clone(p.AllowedIPs), PersistentKeepalive: p.PersistentKeepalive}
+		if p.PresharedKeyRef != nil {
+			peer.PresharedKey, peer.Unresolved = true, p.PresharedKeyRef.Unresolved
+		}
 		return nil
 	})
 	return
