@@ -24,7 +24,35 @@ const (
 	addonBusTokenContDir  = "/run/andaru/bus"
 	addonBusTokenCont     = "/run/andaru/bus/token"
 	addonSecretsContDir   = "/run/andaru/secrets"
+	addonCertsContDir     = "/run/andaru/certs"
 )
+
+// CertificateFiles are the files a certificate binding places in an add-on's certs directory, by file name, with
+// their container paths' environment variables: split is NAME.crt (certificate and chain) and NAME.key, bundle is
+// NAME.pem (certificate, chain and key). cert-sync writes the same files when a certificate is renewed.
+func CertificateFiles(b *addon.Binding, certPEM, chainPEM, key string) (files map[string]string, env map[string]string) {
+	upper := strings.ToUpper(b.Name)
+	chain := strings.TrimRight(certPEM, "\n") + "\n"
+	if strings.TrimSpace(chainPEM) != "" {
+		chain += strings.TrimRight(chainPEM, "\n") + "\n"
+	}
+	key = strings.TrimRight(key, "\n") + "\n"
+	files, env = map[string]string{}, map[string]string{}
+	set := func(name, content, generated, extra string) {
+		files[name] = content
+		env["ANDARU_CERT_"+upper+"_"+generated] = addonCertsContDir + "/" + name
+		if extra != "" {
+			env[extra] = addonCertsContDir + "/" + name
+		}
+	}
+	if b.Format == "bundle" {
+		set(b.Name+".pem", chain+key, "BUNDLE", b.BundleEnv)
+	} else {
+		set(b.Name+".crt", chain, "CERT", b.CertEnv)
+		set(b.Name+".key", key, "KEY", b.KeyEnv)
+	}
+	return files, env
+}
 
 func addonContainerPath(slug string) string {
 	return addonQuadletDir + "andaru-addon-" + slug + ".container"
@@ -125,7 +153,12 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest, emitted
 	for _, z := range r.d.Zones {
 		zones[z.ID] = true
 	}
-	settings, valErrs := addon.ValidateSettings(m, a.Settings, zones, nil)
+	certs := make(map[string]certificate, len(r.d.PKI.Certificates))
+	valid := make(map[string]bool, len(r.d.PKI.Certificates))
+	for _, c := range r.d.PKI.Certificates {
+		certs[c.ID], valid[c.ID] = c, true
+	}
+	settings, valErrs := addon.ValidateSettings(m, a.Settings, zones, valid)
 	if len(valErrs) > 0 {
 		for _, fe := range valErrs {
 			r.find("error", "ADDON_SETTING_INVALID", basePath+"/settings"+fe.Path, fe.Message)
@@ -167,7 +200,7 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest, emitted
 	}
 
 	var execArgs []string
-	var secrets []renderedAddonSecret
+	var secrets, certFiles []renderedAddonSecret
 
 	for _, prop := range m.Properties {
 		val, present := settings[prop.Name]
@@ -207,6 +240,21 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest, emitted
 			continue
 		}
 
+		if prop.Type == "certificate-reference" {
+			id, _ := val.(string)
+			key, hasKey := r.in.CertificateKeys[id]
+			if !hasKey {
+				r.find("error", "CERTIFICATE_UNRESOLVED", propPath, "The certificate's private key is unresolved; set it before applying.")
+				unsafe = true
+				continue
+			}
+			files, env := CertificateFiles(prop.Binding, certs[id].CertPEM, certs[id].ChainPEM, key)
+			for _, name := range slices.Sorted(maps.Keys(files)) {
+				certFiles = append(certFiles, renderedAddonSecret{hostPath: addonRuntimeDir + m.Slug + "/certs/" + name, real: files[name]})
+			}
+			maps.Copy(envMap, env)
+			continue
+		}
 		if prop.Binding == nil {
 			continue
 		}
@@ -250,7 +298,7 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest, emitted
 	}
 
 	// Render secret files (0400, redacted in preview Content, raw value in Real).
-	for _, sf := range secrets {
+	for _, sf := range append(secrets, certFiles...) {
 		r.result.Files = append(r.result.Files, File{
 			Path:    sf.hostPath,
 			Mode:    "0400",
@@ -325,6 +373,9 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest, emitted
 	}
 	if len(secrets) > 0 {
 		containerLines = append(containerLines, fmt.Sprintf("Volume=%s%s/secrets:%s:ro,Z,U", addonRuntimeDir, m.Slug, addonSecretsContDir))
+	}
+	if len(certFiles) > 0 {
+		containerLines = append(containerLines, fmt.Sprintf("Volume=%s%s/certs:%s:ro,Z,U", addonRuntimeDir, m.Slug, addonCertsContDir))
 	}
 	if hasBus {
 		containerLines = append(containerLines, fmt.Sprintf("Volume=%s%s/bus:%s:ro,Z,U", addonRuntimeDir, m.Slug, addonBusTokenContDir))

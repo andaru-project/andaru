@@ -62,7 +62,7 @@ func isAppliesPath(path string) bool {
 }
 
 // gatherGate collects everything the apply gates judge: the host, the rendered files and what is live now.
-func gatherGate(ctx context.Context, read hostReader, dir string, pointers generation.Pointers, value json.RawMessage, secrets map[string]string, addonSecrets map[string]map[string]string) (gateInput, error) {
+func gatherGate(ctx context.Context, read hostReader, dir string, pointers generation.Pointers, value json.RawMessage, secrets map[string]string, addonSecrets map[string]map[string]string, certificateKeys map[string]string) (gateInput, error) {
 	gate := gateInput{Declaration: value}
 	var facts host.RealizerFacts
 	var err error
@@ -76,7 +76,7 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 		return gate, errors.Join(errInventory, err)
 	}
 	gate.BootUnit = read.BootUnit()
-	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, AddonSecrets: addonSecrets, Catalog: read.Catalog, StateDir: read.StateDir, Links: gate.Links, Facts: facts}); err != nil {
+	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, AddonSecrets: addonSecrets, CertificateKeys: certificateKeys, Catalog: read.Catalog, StateDir: read.StateDir, Links: gate.Links, Facts: facts}); err != nil {
 		return gate, errors.Join(errRender, err)
 	}
 	if pointers.Live != nil {
@@ -375,7 +375,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusConflict, "APPLY_IN_PROGRESS", "Apply "+strconv.Itoa(*pointers.Pending)+" is awaiting confirmation; confirm it or roll it back first.")
 		return
 	}
-	gate, err := gatherGate(ctx, h.read, h.dir, pointers, input.Value, input.Secrets, input.AddonSecrets)
+	gate, err := gatherGate(ctx, h.read, h.dir, pointers, input.Value, input.Secrets, input.AddonSecrets, input.CertificateKeys)
 	switch {
 	case errors.Is(err, errInventory):
 		slog.ErrorContext(ctx, "host inventory unavailable for apply", "error", err)

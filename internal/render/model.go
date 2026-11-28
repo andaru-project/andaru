@@ -156,6 +156,16 @@ type declaration struct {
 	// segment, or of kind proxyNdp answered on a segment and routed to the host's segment.
 	VirtualAddresses []virtualAddress `json:"virtualAddresses"`
 	Addons           []addonEntry     `json:"addons"`
+	PKI              struct {
+		Certificates []certificate `json:"certificates"`
+	} `json:"pki"`
+}
+
+// certificate is a managed certificate's public part; its key is in Input.CertificateKeys.
+type certificate struct {
+	ID       string `json:"id"`
+	CertPEM  string `json:"certPem"`
+	ChainPEM string `json:"chainPem"`
 }
 
 type addonInterface struct {
@@ -247,7 +257,9 @@ type Input struct {
 	Declaration  json.RawMessage
 	Secrets      map[string]string
 	AddonSecrets map[string]map[string]string
-	Catalog      *addon.Catalog
+	// CertificateKeys are the private keys of the certificates enabled add-ons name, by certificate ID.
+	CertificateKeys map[string]string
+	Catalog         *addon.Catalog
 	StateDir     string
 	Links        []host.LinkStatus
 	Facts        host.RealizerFacts
