@@ -68,22 +68,38 @@ func TestActivateLoadsFilterFirst(t *testing.T) {
 }
 
 func TestLoadFilterRevertsIPv4ForwardingWhenIPv6Fails(t *testing.T) {
-	b := newBench(t)
-	writeFile(t, filepath.Join(b.net.root, ipv4Forwarding), "0\n")
-	v6Path := filepath.Join(b.net.root, ipv6Forwarding)
-	if err := os.Remove(v6Path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(v6Path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	id := b.gen(filtered(one, "aa"))
-	if err := b.r.Activate(t.Context(), id); err == nil {
-		t.Fatal("expected activation error when ipv6Forwarding write fails")
-	}
-	v4, _ := os.ReadFile(filepath.Join(b.net.root, ipv4Forwarding))
-	if string(v4) != "0\n" {
-		t.Fatalf("ipv4Forwarding = %q after ipv6Forwarding failure, want 0\\n", v4)
+	for _, tc := range []struct {
+		name      string
+		initialV4 string
+		wantV4    string
+	}{
+		{name: "reverts newly enabled ipv4 forwarding", initialV4: "0\n", wantV4: "0\n"},
+		{name: "preserves already active ipv4 forwarding", initialV4: "1\n", wantV4: "1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t)
+			writeFile(t, filepath.Join(b.net.root, ipv4Forwarding), tc.initialV4)
+			v6Path := filepath.Join(b.net.root, ipv6Forwarding)
+			if err := os.Remove(v6Path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(v6Path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			id := b.gen(filtered(one, "aa"))
+			g := b.read(id)
+			path, comment, ok, err := b.r.filter(g)
+			if err != nil || !ok {
+				t.Fatalf("filter(%d): ok=%v err=%v", id, ok, err)
+			}
+			if err := b.r.loadFilter(t.Context(), path, comment); err == nil {
+				t.Fatal("expected loadFilter error when ipv6Forwarding write fails")
+			}
+			v4, _ := os.ReadFile(filepath.Join(b.net.root, ipv4Forwarding))
+			if string(v4) != tc.wantV4 {
+				t.Fatalf("ipv4Forwarding = %q after ipv6Forwarding failure, want %q", v4, tc.wantV4)
+			}
+		})
 	}
 }
 

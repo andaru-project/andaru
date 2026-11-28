@@ -310,6 +310,25 @@ func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written ma
 	return out
 }
 
+// validateRestoredAddonsAgainstCatalog validates every cataloged enabled add-on during backup restore
+// (plus WebUI origin separation across all cataloged add-ons) while letting cross-version backups with
+// retired or disabled add-ons restore cleanly; apply still gates every enabled add-on fail-closed.
+func validateRestoredAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, managementHosts []string) []FieldError {
+	if cat == nil || len(d.Addons) == 0 {
+		return nil
+	}
+	toCheck := make(map[objectKey][]byte)
+	for _, a := range d.Addons {
+		if !a.Enabled {
+			continue
+		}
+		if _, ok := cat.ByID(a.ID); ok {
+			toCheck[objectKey{"addons", a.ID}] = nil
+		}
+	}
+	return validateAddonsAgainstCatalog(cat, d, toCheck, managementHosts)
+}
+
 // validateAddonsWebUISeparation verifies every cataloged add-on's WebUI hostnameSetting does not match
 // Andaru's configured management origins (regardless of port), appliance hostname, local management FQDN,
 // or management segment IP addresses.

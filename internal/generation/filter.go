@@ -91,11 +91,15 @@ func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 	}
 	for _, item := range listing.Nftables {
 		if item.Table != nil && item.Table.Comment == comment {
+			prevV4, _ := os.ReadFile(filepath.Join(r.Root, ipv4Forwarding))
+			wasOn := bytes.Equal(bytes.TrimSpace(prevV4), []byte("1"))
 			if err := r.sysctl(ipv4Forwarding, "1\n"); err != nil {
 				return err
 			}
 			if err := r.sysctl(ipv6Forwarding, "1\n"); err != nil {
-				_ = r.sysctl(ipv4Forwarding, "0\n")
+				if !wasOn {
+					_ = r.sysctl(ipv4Forwarding, "0\n")
+				}
 				return err
 			}
 			return nil

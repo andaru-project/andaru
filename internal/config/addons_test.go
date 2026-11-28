@@ -153,8 +153,14 @@ func TestShippedTailscaleCatalogConfigValidation(t *testing.T) {
 		t.Fatal("expected rejection for invalid advertiseRoutes CIDR")
 	}
 
-	// Backup restoration must also validate add-on settings against the catalog fail-closed.
-	current := &savedState{Version: "1", Config: declaration{SchemaVersion: 4}, Secrets: emptySecrets()}
+	// Backup restoration must validate cataloged enabled add-ons fail-closed without mutating input,
+	// while still permitting retired/disabled add-ons and schema upgrades (ownSecrets=true).
+	current := &savedState{
+		Version:  "1",
+		Config:   declaration{SchemaVersion: 4},
+		Versions: map[objectKey]objectVersion{},
+		Secrets:  emptySecrets(),
+	}
 	for _, badRouting := range []any{[]string{}, []string{"--netfilter-mode=on"}} {
 		badDecl := &declaration{
 			SchemaVersion: 4,
@@ -169,5 +175,29 @@ func TestShippedTailscaleCatalogConfigValidation(t *testing.T) {
 		if _, _, err := prepareRestoration(current, decodedBackup{configuration: badDecl}, "2", time.Now().UTC(), cat, nil); err == nil {
 			t.Fatalf("prepareRestoration unexpectedly accepted hostile routingMode %#v", badRouting)
 		}
+	}
+	// Cross-version backup with a retired/unknown add-on and a disabled add-on restores cleanly.
+	crossVer := &declaration{
+		SchemaVersion: 4,
+		Zones:         []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{
+			{ID: "org.andaru.retired", Enabled: true},
+			{ID: "org.andaru.tailscale", Enabled: false, Settings: map[string]any{"routingMode": []string{"--netfilter-mode=on"}}},
+		},
+	}
+	if _, _, err := prepareRestoration(current, decodedBackup{configuration: crossVer}, "2", time.Now().UTC(), cat, nil); err != nil {
+		t.Fatalf("prepareRestoration rejected retired/disabled add-ons in backup: %v", err)
+	}
+	// Schema upgrade (ownSecrets=true) must never deadlock on retired or manifest-changed add-ons.
+	upgradeDecl := &declaration{
+		SchemaVersion: 4,
+		Zones:         []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{
+			{ID: "org.andaru.retired", Enabled: true},
+			{ID: "org.andaru.tailscale", Enabled: true, Settings: map[string]any{"routingMode": []string{"--netfilter-mode=on"}}},
+		},
+	}
+	if _, _, err := prepareRestoration(current, decodedBackup{configuration: upgradeDecl, ownSecrets: true}, "2", time.Now().UTC(), cat, nil); err != nil {
+		t.Fatalf("prepareRestoration(ownSecrets=true) deadlocked upgrade: %v", err)
 	}
 }

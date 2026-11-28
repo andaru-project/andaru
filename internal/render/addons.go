@@ -77,6 +77,7 @@ func addonGrantedBusHash(g addonBusGrants) (string, bool) {
 // blocking findings if Podman is absent, an enabled add-on's pinned digest is unstaged,
 // a secret is unresolved, or any bound value contains unsafe control characters.
 func (r *renderer) addons() {
+	emittedMgmtRequired := false
 	for i, a := range r.d.Addons {
 		if !a.Enabled {
 			continue
@@ -99,7 +100,7 @@ func (r *renderer) addons() {
 		} else if !slices.Contains(r.in.Facts.StagedImages, m.Runtime.Image) {
 			r.find("error", "ADDON_IMAGE_NOT_STAGED", basePath, fmt.Sprintf("Add-on %q image %s is not staged locally; stage the image before applying.", m.Name, m.Runtime.Image))
 		}
-		r.renderAddon(i, a, m)
+		r.renderAddon(i, a, m, &emittedMgmtRequired)
 	}
 }
 
@@ -112,12 +113,14 @@ func hasUnsafeDirectiveChar(s string) bool {
 	return strings.ContainsRune(s, 0) || strings.ContainsAny(s, "\r\n")
 }
 
-func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
+func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest, emittedMgmtRequired *bool) {
 	basePath := fmt.Sprintf("/addons/%d", idx)
 	sources := []string{basePath}
 
 	// Validate settings and required interface/filter invariants fail-closed at render/apply time so
-	// restored or manually modified declarations can never bypass manifest constraints.
+	// restored or manually modified declarations can never bypass manifest constraints, while still
+	// reporting all blocking findings together before refusing file emission.
+	unsafe := false
 	zones := make(map[string]bool, len(r.d.Zones))
 	for _, z := range r.d.Zones {
 		zones[z.ID] = true
@@ -127,13 +130,12 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		for _, fe := range valErrs {
 			r.find("error", "ADDON_SETTING_INVALID", basePath+"/settings"+fe.Path, fe.Message)
 		}
-		return
+		unsafe = true
 	}
 	boundZones := make(map[string]string, len(a.Interfaces))
 	for _, ifc := range a.Interfaces {
 		boundZones[ifc.Name] = ifc.Zone
 	}
-	unsafe := false
 	needsFilter := false
 	for _, spec := range m.Interfaces {
 		if !spec.ZoneRequired {
@@ -146,7 +148,10 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		}
 	}
 	if needsFilter && !r.d.filtered() {
-		r.find("error", "MANAGEMENT_REQUIRED", "/management", "Add-ons with zone-bound interfaces require a management segment so Andaru's packet filter is active. Set management.segment.")
+		if !*emittedMgmtRequired {
+			r.find("error", "MANAGEMENT_REQUIRED", "/management", "Add-ons with zone-bound interfaces require a management segment so Andaru's packet filter is active. Set management.segment.")
+			*emittedMgmtRequired = true
+		}
 		unsafe = true
 	}
 

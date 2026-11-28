@@ -428,6 +428,7 @@ func TestAddonsAPIBeginAndFinishAuditCommitsEvent(t *testing.T) {
 	runner := &fakeAddonRunner{}
 	coord := &securityCoordinator{audits: audits}
 	api := newAddonsAPI(cat, fakeSnapshotStore{raw: []byte(`{"schemaVersion":4}`)}, stateDir, root, nil, runner, coord)
+	api.readUnit = func(context.Context, string) (string, string, error) { return "active", "running", nil }
 
 	rec := httptest.NewRecorder()
 	req := withActor(httptest.NewRequest(http.MethodPost, "/api/v1/addons/sample/restart", nil), authz.AddonsManage)
