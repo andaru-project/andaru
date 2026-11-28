@@ -498,3 +498,41 @@ func must[T any](v T, err error) T {
 	}
 	return v
 }
+
+func TestIPsecTeardownLeavesTmpfilesDirectoryAlone(t *testing.T) {
+	b := newBench(t)
+	// tmpfiles.d creates the empty directory at boot on every host, IPsec or not.
+	if err := os.MkdirAll(b.net.root+ipsecDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Teardown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("systemctl stop "+strongswanUnit) != 0 || !b.exists(ipsecDir[1:]) {
+		t.Fatalf("teardown touched a host where IPsec never ran: %q", b.net.argv)
+	}
+}
+
+func TestIPsecMalformedPendingTerminationsFailApply(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	conf := "connections {\n\t" + ipsA + " {\n\t\tchildren {\n\t\t\t" + ipsA + " {\n\t\t\t}\n\t\t}\n\t}\n}\n"
+	id1 := b.gen(withIPsec(conf))
+	if err := b.r.Activate(t.Context(), id1); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id1); err != nil {
+		t.Fatal(err)
+	}
+	// Unchanged fingerprints: only the marker says the SA must still end, so an unreadable one must not be dropped.
+	writeFile(t, b.net.root+ipsecTerminatePending, "{not json\n")
+	b.net.sas = sasOf(ipsA)
+	if err := b.r.Activate(t.Context(), b.gen(withIPsec(conf))); err == nil {
+		t.Fatal("malformed .terminate-pending accepted")
+	} else if !strings.Contains(err.Error(), "pending IPsec terminations") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !b.exists(ipsecTerminatePending[1:]) {
+		t.Fatal("malformed .terminate-pending removed")
+	}
+}

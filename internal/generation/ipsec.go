@@ -181,16 +181,27 @@ func (r Realizer) ipsecCredentialDirs(ctx context.Context) error {
 	return nil
 }
 
+// ipsecRuntimeEntries are what Andaru places under ipsecDir; tmpfiles.d owns the directory itself.
+var ipsecRuntimeEntries = []string{ipsecConf, ipsecReloadPending, ipsecTerminatePending, ipsecDir + "/x509", ipsecDir + "/x509ca", ipsecDir + "/private"}
+
 // removeIPsecRuntimeFiles wipes swanctl.conf, pending markers, and credential directories under ipsecDir.
 func (r Realizer) removeIPsecRuntimeFiles() error {
-	// The directory goes too, so later applies without IPsec see a host where it never ran.
-	return os.RemoveAll(r.Root + ipsecDir)
+	for _, path := range ipsecRuntimeEntries {
+		if err := os.RemoveAll(r.Root + path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // cleanupIPsecOnTeardownIfPresent stops strongSwan (including queued or activating starts) and wipes /run/andaru-ipsec
 // files when Andaru placed IPsec files on disk, without touching hosts where Andaru never ran IPsec.
 func (r Realizer) cleanupIPsecOnTeardownIfPresent(ctx context.Context) error {
-	if _, err := os.Stat(r.Root + ipsecDir); errors.Is(err, fs.ErrNotExist) {
+	// The directory alone proves nothing: tmpfiles.d creates it at boot on every host.
+	if !slices.ContainsFunc(ipsecRuntimeEntries, func(path string) bool {
+		_, err := os.Lstat(r.Root + path)
+		return !errors.Is(err, fs.ErrNotExist)
+	}) {
 		return nil
 	}
 	if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", strongswanUnit); err != nil {
@@ -199,16 +210,18 @@ func (r Realizer) cleanupIPsecOnTeardownIfPresent(ctx context.Context) error {
 	return r.removeIPsecRuntimeFiles()
 }
 
-func (r Realizer) readPendingTerminations() []string {
+func (r Realizer) readPendingTerminations() ([]string, error) {
 	raw, err := os.ReadFile(r.Root + ipsecTerminatePending)
-	if err != nil {
-		return nil
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("read pending IPsec terminations: %w", err)
 	}
 	var ids []string
-	if json.Unmarshal(raw, &ids) != nil {
-		return nil
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, fmt.Errorf("read pending IPsec terminations: %w", err)
 	}
-	return ids
+	return ids, nil
 }
 
 func (r Realizer) writePendingTerminations(ids []string) error {
@@ -261,8 +274,12 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 	// (including on stale xfrmIfId, shifted reqid, or rotated secrets) until they are ended.
 	oldFP, _ := ipsecConnectionFingerprints(from)
 	newFP, newStart := ipsecConnectionFingerprints(to)
+	pending, err := r.readPendingTerminations()
+	if err != nil {
+		return err
+	}
 	pendingSet := map[string]bool{}
-	for _, id := range r.readPendingTerminations() {
+	for _, id := range pending {
 		pendingSet[id] = true
 	}
 	for id, oldDigest := range oldFP {
