@@ -233,6 +233,15 @@ func pskPairKey(local, remote string) string {
 	return ids[0] + "\x00" + ids[1]
 }
 
+// policyOneToOneMessage refuses 1:1 NAT on a policy-based IPsec zone: that traffic leaves exempt from NAT, and
+// translating it would need phase-2 selectors covering the external addresses.
+const policyOneToOneMessage = "1:1 NAT cannot translate policy-based IPsec traffic. Use a route-based connection for this zone, or put the 1:1 entry on another zone."
+
+// policyIPsecZone reports whether an enabled policy-based IPsec connection belongs to zone.
+func policyIPsecZone(d *declaration, zone string) bool {
+	return slices.ContainsFunc(d.VPN.IPsec, func(c ipsecConnection) bool { return c.Enabled && !c.xfrm() && c.Zone == zone })
+}
+
 // wildcardSwanIdentity reports identities strongSwan matches against others (ID_ANY, "*" wildcards, ^...$ regexes,
 // subnets and ranges):
 // as an EAP secret's owner one would hand its password to every user name.
@@ -332,6 +341,8 @@ func validateIPsec(d *declaration) []FieldError {
 			bad(p+"/zone", "Unknown zone.")
 		} else if c.Zone == "" && c.Enabled {
 			bad(p+"/zone", "An enabled connection needs a zone.")
+		} else if c.Enabled && !c.xfrm() && slices.ContainsFunc(d.NAT.OneToOne, func(o oneToOne) bool { return o.Enabled && !o.NoBinat && o.Zone == c.Zone }) {
+			bad(p+"/zone", policyOneToOneMessage)
 		}
 		if c.LocalSegment != "" && !segments[c.LocalSegment] {
 			bad(p+"/localSegment", "Expected a segment of this configuration.")

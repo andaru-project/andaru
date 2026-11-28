@@ -343,13 +343,10 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 			}
 		}
 		// Decrypted policy-based IPsec traffic carries the inbound-policy mark and must not pass as zone traffic.
-		// Policy-based IPsec traffic leaves exempt from NAT, so 1:1 skips it both ways rather than mapping half.
+		// Validation keeps 1:1 off policy-based IPsec zones; the guard keeps their traffic out of other zones' entries.
 		ingress := "iifname @" + setName(o.Zone)
 		if len(f.policies) > 0 {
 			ingress = "meta mark & " + ipsecPolicyInMark + " == 0 " + ingress
-		}
-		if len(f.policies[o.Zone]) > 0 {
-			r.find("warning", "NAT_POLICY_IPSEC_UNSUPPORTED", fmt.Sprintf("/nat/oneToOne/%d/zone", i), "1:1 NAT does not apply to traffic of this zone's policy-based IPsec connections; use a route-based (XFRM) connection to translate it.")
 		}
 		for _, s := range sources {
 			prerouting = append(prerouting, join(ingress, s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))

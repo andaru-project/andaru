@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -580,5 +581,40 @@ func TestIPsecSecurityValidation(t *testing.T) {
 	// DNs that differ only in case or spacing are one strongSwan identity.
 	if normalizeSwanIdentity("C=US, CN=gw") != normalizeSwanIdentity("c=US,cn=gw") || normalizeSwanIdentity("asn1dn:c=US,cn=gw") == normalizeSwanIdentity("C=US, CN=gw") || normalizeSwanIdentity("keyid:ABCD") == normalizeSwanIdentity("keyid:abcd") {
 		t.Error("DN identities not normalized like strongSwan")
+	}
+}
+
+func TestIPsecPolicyZoneRefusesOneToOne(t *testing.T) {
+	d := &declaration{
+		Zones: []zone{{identity: identity{ID: lanZone, Name: "lan"}}},
+		VPN: vpnSettings{IPsec: []ipsecConnection{{
+			identity: identity{ID: ipsA, Name: "branch"}, Enabled: true, Mode: "policy-based", Zone: lanZone,
+			RemoteAddress: "198.51.100.1", IKEVersion: 2, LocalSubnets: []string{"192.0.2.0/24"}, RemoteSubnets: []string{"10.30.0.0/16"},
+			Auth: ipsecAuth{LocalType: "psk", RemoteType: "psk", LocalID: "gw.example.com", RemoteID: "peer.example.com", PSKRef: &secretReference{Secret: "P"}},
+		}}},
+		NAT: natSettings{OneToOne: []oneToOne{{identity: identity{ID: "oto_00000001-0000-4000-8000-000000000001", Name: "x"}, Enabled: true, Zone: lanZone, Internal: "192.0.2.40", External: "198.51.100.40"}}},
+	}
+	has := func(errs []FieldError, path string) bool {
+		return slices.ContainsFunc(errs, func(e FieldError) bool { return e.Path == path && e.Message == policyOneToOneMessage })
+	}
+	// Refused from both sides, so either edit names its own field.
+	if !has(validateIPsec(d), "/vpn/ipsec/0/zone") || !has(validateNAT(d), "/nat/oneToOne/0/zone") {
+		t.Fatalf("1:1 on a policy-based IPsec zone accepted: %+v %+v", validateIPsec(d), validateNAT(d))
+	}
+	// Nothing to translate: an exclusion, a disabled entry or connection, or a route-based connection is fine.
+	for name, edit := range map[string]func(){
+		"exclusion":           func() { d.NAT.OneToOne[0].NoBinat, d.NAT.OneToOne[0].External = true, "" },
+		"disabled":            func() { d.NAT.OneToOne[0].Enabled = false },
+		"disabled connection": func() { d.VPN.IPsec[0].Enabled = false },
+		"route-based":         func() { d.VPN.IPsec[0].Mode = "route-based" },
+	} {
+		saved := *d
+		saved.NAT.OneToOne = slices.Clone(d.NAT.OneToOne)
+		saved.VPN.IPsec = slices.Clone(d.VPN.IPsec)
+		edit()
+		if has(validateIPsec(d), "/vpn/ipsec/0/zone") || has(validateNAT(d), "/nat/oneToOne/0/zone") {
+			t.Errorf("%s refused", name)
+		}
+		*d = saved
 	}
 }

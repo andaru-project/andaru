@@ -207,12 +207,9 @@ func TestIPsecPolicyOneToOne(t *testing.T) {
 		}}
 	}))
 	script := fileEnding(t, r, nftPath).Content
-	// Policy-based tunnel traffic is NAT-exempt on the way out, so 1:1 must not translate it on the way in either.
+	// Validation refuses this pairing; the rendered rule still never translates policy-based tunnel traffic.
 	if !strings.Contains(script, "meta mark & "+ipsecPolicyInMark+" == 0 iifname @zon_00000004_0000_4000_8000_000000000004 dnat") ||
 		strings.Contains(script, "meta ipsec exists ipsec in reqid "+req+" dnat") {
 		t.Fatalf("1:1 not limited to interface traffic:\n%s", script)
-	}
-	if !findingAt(r, "NAT_POLICY_IPSEC_UNSUPPORTED", "/nat/oneToOne/0/zone") {
-		t.Fatalf("no warning for 1:1 on a policy-based IPsec zone: %+v", r.Findings)
 	}
 }
