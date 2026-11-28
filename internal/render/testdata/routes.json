@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 4,
+  "links": [
+    {
+      "id": "lnk_00000001-0000-4000-8000-000000000001",
+      "name": "wan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:01"
+    },
+    {
+      "id": "lnk_00000002-0000-4000-8000-000000000002",
+      "name": "lan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:02"
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_00000001-0000-4000-8000-000000000001",
+      "name": "wan",
+      "link": "lnk_00000001-0000-4000-8000-000000000001",
+      "zone": "zon_00000001-0000-4000-8000-000000000001",
+      "addressing": {
+        "ipv4": {
+          "mode": "dhcp"
+        },
+        "ipv6": {
+          "mode": "dhcp6",
+          "requestPrefixLength": 56
+        }
+      }
+    },
+    {
+      "id": "seg_00000002-0000-4000-8000-000000000002",
+      "name": "lan",
+      "link": "lnk_00000002-0000-4000-8000-000000000002",
+      "zone": "zon_00000002-0000-4000-8000-000000000002",
+      "addressing": {
+        "ipv4": {
+          "mode": "static",
+          "addresses": [
+            "192.0.2.1/24"
+          ]
+        },
+        "ipv6": {
+          "mode": "delegated",
+          "from": "seg_00000001-0000-4000-8000-000000000001",
+          "subnetId": "beef",
+          "ra": {
+            "enabled": true,
+            "managed": false,
+            "otherInfo": true
+          }
+        }
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "zon_00000001-0000-4000-8000-000000000001",
+      "name": "wan"
+    },
+    {
+      "id": "zon_00000002-0000-4000-8000-000000000002",
+      "name": "lan"
+    }
+  ],
+  "routes": [
+    {
+      "id": "rte_00000001-0000-4000-8000-000000000001",
+      "name": "office backup",
+      "destination": "10.20.0.0/24",
+      "target": {
+        "kind": "segment",
+        "id": "seg_00000002-0000-4000-8000-000000000002"
+      },
+      "gateway": "192.0.2.253",
+      "metric": 200,
+      "enabled": true
+    },
+    {
+      "id": "rte_00000002-0000-4000-8000-000000000002",
+      "name": "office",
+      "destination": "10.20.0.0/24",
+      "target": {
+        "kind": "segment",
+        "id": "seg_00000002-0000-4000-8000-000000000002"
+      },
+      "gateway": "192.0.2.254",
+      "metric": 100,
+      "enabled": true
+    },
+    {
+      "id": "rte_00000003-0000-4000-8000-000000000003",
+      "name": "lab v6",
+      "destination": "2001:db8:100::/48",
+      "target": {
+        "kind": "segment",
+        "id": "seg_00000002-0000-4000-8000-000000000002"
+      },
+      "gateway": "fe80::1",
+      "enabled": true
+    },
+    {
+      "id": "rte_00000004-0000-4000-8000-000000000004",
+      "name": "provider block",
+      "destination": "198.51.100.0/24",
+      "target": {
+        "kind": "segment",
+        "id": "seg_00000001-0000-4000-8000-000000000001"
+      },
+      "enabled": true
+    },
+    {
+      "id": "rte_00000005-0000-4000-8000-000000000005",
+      "name": "old site",
+      "destination": "10.99.0.0/16",
+      "target": {
+        "kind": "segment",
+        "id": "seg_00000002-0000-4000-8000-000000000002"
+      },
+      "gateway": "192.0.2.250",
+      "enabled": false
+    },
+    {
+      "id": "rte_00000006-0000-4000-8000-000000000006",
+      "name": "branch",
+      "destination": "10.10.0.0/16",
+      "target": {
+        "kind": "segment",
+        "id": "seg_00000002-0000-4000-8000-000000000002"
+      },
+      "gateway": "192.0.2.254",
+      "enabled": true
+    }
+  ]
+}

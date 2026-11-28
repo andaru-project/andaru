@@ -65,6 +65,7 @@ import type {
   Session,
   SetupBootstrapRequest,
   Snapshot,
+  StaticRoute,
   SystemInfo,
   TlsCryptKey,
   Token,
@@ -558,6 +559,18 @@ export class ApiClient {
 
   deleteVirtualAddress(id: string, version: string) {
     return this.request(`/api/v1/config/virtualAddresses/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  routes() {
+    return this.request<SavedList<StaticRoute>>('/api/v1/config/routes');
+  }
+
+  saveRoute(route: Omit<StaticRoute, 'id'>, saved?: SavedObject<StaticRoute>) {
+    return this.save('/api/v1/config/routes', route, saved);
+  }
+
+  deleteRoute(id: string, version: string) {
+    return this.request(`/api/v1/config/routes/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
   }
 
   notificationChannels() {

@@ -1391,6 +1391,9 @@
         },
         {
           "$ref": "#/$defs/acmeOrderWrite"
+        },
+        {
+          "$ref": "#/$defs/routeWrite"
         }
       ]
     },
@@ -1651,6 +1654,13 @@
             }
           },
           "additionalProperties": false
+        },
+        "routes": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/routeStored"
+          }
         }
       },
       "required": [
@@ -1854,6 +1864,13 @@
             }
           },
           "additionalProperties": false
+        },
+        "routes": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/routeStored"
+          }
         }
       },
       "required": [
@@ -3310,6 +3327,86 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "routes"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/routeWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "routes"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/routeWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "routes"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -3392,6 +3489,9 @@
         },
         {
           "$ref": "#/$defs/acmeOrderView"
+        },
+        {
+          "$ref": "#/$defs/routeStored"
         }
       ]
     },
@@ -5960,6 +6060,92 @@
           "required": [
             "id"
           ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "routeID": {
+      "type": "string",
+      "pattern": "^rte_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "routeFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/routeID"
+            },
+            "destination": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "segment",
+                    "wireguard",
+                    "ipsec",
+                    "openvpn"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "pattern": "^([a-z]{2,3}_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "gateway": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "metric": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "destination",
+            "target",
+            "enabled"
+          ]
+        }
+      ]
+    },
+    "routeStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/routeFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "routeWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/routeFields"
         }
       ],
       "unevaluatedProperties": false

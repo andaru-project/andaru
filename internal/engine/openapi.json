@@ -1190,7 +1190,7 @@
               "segments",
               "zones",
               "roles",
-              "dhcp", "dhcp6", "virtualAddresses", "addons"
+              "dhcp", "dhcp6", "virtualAddresses", "addons", "routes"
             ]
           }
         }
@@ -1599,7 +1599,7 @@
               "segments",
               "zones",
               "roles",
-              "dhcp", "dhcp6", "virtualAddresses", "addons"
+              "dhcp", "dhcp6", "virtualAddresses", "addons", "routes"
             ]
           }
         },
@@ -9173,7 +9173,7 @@
                       "rules",
                       "management",
                       "nat.outbound",
-                      "dhcp", "dhcp6", "virtualAddresses", "addons", "notifications.channels", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders",
+                      "dhcp", "dhcp6", "virtualAddresses", "addons", "notifications.channels", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders", "routes",
                       "dns"
                     ]
                   },
@@ -9373,7 +9373,7 @@
               "rules",
               "management",
               "nat.outbound",
-              "dhcp", "dhcp6", "virtualAddresses", "addons", "notifications.channels", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders",
+              "dhcp", "dhcp6", "virtualAddresses", "addons", "notifications.channels", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders", "routes",
               "dns"
             ]
           },

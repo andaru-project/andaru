@@ -124,7 +124,7 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 				route, id = "object", parts[3]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
-		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "roles", "dhcp", "dhcp6", "virtualAddresses", "addons"}, parts[1]):
+		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "roles", "dhcp", "dhcp6", "virtualAddresses", "addons", "routes"}, parts[1]):
 			collection = parts[1]
 			if len(parts) == 2 {
 				route = "collection"

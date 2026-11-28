@@ -733,6 +733,24 @@ export interface AcmeTriggerResponse {
   stagingTest?: boolean;
 }
 
+export type RouteTargetKind = 'segment' | 'wireguard' | 'ipsec' | 'openvpn';
+
+export interface RouteTarget {
+  kind: RouteTargetKind;
+  id: string;
+}
+
+export interface StaticRoute {
+  id: string;
+  name: string;
+  description?: string;
+  destination: string;
+  target: RouteTarget;
+  gateway?: string;
+  metric?: number;
+  enabled: boolean;
+}
+
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
@@ -746,6 +764,7 @@ export interface Snapshot {
     dhcp6?: Dhcp6Entry[];
     dns?: DnsService;
     virtualAddresses?: VirtualAddress[];
+    routes?: StaticRoute[];
     pki?: {
       cas?: PKICA[];
       certificates?: PKICertificate[];

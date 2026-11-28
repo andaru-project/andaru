@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -141,11 +142,14 @@ func (r *renderer) pppoe(i int) {
 			"RestartSec=5",
 		}}), sources)
 
-	sections, _ := r.addressing(l.ID, true)
+	sections, addrSources := r.addressing(l.ID, true)
+	networkSources := append(slices.Clone(sources), addrSources...)
+	slices.Sort(networkSources)
+	networkSources = slices.Compact(networkSources)
 	// KeepConfiguration stops networkd removing the address and default route pppd installs.
 	sections[0].lines = append([]string{"KeepConfiguration=yes"}, sections[0].lines...)
 	r.file(networkDir+name+".network", "0644", ini(append([]section{
 		{"Match", []string{"Name=" + name, "Type=ppp"}},
 		{"Link", []string{"RequiredForOnline=no"}},
-	}, sections...)...), sources)
+	}, sections...)...), networkSources)
 }
