@@ -201,18 +201,26 @@ func providerAPI(t *testing.T, dns *fakeDNS) *httptest.Server {
 			writeJSONTest(w, 200, map[string]any{"success": true, "result": map[string]string{"id": "r1"}})
 		case r.Method == "DELETE" && p == "/cf/zones/z1/dns_records/r1":
 			dns.deletes++
-		// hetzner
+		// hetzner (Cloud DNS API)
 		case r.Method == "GET" && p == "/hz/zones":
 			if r.URL.Query().Get("name") != "example.com" {
-				http.NotFound(w, r)
+				writeJSONTest(w, 200, map[string]any{"zones": []any{}})
 				return
 			}
-			writeJSONTest(w, 200, map[string]any{"zones": []any{map[string]string{"id": "hz1", "name": "example.com"}}})
-		case r.Method == "POST" && p == "/hz/records":
-			dns.add(str("name")+".example.com", str("value"))
-			writeJSONTest(w, 200, map[string]any{"record": map[string]string{"id": "hr1"}})
-		case r.Method == "DELETE" && p == "/hz/records/hr1":
+			writeJSONTest(w, 200, map[string]any{"zones": []any{map[string]any{"id": 42, "name": "example.com"}}})
+		case r.Method == "POST" && strings.HasPrefix(p, "/hz/zones/42/rrsets/") && strings.HasSuffix(p, "/TXT/actions/add_records"):
+			rrName := strings.TrimSuffix(strings.TrimPrefix(p, "/hz/zones/42/rrsets/"), "/TXT/actions/add_records")
+			recs, _ := body["records"].([]any)
+			for _, rec := range recs {
+				if m, ok := rec.(map[string]any); ok {
+					v, _ := m["value"].(string)
+					dns.add(rrName+".example.com", strings.Trim(v, `"`))
+				}
+			}
+			writeJSONTest(w, 201, map[string]any{"action": map[string]any{"id": 1, "status": "success"}})
+		case r.Method == "POST" && strings.HasPrefix(p, "/hz/zones/42/rrsets/") && strings.HasSuffix(p, "/TXT/actions/remove_records"):
 			dns.deletes++
+			writeJSONTest(w, 200, map[string]any{"action": map[string]any{"id": 2, "status": "success"}})
 		// digitalocean
 		case r.Method == "GET" && strings.HasPrefix(p, "/do/domains/"):
 			if p != "/do/domains/example.com" {
@@ -281,7 +289,7 @@ func TestIssueDNS01Providers(t *testing.T) {
 		deletes int
 	}{
 		{DNS01{Provider: "cloudflare", APIToken: "cf"}, "Authorization", "Bearer cf", 1},
-		{DNS01{Provider: "hetzner", APIToken: "hz"}, "Auth-Api-Token", "hz", 1},
+		{DNS01{Provider: "hetzner", APIToken: "hz"}, "Authorization", "Bearer hz", 1},
 		{DNS01{Provider: "digitalocean", APIToken: "do"}, "Authorization", "Bearer do", 1},
 		{DNS01{Provider: "porkbun", APIKey: "pk", SecretKey: "sk"}, "", "", 1},
 		{DNS01{Provider: "acme-dns", Username: "user", Password: "pass", Subdomain: "sub", AllowPrivateIP: true}, "X-Api-User", "user", 0},
@@ -320,9 +328,21 @@ func TestIssueDNS01Wildcard(t *testing.T) {
 	api := providerAPI(t, dns)
 	ca := newMockCA(t, key)
 	ca.txt = dns.txt
-	p := DNS01{Provider: "cloudflare", APIToken: "cf"}
+	p := DNS01{Provider: "porkbun", APIKey: "pk", SecretKey: "sk"}
 	job, leaf := newJob(t, keyPEM, ca.url("/directory"), []string{"*.example.com", "example.com"}, Challenge{Type: "dns-01", DNS01: &p})
-	is := &Issuer{LookupTXT: dns.lookup, Poll: 10 * time.Millisecond, Endpoints: map[string]string{"cloudflare": api.URL + "/cf"}}
+	// Simulate a caching recursive resolver that freezes the first non-empty TXT RRset it sees:
+	// both TXT values must be published before the first LookupTXT call.
+	var cached []string
+	cachedLookup := func(ctx context.Context, name string) ([]string, error) {
+		if len(cached) == 0 {
+			got, _ := dns.lookup(ctx, name)
+			if len(got) > 0 {
+				cached = got
+			}
+		}
+		return cached, nil
+	}
+	is := &Issuer{LookupTXT: cachedLookup, Poll: 10 * time.Millisecond, Endpoints: map[string]string{"porkbun": api.URL + "/pb"}}
 	checkIssued(t, is.Issue(context.Background(), job), leaf, job.Domains)
 	if dns.deletes != 2 || len(dns.records["_acme-challenge.example.com"]) != 2 {
 		t.Fatalf("deletes %d, records %v", dns.deletes, dns.records)

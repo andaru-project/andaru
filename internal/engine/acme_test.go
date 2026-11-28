@@ -44,7 +44,7 @@ func (f *fakeACMEStore) ACME(context.Context) (config.ACMESettings, error) {
 	return out, nil
 }
 
-func (f *fakeACMEStore) SaveACMECertificate(_ context.Context, orderID, certID, certPEM, _, keyPEM string) (config.SaveResult, error) {
+func (f *fakeACMEStore) SaveACMECertificate(_ context.Context, orderID, certID, _, certPEM, _, keyPEM string) (config.SaveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.saved = append(f.saved, savedACMECert{orderID, certID, certPEM, keyPEM})
@@ -329,8 +329,13 @@ func TestACMESchedulerRenewsDueOrders(t *testing.T) {
 	order.CertificateID, order.CertificateNotAfter = "crt_6c1f5d0e-2b3a-4c5d-8e9f-0a1b2c3d4e5f", time.Now().Add(10*24*time.Hour)
 	fresh := dnsTestOrder()
 	fresh.ID, fresh.CertificateNotAfter = "aco_00000000-0000-4000-8000-000000000002", time.Now().Add(80*24*time.Hour)
+	// A short-lived 6-day certificate just issued with renewBeforeDays=30 must wait until 2/3 of its lifetime.
+	shortLived := dnsTestOrder()
+	shortLived.ID = "aco_00000000-0000-4000-8000-000000000003"
+	shortLived.CertificateNotBefore = time.Now().Add(-1 * time.Hour)
+	shortLived.CertificateNotAfter = time.Now().Add(6 * 24 * time.Hour)
 	b := newACMEBench(t, order)
-	b.store.settings.Orders = append(b.store.settings.Orders, fresh)
+	b.store.settings.Orders = append(b.store.settings.Orders, fresh, shortLived)
 	b.answer = func(acme.Job) acme.Result { return acme.Result{Error: "rate limited"} }
 	safe := filepath.Join(b.c.systemRoot, generation.SafeModeBootFile)
 	if err := os.MkdirAll(filepath.Dir(safe), 0o755); err != nil || os.WriteFile(safe, nil, 0o644) != nil {

@@ -172,6 +172,12 @@ func normalizeDeclaration(d *declaration) {
 	slices.SortFunc(d.PKI.TLSCryptKeys, func(a, b tlsCryptKey) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.ACME.Accounts, func(a, b acmeAccount) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.ACME.Orders, func(a, b acmeOrder) int { return strings.Compare(a.ID, b.ID) })
+	if len(d.ACME.Accounts) == 0 {
+		d.ACME.Accounts = nil // absent, so a declaration without ACME accounts keeps its canonical form
+	}
+	if len(d.ACME.Orders) == 0 {
+		d.ACME.Orders = nil
+	}
 	for i := range d.ACME.Orders {
 		o := &d.ACME.Orders[i]
 		if o.RenewBeforeDays == 0 {

@@ -61,7 +61,7 @@ func (e *acmeNotReady) Error() string { return e.reason }
 // acmeStore is what the coordinator reads and saves of the configuration.
 type acmeStore interface {
 	ACME(ctx context.Context) (config.ACMESettings, error)
-	SaveACMECertificate(ctx context.Context, orderID, certID, certPEM, chainPEM, keyPEM string) (config.SaveResult, error)
+	SaveACMECertificate(ctx context.Context, orderID, certID, accountID, certPEM, chainPEM, keyPEM string) (config.SaveResult, error)
 }
 
 // acmeOrderState and acmeAccountState are what the orders' runs left: kept beside the store, in state.json, so
@@ -220,7 +220,7 @@ func (c *acmeCoordinator) check(ctx context.Context) {
 		if !o.Enabled {
 			continue
 		}
-		if !o.CertificateNotAfter.IsZero() && o.CertificateNotAfter.Sub(now) < acmeExpiryWarning {
+		if !o.CertificateNotAfter.IsZero() && !now.Before(expiryWarnAt(o)) {
 			c.raise(o, notify.Warning, fmt.Sprintf("The certificate of ACME order %s expires on %s", o.Name, o.CertificateNotAfter.UTC().Format(time.DateOnly)),
 				"It has not been renewed yet. Check the order's last error under System, Certificates.")
 		}
@@ -234,7 +234,26 @@ func (c *acmeCoordinator) check(ctx context.Context) {
 }
 
 func renewAt(o config.ACMEOrder) time.Time {
-	return o.CertificateNotAfter.Add(-time.Duration(o.RenewBeforeDays) * 24 * time.Hour)
+	target := o.CertificateNotAfter.Add(-time.Duration(o.RenewBeforeDays) * 24 * time.Hour)
+	if !o.CertificateNotBefore.IsZero() && o.CertificateNotAfter.After(o.CertificateNotBefore) {
+		// Clamp within the certificate's lifetime (at least two-thirds elapsed) so short-lived certificates
+		// whose lifetime <= renewBeforeDays do not immediately renew on every daily pass.
+		earliest := o.CertificateNotBefore.Add(o.CertificateNotAfter.Sub(o.CertificateNotBefore) * 2 / 3)
+		if target.Before(earliest) {
+			return earliest
+		}
+	}
+	return target
+}
+
+func expiryWarnAt(o config.ACMEOrder) time.Time {
+	warnWindow := acmeExpiryWarning
+	if !o.CertificateNotBefore.IsZero() && o.CertificateNotAfter.After(o.CertificateNotBefore) {
+		if third := o.CertificateNotAfter.Sub(o.CertificateNotBefore) / 3; third < warnWindow {
+			warnWindow = third
+		}
+	}
+	return o.CertificateNotAfter.Add(-warnWindow)
 }
 
 // trigger starts an order now, as a user asks.
@@ -406,6 +425,8 @@ func (c *acmeCoordinator) execute(ctx context.Context, run *acmeRun, job acme.Jo
 			return failed(fmt.Errorf("open the HTTP-01 redirect: %w", err))
 		}
 	}
+	deadline := c.now().Add(c.timeout).UTC()
+	job.Deadline = &deadline
 	payload, err := bus.NewEvent(acme.JobType, "engine", job)
 	if err == nil {
 		if c.publish == nil {
@@ -512,7 +533,7 @@ func (c *acmeCoordinator) save(ctx context.Context, o config.ACMEOrder, certID *
 	var saved config.SaveResult
 	var fault *config.Fault
 	for attempt := 0; ; attempt++ {
-		saved, err = c.store.SaveACMECertificate(ctx, o.ID, *certID, string(imported.CertPEM), string(imported.ChainPEM), string(imported.KeyPEM))
+		saved, err = c.store.SaveACMECertificate(ctx, o.ID, *certID, o.AccountID, string(imported.CertPEM), string(imported.ChainPEM), string(imported.KeyPEM))
 		// A save that moved the head in between is read again: the batch is guarded by the head it was built on.
 		if err == nil || attempt == 2 || !errors.As(err, &fault) || fault.Code != "PRECONDITION_FAILED" {
 			break

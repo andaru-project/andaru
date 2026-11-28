@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,7 +22,7 @@ import (
 // The providers' API base URLs.
 var defaultEndpoints = map[string]string{
 	"cloudflare":   "https://api.cloudflare.com/client/v4",
-	"hetzner":      "https://dns.hetzner.com/api/v1",
+	"hetzner":      "https://api.hetzner.cloud/v1",
 	"digitalocean": "https://api.digitalocean.com/v2",
 	"porkbun":      "https://api.porkbun.com/api/json/v3",
 }
@@ -32,9 +33,9 @@ const (
 	maxProviderBody    = 1 << 20
 )
 
-// present publishes the TXT record value for domain's challenge and waits until the resolver sees it. The cleanup it
-// returns, even with an error, removes the record.
-func (is *Issuer) present(ctx context.Context, p DNS01, domain, value string) (func(), error) {
+// publishDNS publishes one TXT record value for domain's challenge without polling propagation yet.
+// The cleanup it returns, even with an error, removes the record.
+func (is *Issuer) publishDNS(ctx context.Context, p DNS01, domain, value string) (func(), error) {
 	fqdn := "_acme-challenge." + domain
 	client := is.providerClient(p)
 	var cleanup func(context.Context) error
@@ -65,17 +66,11 @@ func (is *Issuer) present(ctx context.Context, p DNS01, domain, value string) (f
 			_ = cleanup(ctx)
 		}
 	}
-	if err != nil {
-		return done, err
-	}
-	if p.Provider == "acme-dns" && p.FullDomain != "" {
-		fqdn = p.FullDomain // the record _acme-challenge's CNAME names
-	}
-	return done, is.propagated(ctx, p, fqdn, value)
+	return done, err
 }
 
-// propagated waits until fqdn's TXT records hold value, for at most the provider's propagation timeout.
-func (is *Issuer) propagated(ctx context.Context, p DNS01, fqdn, value string) error {
+// propagated waits until fqdn's TXT records hold every value in values, for at most the provider's propagation timeout.
+func (is *Issuer) propagated(ctx context.Context, p DNS01, fqdn string, values []string) error {
 	limit := defaultPropagation
 	if p.PropagationTimeoutSeconds > 0 {
 		limit = time.Duration(p.PropagationTimeoutSeconds) * time.Second
@@ -92,8 +87,17 @@ func (is *Issuer) propagated(ctx context.Context, p DNS01, fqdn, value string) e
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
-		if records, err := lookup(pctx, fqdn); err == nil && slices.Contains(records, value) {
-			return nil
+		if records, err := lookup(pctx, fqdn); err == nil {
+			allPresent := true
+			for _, v := range values {
+				if !slices.Contains(records, v) {
+					allPresent = false
+					break
+				}
+			}
+			if allPresent {
+				return nil
+			}
 		}
 		select {
 		case <-pctx.Done():
@@ -276,12 +280,13 @@ func (is *Issuer) cloudflare(ctx context.Context, client *http.Client, p DNS01, 
 }
 
 func (is *Issuer) hetzner(ctx context.Context, client *http.Client, p DNS01, fqdn, value string) (func(context.Context) error, error) {
-	base, auth := is.endpoint("hetzner"), map[string]string{"Auth-API-Token": p.APIToken}
-	zoneID, zoneName := "", ""
+	base, auth := is.endpoint("hetzner"), map[string]string{"Authorization": "Bearer " + p.APIToken}
+	var zoneID int64
+	zoneName := ""
 	for _, z := range zones(fqdn) {
 		var out struct {
 			Zones []struct {
-				ID string `json:"id"`
+				ID int64 `json:"id"`
 			} `json:"zones"`
 		}
 		status, err := call(ctx, client, http.MethodGet, base+"/zones?name="+url.QueryEscape(z), auth, nil, &out)
@@ -291,28 +296,24 @@ func (is *Issuer) hetzner(ctx context.Context, client *http.Client, p DNS01, fqd
 		if err != nil {
 			return nil, fmt.Errorf("hetzner: find the zone: %w", err)
 		}
-		if len(out.Zones) > 0 && out.Zones[0].ID != "" {
+		if len(out.Zones) > 0 && out.Zones[0].ID != 0 {
 			zoneID, zoneName = out.Zones[0].ID, z
 			break
 		}
 	}
-	if zoneID == "" {
+	if zoneID == 0 {
 		return nil, fmt.Errorf("hetzner: no zone holds %s", fqdn)
 	}
-	var created struct {
-		Record struct {
-			ID string `json:"id"`
-		} `json:"record"`
-	}
-	if _, err := call(ctx, client, http.MethodPost, base+"/records", auth,
-		map[string]any{"zone_id": zoneID, "type": "TXT", "name": relative(fqdn, zoneName), "value": value, "ttl": txtTTL}, &created); err != nil {
+	rrName := relative(fqdn, zoneName)
+	quotedValue := strconv.Quote(value)
+	rrBase := fmt.Sprintf("%s/zones/%d/rrsets/%s/TXT/actions", base, zoneID, url.PathEscape(rrName))
+	if _, err := call(ctx, client, http.MethodPost, rrBase+"/add_records", auth,
+		map[string]any{"ttl": txtTTL, "records": []map[string]string{{"value": quotedValue}}}, nil); err != nil {
 		return nil, fmt.Errorf("hetzner: create the TXT record: %w", err)
 	}
-	if created.Record.ID == "" {
-		return nil, errors.New("hetzner: create the TXT record: missing record ID")
-	}
 	return func(ctx context.Context) error {
-		_, err := call(ctx, client, http.MethodDelete, base+"/records/"+url.PathEscape(created.Record.ID), auth, nil, nil)
+		_, err := call(ctx, client, http.MethodPost, rrBase+"/remove_records", auth,
+			map[string]any{"records": []map[string]string{{"value": quotedValue}}}, nil)
 		return err
 	}, nil
 }

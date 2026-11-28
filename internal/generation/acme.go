@@ -36,7 +36,14 @@ func (r Realizer) ACMEHTTP01(ctx context.Context, ifaces []string) error {
 	}
 	if len(ifaces) == 0 {
 		if _, err := r.Run(ctx, "/usr/sbin/nft", "flush", "set", "inet", "andaru", ACMESet); err != nil {
-			if _, listErr := r.Run(ctx, "/usr/sbin/nft", "list", "set", "inet", "andaru", ACMESet); listErr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			out, listErr := r.Run(ctx, "/usr/sbin/nft", "list", "set", "inet", "andaru", ACMESet)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if listErr != nil && isNFTAbsent(out, listErr) {
 				return nil // no set, so nothing redirected
 			}
 			return err
@@ -52,4 +59,8 @@ func (r Realizer) ACMEHTTP01(ctx context.Context, ifaces []string) error {
 	}
 	_, err := r.Run(ctx, "/usr/sbin/nft", "add", "element", "inet", "andaru", ACMESet, "{ "+strings.Join(quoted, ", ")+" }")
 	return err
+}
+
+func isNFTAbsent(out []byte, err error) bool {
+	return strings.Contains(string(out), "No such file or directory") || strings.Contains(err.Error(), "No such file or directory")
 }

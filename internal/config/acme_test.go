@@ -297,7 +297,7 @@ func TestACMECertificateChanges(t *testing.T) {
 	}
 	certID, _ := NewID("pki.certificates")
 	first := issue()
-	c, err := acmeCertificateChanges(&s, orderID, certID, string(first.CertPEM), "", string(first.KeyPEM))
+	c, err := acmeCertificateChanges(&s, orderID, certID, accountID, string(first.CertPEM), "", string(first.KeyPEM))
 	if err != nil {
 		t.Fatal(faultText(err))
 	}
@@ -307,7 +307,7 @@ func TestACMECertificateChanges(t *testing.T) {
 		t.Fatalf("first issuance: %+v %+v", s.Config.ACME.Orders[0], s.Config.PKI.Certificates)
 	}
 	second := issue()
-	if c, err = acmeCertificateChanges(&s, orderID, certID, string(second.CertPEM), "", string(second.KeyPEM)); err != nil {
+	if c, err = acmeCertificateChanges(&s, orderID, certID, accountID, string(second.CertPEM), "", string(second.KeyPEM)); err != nil {
 		t.Fatal(faultText(err))
 	}
 	s = mustSave(t, s, c, "11")
@@ -315,7 +315,24 @@ func TestACMECertificateChanges(t *testing.T) {
 		t.Fatal("renewal not saved in place")
 	}
 	other, _ := NewID("pki.certificates")
-	if _, err := acmeCertificateChanges(&s, orderID, other, string(second.CertPEM), "", string(second.KeyPEM)); err == nil {
+	if _, err := acmeCertificateChanges(&s, orderID, other, accountID, string(second.CertPEM), "", string(second.KeyPEM)); err == nil {
 		t.Fatal("renewed into another certificate")
+	}
+	// Editing the order's domains mid-issuance rejects saving a stale certificate.
+	edited := dnsOrder(accountID, "edge.example.com", "api.example.com")
+	edited["certificateId"] = certID
+	edited["challenge"].(map[string]any)["dns01"].(map[string]any)["cloudflare"] = map[string]any{}
+	if s, err = acmeReplace(t, s, "acme.orders", orderID, edited, "12"); err != nil {
+		t.Fatal(faultText(err))
+	}
+	if _, err := acmeCertificateChanges(&s, orderID, certID, accountID, string(second.CertPEM), "", string(second.KeyPEM)); err == nil {
+		t.Fatal("accepted stale certificate after order domains changed")
+	}
+	// Empty ACME arrays canonicalize to absent so round-trip encoding matches.
+	d := seededState(t).Config
+	d.ACME.Accounts, d.ACME.Orders = []acmeAccount{}, []acmeOrder{}
+	normalizeDeclaration(&d)
+	if d.ACME.Accounts != nil || d.ACME.Orders != nil {
+		t.Fatal("empty ACME slices not cleared during normalization")
 	}
 }

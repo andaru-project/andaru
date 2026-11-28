@@ -135,7 +135,9 @@ func (s *Service) session(ctx context.Context) error {
 	var acks, aliasAcks order
 	done, aliasDone, aliasFailed := make(chan int64), make(chan []int64), make(chan error)
 	slots := make(chan struct{}, maxFetches)
-	acmeSlot := make(chan struct{}, 1) // one order at a time: HTTP-01 has one port
+	// HTTP-01 owns port 8480 and runs one at a time, independent of DNS-01 so DNS propagation never delays port 80.
+	acmeHTTP01Slot := make(chan struct{}, 1)
+	acmeDNS01Slot := make(chan struct{}, 2)
 	var running sync.WaitGroup
 	defer running.Wait()
 	defer cancel() // runs first: the jobs still being sent stop, unacked, and the bus delivers them again
@@ -176,7 +178,7 @@ func (s *Service) session(ctx context.Context) error {
 				running.Add(1)
 				go func(m bus.Message) {
 					defer running.Done()
-					s.handleACME(ctx, c, acmeSlot, m)
+					s.handleACME(ctx, c, acmeHTTP01Slot, acmeDNS01Slot, m)
 				}(d.Message)
 			case d.Consumer == aliasfeed.Consumer && d.Gap:
 				s.Log.Warn("alias requests may have been missed; the engine asks again on each alias's interval")

@@ -55,9 +55,10 @@ type Job struct {
 	AccountURI   string    `json:"accountUri,omitempty"`
 	EABKeyID     string    `json:"eabKeyId,omitempty"`
 	EABHMAC      string    `json:"eabHmac,omitempty"`
-	Domains      []string  `json:"domains"`
-	CSR          []byte    `json:"csr"`
-	Challenge    Challenge `json:"challenge"`
+	Domains      []string   `json:"domains"`
+	CSR          []byte     `json:"csr"`
+	Challenge    Challenge  `json:"challenge"`
+	Deadline     *time.Time `json:"deadline,omitempty"`
 }
 
 // Challenge is how the order proves control of its domains: "http-01" or "dns-01" with a DNS provider.
@@ -158,7 +159,18 @@ func (is *Issuer) issue(ctx context.Context, job Job) (certPEM, chainPEM, accoun
 			c()
 		}
 	}()
+	// Start the HTTP-01 responder immediately so port 8480 is listening as soon as the redirect opens.
 	var responder *responder
+	if job.Challenge.Type == "http-01" {
+		addr := is.HTTP01Addr
+		if addr == "" {
+			addr = HTTP01Addr
+		}
+		if responder, err = startResponder(addr); err != nil {
+			return "", "", accountURI, err
+		}
+		cleanups = append(cleanups, responder.close)
+	}
 	if len(order.AuthzURLs) > len(job.Domains) || len(order.AuthzURLs) > 100 {
 		return "", "", accountURI, errors.New("the CA returned more authorizations than requested domains")
 	}
@@ -166,6 +178,12 @@ func (is *Issuer) issue(ctx context.Context, job Job) (certPEM, chainPEM, accoun
 	for _, d := range job.Domains {
 		allowed[strings.ToLower(d)] = true
 	}
+	type pendingAuthz struct {
+		authz  *xacme.Authorization
+		chal   *xacme.Challenge
+		domain string
+	}
+	var pending []pendingAuthz
 	for _, u := range order.AuthzURLs {
 		z, err := client.GetAuthorization(ctx, u)
 		if err != nil {
@@ -188,50 +206,90 @@ func (is *Issuer) issue(ctx context.Context, job Job) (certPEM, chainPEM, accoun
 		if i < 0 {
 			return "", "", accountURI, fmt.Errorf("the CA offers no %s challenge for %s", job.Challenge.Type, z.Identifier.Value)
 		}
-		chal := z.Challenges[i]
-		switch job.Challenge.Type {
-		case "http-01":
-			if responder == nil {
-				addr := is.HTTP01Addr
-				if addr == "" {
-					addr = HTTP01Addr
-				}
-				if responder, err = startResponder(addr); err != nil {
-					return "", "", accountURI, err
-				}
-				cleanups = append(cleanups, responder.close)
-			}
-			answer, err := client.HTTP01ChallengeResponse(chal.Token)
+		pending = append(pending, pendingAuthz{
+			authz:  z,
+			chal:   z.Challenges[i],
+			domain: strings.TrimPrefix(strings.ToLower(z.Identifier.Value), "*."),
+		})
+	}
+	switch job.Challenge.Type {
+	case "http-01":
+		for _, p := range pending {
+			answer, err := client.HTTP01ChallengeResponse(p.chal.Token)
 			if err != nil {
 				return "", "", accountURI, err
 			}
-			if !responder.add(chal.Token, answer) {
+			if !responder.add(p.chal.Token, answer) {
 				return "", "", accountURI, errors.New("the CA sent an invalid HTTP-01 token")
 			}
-		case "dns-01":
-			if job.Challenge.DNS01 == nil {
-				return "", "", accountURI, errors.New("the order has no DNS provider")
+		}
+		for _, p := range pending {
+			if _, err := client.Accept(ctx, p.chal); err != nil {
+				return "", "", accountURI, fmt.Errorf("accept the challenge for %s: %w", p.authz.Identifier.Value, acmeError(err))
 			}
-			value, err := client.DNS01ChallengeRecord(chal.Token)
-			if err != nil {
-				return "", "", accountURI, err
+			if _, err := client.WaitAuthorization(ctx, p.authz.URI); err != nil {
+				return "", "", accountURI, fmt.Errorf("validate %s: %w", p.authz.Identifier.Value, acmeError(err))
 			}
-			domain := strings.TrimPrefix(z.Identifier.Value, "*.")
-			cleanup, err := is.present(ctx, *job.Challenge.DNS01, domain, value)
-			if cleanup != nil {
-				cleanups = append(cleanups, cleanup)
+		}
+	case "dns-01":
+		if job.Challenge.DNS01 == nil {
+			return "", "", accountURI, errors.New("the order has no DNS provider")
+		}
+		// Group authorizations sharing the same _acme-challenge.<domain> owner (e.g. example.com and *.example.com)
+		// so all TXT values are published before propagation polling caches the RRset.
+		var orderDomains []string
+		byDomain := map[string][]pendingAuthz{}
+		for _, p := range pending {
+			if _, seen := byDomain[p.domain]; !seen {
+				orderDomains = append(orderDomains, p.domain)
 			}
-			if err != nil {
-				return "", "", accountURI, err
+			byDomain[p.domain] = append(byDomain[p.domain], p)
+		}
+		dnsCfg := *job.Challenge.DNS01
+		for _, domain := range orderDomains {
+			group := byDomain[domain]
+			// acme-dns retains the last two TXT values per subdomain; batch by 2 if a domain somehow has more.
+			batchSize := len(group)
+			if dnsCfg.Provider == "acme-dns" && batchSize > 2 {
+				batchSize = 2
 			}
-		default:
+			for start := 0; start < len(group); start += batchSize {
+				batch := group[start:min(start+batchSize, len(group))]
+				values := make([]string, 0, len(batch))
+				for _, item := range batch {
+					value, err := client.DNS01ChallengeRecord(item.chal.Token)
+					if err != nil {
+						return "", "", accountURI, err
+					}
+					cleanup, err := is.publishDNS(ctx, dnsCfg, domain, value)
+					if cleanup != nil {
+						cleanups = append(cleanups, cleanup)
+					}
+					if err != nil {
+						return "", "", accountURI, err
+					}
+					values = append(values, value)
+				}
+				fqdn := "_acme-challenge." + domain
+				if dnsCfg.Provider == "acme-dns" && dnsCfg.FullDomain != "" {
+					fqdn = dnsCfg.FullDomain
+				}
+				if err := is.propagated(ctx, dnsCfg, fqdn, values); err != nil {
+					return "", "", accountURI, err
+				}
+				for _, item := range batch {
+					if _, err := client.Accept(ctx, item.chal); err != nil {
+						return "", "", accountURI, fmt.Errorf("accept the challenge for %s: %w", item.authz.Identifier.Value, acmeError(err))
+					}
+					if _, err := client.WaitAuthorization(ctx, item.authz.URI); err != nil {
+						return "", "", accountURI, fmt.Errorf("validate %s: %w", item.authz.Identifier.Value, acmeError(err))
+					}
+				}
+			}
+		}
+	default:
+		if len(pending) > 0 {
 			return "", "", accountURI, fmt.Errorf("unsupported challenge %q", job.Challenge.Type)
-		}
-		if _, err := client.Accept(ctx, chal); err != nil {
-			return "", "", accountURI, fmt.Errorf("accept the challenge for %s: %w", z.Identifier.Value, acmeError(err))
-		}
-		if _, err := client.WaitAuthorization(ctx, z.URI); err != nil {
-			return "", "", accountURI, fmt.Errorf("validate %s: %w", z.Identifier.Value, acmeError(err))
 		}
 	}
 	if _, err := client.WaitOrder(ctx, order.URI); err != nil {

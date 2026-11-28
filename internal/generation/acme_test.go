@@ -33,6 +33,18 @@ func TestACMEHTTP01(t *testing.T) {
 	if err := r.ACMEHTTP01(context.Background(), nil); err != nil {
 		t.Fatalf("close without the set: %v", err)
 	}
+	// Non-ENOENT errors (e.g. permission denied or cancelled context) must not be swallowed.
+	rPerm := Realizer{Run: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("Operation not permitted")
+	}}
+	if err := rPerm.ACMEHTTP01(context.Background(), nil); err == nil {
+		t.Fatal("permission failure was swallowed")
+	}
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.ACMEHTTP01(cctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled close returned %v, want context.Canceled", err)
+	}
 	if err := r.ACMEHTTP01(context.Background(), []string{`x" }; flush ruleset; {"`}); err == nil {
 		t.Fatal("an injected name was accepted")
 	}

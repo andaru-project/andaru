@@ -344,8 +344,9 @@ type ACMEOrder struct {
 	ListenSegments []string
 	DNS01          *acme.DNS01
 	Account        ACMEAccount
-	// CertificateNotAfter is when the bound certificate expires; zero when the order has none yet.
-	CertificateNotAfter time.Time
+	// CertificateNotBefore and CertificateNotAfter are the bound certificate's validity window; zero when unbound.
+	CertificateNotBefore time.Time
+	CertificateNotAfter  time.Time
 	// Unresolved are the paths of secrets the order needs that a restore left unresolved.
 	Unresolved []string
 }
@@ -425,6 +426,7 @@ func acmeSettingsOf(state *savedState) (result ACMESettings) {
 			out.DNS01 = j
 		}
 		if c := certs[o.CertificateID]; c != nil {
+			out.CertificateNotBefore, _ = time.Parse(time.RFC3339, c.NotBefore)
 			out.CertificateNotAfter, _ = time.Parse(time.RFC3339, c.NotAfter)
 		}
 		result.Orders = append(result.Orders, out)
@@ -433,13 +435,13 @@ func acmeSettingsOf(state *savedState) (result ACMESettings) {
 }
 
 // SaveACMECertificate saves what an order was issued: into the certificate it renews, or, on its first issuance,
-// into a new certificate certID named after the order, which the order is then bound to. The certificate and key
-// must have been checked against the order by the caller.
-func (s *Store) SaveACMECertificate(ctx context.Context, orderID, certID, certPEM, chainPEM, keyPEM string) (SaveResult, error) {
+// into a new certificate certID named after the order, which the order is then bound to. It atomically checks
+// under the saved-head guard that the order still matches accountID, keyAlgorithm, and all requested domains.
+func (s *Store) SaveACMECertificate(ctx context.Context, orderID, certID, accountID, certPEM, chainPEM, keyPEM string) (SaveResult, error) {
 	var changes Changes
 	err := s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
 		var err error
-		changes, err = acmeCertificateChanges(&state, orderID, certID, certPEM, chainPEM, keyPEM)
+		changes, err = acmeCertificateChanges(&state, orderID, certID, accountID, certPEM, chainPEM, keyPEM)
 		return err
 	})
 	if err != nil {
@@ -449,7 +451,7 @@ func (s *Store) SaveACMECertificate(ctx context.Context, orderID, certID, certPE
 }
 
 // acmeCertificateChanges is the batch SaveACMECertificate saves over state, guarded by its version.
-func acmeCertificateChanges(state *savedState, orderID, certID, certPEM, chainPEM, keyPEM string) (Changes, error) {
+func acmeCertificateChanges(state *savedState, orderID, certID, accountID, certPEM, chainPEM, keyPEM string) (Changes, error) {
 	var changes Changes
 	info, _, err := pki.Inspect([]byte(certPEM))
 	if err != nil {
@@ -461,6 +463,17 @@ func acmeCertificateChanges(state *savedState, orderID, certID, certPEM, chainPE
 		return changes, fault("NOT_FOUND", "", "Object does not exist.")
 	}
 	order := d.ACME.Orders[i]
+	if accountID != "" && order.AccountID != accountID {
+		return changes, fault("VALIDATION_FAILED", "/accountId", "The order's account changed while the certificate was being issued.")
+	}
+	if order.KeyAlgorithm != "" && info.KeyAlgorithm != order.KeyAlgorithm {
+		return changes, fault("VALIDATION_FAILED", "/keyAlgorithm", "The order's key algorithm changed while the certificate was being issued.")
+	}
+	for _, domain := range order.Domains {
+		if !slices.Contains(info.SANs, domain) {
+			return changes, fault("VALIDATION_FAILED", "/domains", "The order's domains changed while the certificate was being issued.")
+		}
+	}
 	head := state.Version
 	changes.ExpectedSavedVersion = &head
 	value := certFields(info, certPEM, chainPEM)
