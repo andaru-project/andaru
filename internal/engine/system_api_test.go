@@ -61,10 +61,17 @@ func TestSystemStatus(t *testing.T) {
 	}
 }
 
-// What the box reports about itself is status: every status route asks for status.read and nothing else.
+// What the box reports about itself is status: every status route asks for status.read and nothing else, but for
+// the ACME orders' status, which is the certificates' and asks for certificates.read.
 func TestStatusRoutesNeedStatusRead(t *testing.T) {
 	seen := 0
 	for _, route := range buildEngineRoutes() {
+		if route.Path == acmeStatusPath {
+			if route.Capability != authz.CertificatesRead {
+				t.Errorf("%s %s needs %q", route.Method, route.Path, route.Capability)
+			}
+			continue
+		}
 		if strings.HasPrefix(route.Path, "/api/v1/status/") {
 			seen++
 			if route.Capability != authz.StatusRead {

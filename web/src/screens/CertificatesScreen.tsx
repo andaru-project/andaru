@@ -28,6 +28,7 @@ import type {
   TlsCryptKey,
 } from '../types';
 import { useResource } from '../useResource';
+import { AcmePanel } from './AcmePanel';
 import { Loaded } from './Loaded';
 
 interface CertificatesScreenProps {
@@ -240,6 +241,7 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
               <Tabs.Tab value="certificates">Certificates ({certificates.length})</Tabs.Tab>
               <Tabs.Tab value="cas">Certificate Authorities ({cas.length})</Tabs.Tab>
               <Tabs.Tab value="tls-crypt">TLS-Crypt Keys ({tlsCryptKeys.length})</Tabs.Tab>
+              <Tabs.Tab value="acme">ACME (Let&apos;s Encrypt)</Tabs.Tab>
             </Tabs.List>
 
             <Tabs.Panel value="certificates" pt="md">
@@ -475,6 +477,23 @@ export function CertificatesScreen({ api, session, onSaved, onSessionLost }: Cer
                     </Table.Tbody>
                   </Table>
                 </ScrollArea>
+              )}
+            </Tabs.Panel>
+
+            <Tabs.Panel value="acme" pt="md">
+              {activeTab === 'acme' && (
+                <AcmePanel
+                  api={api}
+                  certificates={certificates.map((c) => c.value)}
+                  canReadConfig={canReadConfig}
+                  canReadCerts={canReadCerts}
+                  canManageCerts={canManageCerts}
+                  onSaved={() => {
+                    onSaved();
+                    void resource.reload();
+                  }}
+                  onSessionLost={onSessionLost}
+                />
               )}
             </Tabs.Panel>
           </Tabs>

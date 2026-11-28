@@ -170,6 +170,26 @@ func normalizeDeclaration(d *declaration) {
 	slices.SortFunc(d.PKI.CAs, func(a, b pkiCA) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.PKI.Certificates, func(a, b pkiCertificate) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.PKI.TLSCryptKeys, func(a, b tlsCryptKey) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(d.ACME.Accounts, func(a, b acmeAccount) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(d.ACME.Orders, func(a, b acmeOrder) int { return strings.Compare(a.ID, b.ID) })
+	if len(d.ACME.Accounts) == 0 {
+		d.ACME.Accounts = nil // absent, so a declaration without ACME accounts keeps its canonical form
+	}
+	if len(d.ACME.Orders) == 0 {
+		d.ACME.Orders = nil
+	}
+	for i := range d.ACME.Orders {
+		o := &d.ACME.Orders[i]
+		if o.RenewBeforeDays == 0 {
+			o.RenewBeforeDays = defaultRenewBeforeDays
+		}
+		if o.Challenge.HTTP01 != nil {
+			slices.Sort(o.Challenge.HTTP01.ListenSegments)
+		}
+		if o.Challenge.DNS01 != nil && o.Challenge.DNS01.PropagationTimeoutSeconds == 0 {
+			o.Challenge.DNS01.PropagationTimeoutSeconds = defaultPropagation
+		}
+	}
 	if len(d.Addons) == 0 {
 		d.Addons = nil
 	}

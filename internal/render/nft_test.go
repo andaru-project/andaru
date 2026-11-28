@@ -230,3 +230,26 @@ func TestInlineLiteralsRender(t *testing.T) {
 		t.Fatalf("1:1 NAT literal destination match missing:\n%s", f.Content)
 	}
 }
+
+// Port 80 is redirected only where an enabled HTTP-01 order needs it: a DNS-01 or disabled order adds nothing.
+func TestACMEHTTP01Redirect(t *testing.T) {
+	with := func(edit func(orders []any)) string {
+		f, _ := nftFile(t, render(t, change(t, fixture(t, "filter-acme-http01"), func(d map[string]any) {
+			edit(d["acme"].(map[string]any)["orders"].([]any))
+		})))
+		return f.Content
+	}
+	if got := with(func([]any) {}); !strings.Contains(got, "set acme_http01_active { type ifname; }") || !strings.Contains(got, "tcp dport 80") {
+		t.Fatalf("enabled HTTP-01 order rendered no redirect:\n%s", got)
+	}
+	for name, edit := range map[string]func([]any){
+		"disabled": func(o []any) { o[0].(map[string]any)["enabled"] = false },
+		"dns-01 only": func(o []any) {
+			o[0].(map[string]any)["challenge"] = map[string]any{"type": "dns-01", "dns01": map[string]any{"provider": "cloudflare"}}
+		},
+	} {
+		if got := with(edit); strings.Contains(got, "acme_http01_active") || strings.Contains(got, "dport 80") || strings.Contains(got, "8480") {
+			t.Fatalf("%s: port 80 rule rendered:\n%s", name, got)
+		}
+	}
+}

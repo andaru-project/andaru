@@ -58,8 +58,8 @@ func (b *bench) open(lost bool) {
 	}
 	b.bus, err = bus.Open(bus.Options{
 		Path: filepath.Join(b.dir, "bus.db"),
-		Grants: map[string]bus.Grants{User: {Publish: []string{"notification/delivery", "alias-result/+"},
-			Subscribe: []string{delivery.Filter, aliasfeed.Filter}}},
+		Grants: map[string]bus.Grants{User: {Publish: []string{"notification/delivery", "alias-result/+", "acme-result/+"},
+			Subscribe: []string{delivery.Filter, aliasfeed.Filter, "acme-order/#"}}},
 		Authenticate: func(_, _ string) bool { return true },
 		Listeners:    map[string]net.Listener{"test": l},
 		LostHistory:  lost,

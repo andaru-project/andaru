@@ -191,7 +191,7 @@ func initialState() savedState {
 var (
 	orderedCollections = []string{"rules", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons", "pki.cas", "pki.certificates", "pki.tlsCryptKeys"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -208,7 +208,7 @@ func versionOf(s *savedState, key objectKey) objectVersion {
 }
 
 // idPrefixes are the prefixes of the IDs the engine assigns, by collection.
-var idPrefixes = map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto", "pki.cas": "ca", "pki.certificates": "crt", "pki.tlsCryptKeys": "tck"}
+var idPrefixes = map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto", "pki.cas": "ca", "pki.certificates": "crt", "pki.tlsCryptKeys": "tck", "acme.accounts": "aca", "acme.orders": "aco"}
 
 // NewID allocates an ID for a new object of collection, as a create does.
 func NewID(collection string) (string, error) { return newID(collection) }
@@ -299,6 +299,12 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	for i := range d.PKI.TLSCryptKeys {
 		m[objectKey{"pki.tlsCryptKeys", d.PKI.TLSCryptKeys[i].ID}] = &d.PKI.TLSCryptKeys[i]
+	}
+	for i := range d.ACME.Accounts {
+		m[objectKey{"acme.accounts", d.ACME.Accounts[i].ID}] = &d.ACME.Accounts[i]
+	}
+	for i := range d.ACME.Orders {
+		m[objectKey{"acme.orders", d.ACME.Orders[i].ID}] = &d.ACME.Orders[i]
 	}
 	return m
 }
@@ -570,14 +576,34 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 			if ref := keyRefOf(before[key]); ref != nil {
 				droppedKeys = append(droppedKeys, ref.Secret)
 			}
+			for _, s := range acmeSecrets(before[key]) {
+				if s.ref != nil {
+					droppedKeys = append(droppedKeys, s.ref.Secret)
+				}
+			}
 			continue
 		}
 		if op.Op == "order" {
 			continue
 		}
+		if op.Op == "replace" {
+			for _, s := range acmeSecrets(before[key]) {
+				if s.ref != nil {
+					droppedKeys = append(droppedKeys, s.ref.Secret)
+				}
+			}
+		}
 		value := values[i]
 		resolveReferences(value, op.Collection, labels)
 		scope := secretScopeForOp(op.Collection, key.ID)
+		if op.Op == "create" && op.Collection == "acme.accounts" && value["accountKeyRef"] == nil {
+			// An account created without a key is given one: it never leaves secrets.db but for andaru-outbound.
+			pemKey, e := newACMEAccountKey()
+			if e != nil {
+				return empty, fault("STORE_UNAVAILABLE", "", "Account key generation failed.")
+			}
+			value["accountKeyRef"] = map[string]any{"secret": ACMESecretName(key.ID, "key"), "set": pemKey}
+		}
 		for _, f := range secretFields(op.Collection, value) {
 			if pw, ok := f.parent[f.name].(map[string]any); ok {
 				name, _ := pw["secret"].(string)
@@ -613,12 +639,20 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 					if slices.Contains(pkiCollections, op.Collection) && !heldUnresolved(before[key], f.path, name) {
 						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A private key must be set or exist.")
 					}
+					if slices.Contains(acmeCollections, op.Collection) && !heldUnresolved(before[key], f.path, name) {
+						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "An ACME secret must be set or exist.")
+					}
 					reference["unresolved"] = true
 				}
 				f.parent[f.name] = reference
 			} else if op.Collection == "links" && value["kind"] == "pppoe" && op.Op == "replace" {
 				if old, ok := before[key].(*link); ok && old.Password != nil {
 					value["password"] = old.Password
+				}
+			} else if ref := acmeRefAt(before[key], f.path); ref != nil && op.Op == "replace" {
+				// Keep omitted ACME secrets on replace, except eabHmacRef when EAB is cleared.
+				if f.path != "/eabHmacRef" || value["eabKeyId"] != nil && value["eabKeyId"] != "" {
+					f.parent[f.name] = ref
 				}
 			} else if ref := keyRefOf(before[key]); ref != nil && op.Op == "replace" {
 				value["keyRef"] = ref // a replace that leaves the key out keeps it: a CA never loses its key by a rename
@@ -670,6 +704,12 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 		return empty, e
 	}
 	if d.PKI.TLSCryptKeys, e = rewrite(d.PKI.TLSCryptKeys, "pki.tlsCryptKeys", writes, deleted, createKeys, func(x tlsCryptKey) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.ACME.Accounts, e = rewrite(d.ACME.Accounts, "acme.accounts", writes, deleted, createKeys, func(x acmeAccount) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.ACME.Orders, e = rewrite(d.ACME.Orders, "acme.orders", writes, deleted, createKeys, func(x acmeOrder) string { return x.ID }); e != nil {
 		return empty, e
 	}
 	// Prune optional add-on secrets dropped from settings so they do not linger in secrets.db or block re-adding.
@@ -1046,7 +1086,7 @@ func owner(d *declaration, path string) (objectKey, string) {
 			return objectKey{}, ""
 		}
 		p = append([]string{"nat." + p[1]}, p[2:]...)
-	case "aliases", "notifications", "pki":
+	case "aliases", "notifications", "pki", "acme":
 		if len(p) < 2 {
 			return objectKey{}, ""
 		}
@@ -1095,6 +1135,10 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.PKI.Certificates[n].ID
 	case col == "pki.tlsCryptKeys" && n < len(d.PKI.TLSCryptKeys):
 		id = d.PKI.TLSCryptKeys[n].ID
+	case col == "acme.accounts" && n < len(d.ACME.Accounts):
+		id = d.ACME.Accounts[n].ID
+	case col == "acme.orders" && n < len(d.ACME.Orders):
+		id = d.ACME.Orders[n].ID
 	}
 	if id == "" {
 		return objectKey{}, ""
@@ -1118,6 +1162,10 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 		case *pkiCertificate:
 			return x.Name
 		case *tlsCryptKey:
+			return x.Name
+		case *acmeAccount:
+			return x.Name
+		case *acmeOrder:
 			return x.Name
 		}
 		return ""
@@ -1174,6 +1222,9 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 // heldUnresolved says whether old, a channel, add-on or PKI object before the batch, holds name unresolved at path.
 func heldUnresolved(old any, path, name string) bool {
 	if ref := keyRefOf(old); ref != nil && path == "/keyRef" {
+		return ref.Secret == name && ref.Unresolved
+	}
+	if ref := acmeRefAt(old, path); ref != nil {
 		return ref.Secret == name && ref.Unresolved
 	}
 	switch obj := old.(type) {

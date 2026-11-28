@@ -1385,6 +1385,12 @@
         },
         {
           "$ref": "#/$defs/tlsCryptKeyWrite"
+        },
+        {
+          "$ref": "#/$defs/acmeAccountWrite"
+        },
+        {
+          "$ref": "#/$defs/acmeOrderWrite"
         }
       ]
     },
@@ -1625,6 +1631,26 @@
             }
           },
           "additionalProperties": false
+        },
+        "acme": {
+          "type": "object",
+          "properties": {
+            "accounts": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "$ref": "#/$defs/acmeAccountStored"
+              }
+            },
+            "orders": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/acmeOrderStored"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1804,6 +1830,26 @@
               "maxItems": 256,
               "items": {
                 "$ref": "#/$defs/tlsCryptKeyView"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "acme": {
+          "type": "object",
+          "properties": {
+            "accounts": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "$ref": "#/$defs/acmeAccountView"
+              }
+            },
+            "orders": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/acmeOrderView"
               }
             }
           },
@@ -3104,6 +3150,166 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "acme.accounts"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/acmeAccountWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "acme.accounts"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/acmeAccountWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "acme.accounts"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "acme.orders"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/acmeOrderWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "acme.orders"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/acmeOrderWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "acme.orders"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -3180,6 +3386,12 @@
         },
         {
           "$ref": "#/$defs/tlsCryptKeyView"
+        },
+        {
+          "$ref": "#/$defs/acmeAccountView"
+        },
+        {
+          "$ref": "#/$defs/acmeOrderView"
         }
       ]
     },
@@ -5235,6 +5447,518 @@
           "required": [
             "id",
             "keyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acmeAccountID": {
+      "type": "string",
+      "pattern": "^aca_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "acmeOrderID": {
+      "type": "string",
+      "pattern": "^aco_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "acmeAccountFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/acmeAccountID"
+            },
+            "directoryUrl": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 2048,
+              "pattern": "^https://"
+            },
+            "email": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 254,
+              "pattern": "^[^\\s@]+@[^\\s@]+$"
+            },
+            "eabKeyId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "directoryUrl",
+            "email"
+          ]
+        }
+      ]
+    },
+    "acmeChallengeFields": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "http-01",
+            "dns-01"
+          ]
+        },
+        "http01": {
+          "type": "object",
+          "properties": {
+            "listenSegments": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/segmentID"
+              }
+            }
+          },
+          "required": [
+            "listenSegments"
+          ],
+          "additionalProperties": false
+        },
+        "dns01": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "enum": [
+                "cloudflare",
+                "hetzner",
+                "digitalocean",
+                "porkbun",
+                "acme-dns",
+                "webhook"
+              ]
+            },
+            "propagationTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 600
+            },
+            "cloudflare": {
+              "type": "object",
+              "properties": {
+                "apiTokenRef": true
+              },
+              "additionalProperties": false
+            },
+            "hetzner": {
+              "type": "object",
+              "properties": {
+                "apiTokenRef": true
+              },
+              "additionalProperties": false
+            },
+            "digitalocean": {
+              "type": "object",
+              "properties": {
+                "apiTokenRef": true
+              },
+              "additionalProperties": false
+            },
+            "porkbun": {
+              "type": "object",
+              "properties": {
+                "apiKeyRef": true,
+                "secretKeyRef": true
+              },
+              "additionalProperties": false
+            },
+            "acmeDns": {
+              "type": "object",
+              "properties": {
+                "serverUrl": {
+                  "type": "string",
+                  "minLength": 9,
+                  "maxLength": 2048,
+                  "pattern": "^https://"
+                },
+                "username": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "passwordRef": true,
+                "subdomain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "fullDomain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253
+                }
+              },
+              "required": [
+                "serverUrl",
+                "username",
+                "subdomain"
+              ],
+              "additionalProperties": false
+            },
+            "webhook": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "minLength": 9,
+                  "maxLength": 2048,
+                  "pattern": "^https://"
+                },
+                "authorizationRef": true,
+                "allowPrivateIp": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "provider"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "acmeOrderFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/acmeOrderID"
+            },
+            "accountId": {
+              "$ref": "#/$defs/acmeAccountID"
+            },
+            "certificateId": {
+              "$ref": "#/$defs/certificateID"
+            },
+            "domains": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253
+              }
+            },
+            "keyAlgorithm": {
+              "enum": [
+                "ecdsa-p256",
+                "ecdsa-p384",
+                "rsa-2048"
+              ]
+            },
+            "renewBeforeDays": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "challenge": {
+              "$ref": "#/$defs/acmeChallengeFields"
+            }
+          },
+          "required": [
+            "accountId",
+            "domains",
+            "keyAlgorithm",
+            "enabled",
+            "challenge"
+          ]
+        }
+      ]
+    },
+    "acmeAccountStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/acmeAccountFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "eabHmacRef": {
+              "$ref": "#/$defs/secretRef"
+            },
+            "accountKeyRef": {
+              "$ref": "#/$defs/secretRef"
+            }
+          },
+          "required": [
+            "id",
+            "accountKeyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acmeAccountWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/acmeAccountFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "eabHmacRef": {
+              "$ref": "#/$defs/secretWrite"
+            },
+            "accountKeyRef": {
+              "$ref": "#/$defs/secretWrite"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acmeAccountView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/acmeAccountFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "eabHmacRef": {
+              "$ref": "#/$defs/secretView"
+            },
+            "accountKeyRef": {
+              "$ref": "#/$defs/secretView"
+            }
+          },
+          "required": [
+            "id",
+            "accountKeyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acmeOrderStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/acmeOrderFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "challenge": {
+              "properties": {
+                "dns01": {
+                  "properties": {
+                    "cloudflare": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretRef"
+                        }
+                      }
+                    },
+                    "hetzner": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretRef"
+                        }
+                      }
+                    },
+                    "digitalocean": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretRef"
+                        }
+                      }
+                    },
+                    "porkbun": {
+                      "properties": {
+                        "apiKeyRef": {
+                          "$ref": "#/$defs/secretRef"
+                        },
+                        "secretKeyRef": {
+                          "$ref": "#/$defs/secretRef"
+                        }
+                      }
+                    },
+                    "acmeDns": {
+                      "properties": {
+                        "passwordRef": {
+                          "$ref": "#/$defs/secretRef"
+                        }
+                      }
+                    },
+                    "webhook": {
+                      "properties": {
+                        "authorizationRef": {
+                          "$ref": "#/$defs/secretRef"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acmeOrderWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/acmeOrderFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "challenge": {
+              "properties": {
+                "dns01": {
+                  "properties": {
+                    "cloudflare": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretWrite"
+                        }
+                      }
+                    },
+                    "hetzner": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretWrite"
+                        }
+                      }
+                    },
+                    "digitalocean": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretWrite"
+                        }
+                      }
+                    },
+                    "porkbun": {
+                      "properties": {
+                        "apiKeyRef": {
+                          "$ref": "#/$defs/secretWrite"
+                        },
+                        "secretKeyRef": {
+                          "$ref": "#/$defs/secretWrite"
+                        }
+                      }
+                    },
+                    "acmeDns": {
+                      "properties": {
+                        "passwordRef": {
+                          "$ref": "#/$defs/secretWrite"
+                        }
+                      }
+                    },
+                    "webhook": {
+                      "properties": {
+                        "authorizationRef": {
+                          "$ref": "#/$defs/secretWrite"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acmeOrderView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/acmeOrderFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "challenge": {
+              "properties": {
+                "dns01": {
+                  "properties": {
+                    "cloudflare": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretView"
+                        }
+                      }
+                    },
+                    "hetzner": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretView"
+                        }
+                      }
+                    },
+                    "digitalocean": {
+                      "properties": {
+                        "apiTokenRef": {
+                          "$ref": "#/$defs/secretView"
+                        }
+                      }
+                    },
+                    "porkbun": {
+                      "properties": {
+                        "apiKeyRef": {
+                          "$ref": "#/$defs/secretView"
+                        },
+                        "secretKeyRef": {
+                          "$ref": "#/$defs/secretView"
+                        }
+                      }
+                    },
+                    "acmeDns": {
+                      "properties": {
+                        "passwordRef": {
+                          "$ref": "#/$defs/secretView"
+                        }
+                      }
+                    },
+                    "webhook": {
+                      "properties": {
+                        "authorizationRef": {
+                          "$ref": "#/$defs/secretView"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "id"
           ]
         }
       ],

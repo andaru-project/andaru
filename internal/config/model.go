@@ -370,6 +370,7 @@ type declaration struct {
 	Notifications    notifications    `json:"notifications,omitzero"`
 	Addons           []addonConfig    `json:"addons,omitempty"`
 	PKI              pkiSettings      `json:"pki,omitzero"`
+	ACME             acmeSettings     `json:"acme,omitzero"`
 }
 
 type addonInterface struct {

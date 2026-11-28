@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/acme"
 	"github.com/andaru-project/andaru/internal/aliasfeed"
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/delivery"
@@ -44,6 +46,8 @@ type Service struct {
 	Backoff func(n int) time.Duration
 	// Ready, if set, is called each time the consumers are attached.
 	Ready func()
+	// ACME issues the certificates of the engine's ACME orders; nil is the real CA and DNS providers.
+	ACME *acme.Issuer
 
 	feeds        feeds
 	sent         *sent
@@ -119,6 +123,10 @@ func (s *Service) session(ctx context.Context) error {
 	if err := c.Consume(ctx, aliasfeed.Consumer, aliasfeed.Filter); err != nil {
 		return err
 	}
+	// Not a consumer: an order carries credentials, so it is never in the bus's log, and one missed is asked again.
+	if err := c.Subscribe(ctx, acme.OrderFilter); err != nil {
+		return err
+	}
 	s.Log.Info("reading delivery jobs and alias requests", "socket", s.Socket)
 	s.queueNotice(ctx, c)
 	if s.Ready != nil {
@@ -127,6 +135,9 @@ func (s *Service) session(ctx context.Context) error {
 	var acks, aliasAcks order
 	done, aliasDone, aliasFailed := make(chan int64), make(chan []int64), make(chan error)
 	slots := make(chan struct{}, maxFetches)
+	// HTTP-01 owns port 8480 and runs one at a time, independent of DNS-01 so DNS propagation never delays port 80.
+	acmeHTTP01Slot := make(chan struct{}, 1)
+	acmeDNS01Slot := make(chan struct{}, 2)
 	var running sync.WaitGroup
 	defer running.Wait()
 	defer cancel() // runs first: the jobs still being sent stop, unacked, and the bus delivers them again
@@ -163,6 +174,12 @@ func (s *Service) session(ctx context.Context) error {
 				return errors.New("the bus closed the connection")
 			case d.Detached:
 				return fmt.Errorf("another connection took the %s consumer over", d.Consumer)
+			case d.Consumer == "" && strings.HasPrefix(d.Topic, "acme-order/"):
+				running.Add(1)
+				go func(m bus.Message) {
+					defer running.Done()
+					s.handleACME(ctx, c, acmeHTTP01Slot, acmeDNS01Slot, m)
+				}(d.Message)
 			case d.Consumer == aliasfeed.Consumer && d.Gap:
 				s.Log.Warn("alias requests may have been missed; the engine asks again on each alias's interval")
 				if err := c.Ack(aliasfeed.Consumer, d.Seq); err != nil {

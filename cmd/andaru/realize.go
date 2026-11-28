@@ -37,6 +37,7 @@ type realizeVerbs interface {
 	AddonControl(ctx context.Context, action, slug string) error
 	SyncAddonBusTokens(ctx context.Context, tokens map[string]string) error
 	SyncCertificates(ctx context.Context, s generation.CertSync) error
+	ACMEHTTP01(ctx context.Context, ifaces []string) error
 	Fence(ctx context.Context, denyAll bool) error
 }
 
@@ -90,7 +91,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	verb := flags.Arg(0)
 	want := map[string]int{
 		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "aliases": 0, "addons-release-hold": 0, "factory-reset": 0,
-		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1, "cert-sync": 1, "addon-log": 4,
+		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1, "cert-sync": 1, "addon-log": 4, "acme-http01-open": -1, "acme-http01-close": 0,
 		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0, "set-hostname": 1,
 	}
 	n, known := want[verb]
@@ -104,7 +105,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return usageError(stderr, realizeUsage, "andaru realize")
 	}
 	rest := flags.Args()[1:]
-	if len(rest) != n {
+	if n >= 0 && len(rest) != n || n < 0 && (len(rest) == 0 || len(rest) > 64) {
 		return usageError(stderr, realizeUsage, "andaru realize")
 	}
 	switch verb {
@@ -123,6 +124,12 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	case "addon-ctl":
 		if (rest[0] != "start" && rest[0] != "stop" && rest[0] != "restart") || !addon.ValidSlug(rest[1]) {
 			return usageError(stderr, realizeUsage, "andaru realize")
+		}
+	case "acme-http01-open":
+		for _, name := range rest {
+			if !generation.ValidIfname(name) {
+				return usageError(stderr, realizeUsage, "andaru realize")
+			}
 		}
 	case "addon-bus-tokens", "cert-sync":
 		if !filepath.IsAbs(rest[0]) || filepath.Clean(rest[0]) != rest[0] {
@@ -144,7 +151,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		// The engine keeps owing these: it tries them again after the reset.
 		switch verb {
-		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens", "cert-sync", "addon-log":
+		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens", "cert-sync", "addon-log", "acme-http01-open":
 			return 1
 		}
 		return 0
@@ -207,6 +214,10 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		if payload, err = readCertSyncFile(rest[0]); err == nil {
 			err = verbs.SyncCertificates(ctx, payload)
 		}
+	case "acme-http01-open":
+		err = verbs.ACMEHTTP01(ctx, rest)
+	case "acme-http01-close":
+		err = verbs.ACMEHTTP01(ctx, nil)
 	}
 	// A verb on a generation may change its state even when it fails, so the bus hears of each one.
 	if id != 0 && *busSocket != "" {

@@ -1,5 +1,11 @@
 import { filenameFromDisposition } from './download';
 import type {
+  AcmeAccount,
+  AcmeAccountWrite,
+  AcmeOrder,
+  AcmeOrderWrite,
+  AcmeStatusResponse,
+  AcmeTriggerResponse,
   AddonDetailResponse,
   AddonListResponse,
   AddonLogsResponse,
@@ -55,6 +61,7 @@ import type {
   Rule,
   SavedList,
   SavedObject,
+  Segment,
   Session,
   SetupBootstrapRequest,
   Snapshot,
@@ -529,6 +536,10 @@ export class ApiClient {
     return this.request<SavedList<Zone>>('/api/v1/config/zones');
   }
 
+  segments() {
+    return this.request<SavedList<Segment>>('/api/v1/config/segments');
+  }
+
   saveZone(zone: Omit<Zone, 'id'>, saved?: SavedObject<Zone>) {
     return this.save('/api/v1/config/zones', zone, saved);
   }
@@ -902,6 +913,74 @@ export class ApiClient {
       blob,
       filename: filenameFromDisposition(headers.get('Content-Disposition'), `${id}.pem`),
     };
+  }
+
+  acmeAccounts() {
+    return this.request<SavedList<AcmeAccount>>('/api/v1/config/acme/accounts');
+  }
+
+  createAcmeAccount(body: AcmeAccountWrite) {
+    return this.request<SavedObject<AcmeAccount>>('/api/v1/config/acme/accounts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  replaceAcmeAccount(id: string, body: AcmeAccountWrite, version: string) {
+    return this.request<SavedObject<AcmeAccount>>(`/api/v1/config/acme/accounts/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'If-Match': `"${id}.${version}"` },
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  deleteAcmeAccount(id: string, version: string) {
+    return this.request<void>(`/api/v1/config/acme/accounts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  acmeOrders() {
+    return this.request<SavedList<AcmeOrder>>('/api/v1/config/acme/orders');
+  }
+
+  createAcmeOrder(body: AcmeOrderWrite) {
+    return this.request<SavedObject<AcmeOrder>>('/api/v1/config/acme/orders', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  replaceAcmeOrder(id: string, body: AcmeOrderWrite, version: string) {
+    return this.request<SavedObject<AcmeOrder>>(`/api/v1/config/acme/orders/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'If-Match': `"${id}.${version}"` },
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  deleteAcmeOrder(id: string, version: string) {
+    return this.request<void>(`/api/v1/config/acme/orders/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  acmeStatus() {
+    return this.request<AcmeStatusResponse>('/api/v1/status/acme');
+  }
+
+  renewAcmeOrder(id: string) {
+    return this.request<AcmeTriggerResponse>(`/api/v1/acme/orders/${encodeURIComponent(id)}/renew`, {
+      method: 'POST',
+    }, true);
+  }
+
+  testStagingAcmeOrder(id: string) {
+    return this.request<AcmeTriggerResponse>(`/api/v1/acme/orders/${encodeURIComponent(id)}/test-staging`, {
+      method: 'POST',
+    }, true);
   }
 
   private async requestBlob(

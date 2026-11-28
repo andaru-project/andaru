@@ -159,6 +159,21 @@ type declaration struct {
 	PKI              struct {
 		Certificates []certificate `json:"certificates"`
 	} `json:"pki"`
+	ACME struct {
+		Orders []acmeOrder `json:"orders"`
+	} `json:"acme"`
+}
+
+// acmeOrder is what the packet filter needs of an ACME order: whether it answers HTTP-01, and on which segments.
+type acmeOrder struct {
+	ID        string `json:"id"`
+	Enabled   bool   `json:"enabled"`
+	Challenge struct {
+		Type   string `json:"type"`
+		HTTP01 *struct {
+			ListenSegments []string `json:"listenSegments"`
+		} `json:"http01"`
+	} `json:"challenge"`
 }
 
 // certificate is a managed certificate's public part; its key is in Input.CertificateKeys.

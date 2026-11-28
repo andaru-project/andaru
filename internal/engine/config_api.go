@@ -115,6 +115,15 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 				route, id = "object", parts[3]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
+		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "acme" && acmeKinds[parts[2]] != "":
+			collection = acmeKinds[parts[2]]
+			if len(parts) == 3 {
+				route = "collection"
+				allowed = []string{"GET", "HEAD", "POST"}
+			} else if len(parts) == 4 && parts[3] != "" {
+				route, id = "object", parts[3]
+				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
+			}
 		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "roles", "dhcp", "dhcp6", "virtualAddresses", "addons"}, parts[1]):
 			collection = parts[1]
 			if len(parts) == 2 {
@@ -312,6 +321,10 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 		}
 		if slices.ContainsFunc(changes.Operations, func(o config.Operation) bool { return isPKICollection(o.Collection) }) && !hasCapability(actor, authz.CertificatesManage) {
 			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing PKI objects requires certificates.manage.")
+			return
+		}
+		if slices.ContainsFunc(changes.Operations, func(o config.Operation) bool { return strings.HasPrefix(o.Collection, "acme.") }) && !hasCapability(actor, authz.CertificatesManage) {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing ACME accounts and orders requires certificates.manage.")
 			return
 		}
 		var pkiFinishes []func(audit.Result)

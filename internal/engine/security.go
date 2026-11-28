@@ -98,6 +98,15 @@ func buildEngineRoutes() []routeCapability {
 		add(authz.ConfigurationRead, "/api/v1/config/pki/"+kind+"/{id}", read...)
 		add(authz.CertificatesManage, "/api/v1/config/pki/"+kind+"/{id}", http.MethodPut, http.MethodDelete)
 	}
+	for _, kind := range []string{"accounts", "orders"} {
+		add(authz.ConfigurationRead, "/api/v1/config/acme/"+kind, read...)
+		add(authz.CertificatesManage, "/api/v1/config/acme/"+kind, http.MethodPost)
+		add(authz.ConfigurationRead, "/api/v1/config/acme/"+kind+"/{id}", read...)
+		add(authz.CertificatesManage, "/api/v1/config/acme/"+kind+"/{id}", http.MethodPut, http.MethodDelete)
+	}
+	add(authz.CertificatesRead, "/api/v1/status/acme", read...)
+	add(authz.CertificatesManage, "/api/v1/acme/orders/{id}/renew", http.MethodPost)
+	add(authz.CertificatesManage, "/api/v1/acme/orders/{id}/test-staging", http.MethodPost)
 	add(authz.CertificatesManage, "/api/v1/pki/cas/generate", http.MethodPost)
 	add(authz.CertificatesManage, "/api/v1/pki/certificates/generate", http.MethodPost)
 	add(authz.CertificatesManage, "/api/v1/pki/certificates/import", http.MethodPost)

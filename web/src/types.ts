@@ -595,6 +595,144 @@ export interface PemDownload {
   filename: string;
 }
 
+export type AcmeKeyAlgorithm = 'ecdsa-p256' | 'ecdsa-p384' | 'rsa-2048';
+
+export type AcmeDnsProvider =
+  | 'cloudflare'
+  | 'hetzner'
+  | 'digitalocean'
+  | 'porkbun'
+  | 'acme-dns'
+  | 'webhook';
+
+export interface AcmeAccount {
+  id: string;
+  name: string;
+  directoryUrl: string;
+  email: string;
+  eabKeyId?: string;
+  eabHmacRef?: SecretView;
+  accountKeyRef?: SecretView;
+}
+
+export interface AcmeAccountWrite {
+  name: string;
+  directoryUrl: string;
+  email: string;
+  eabKeyId?: string;
+  eabHmacRef?: SecretWrite;
+  accountKeyRef?: SecretWrite;
+}
+
+export interface AcmeHttp01Challenge {
+  listenSegments: string[];
+}
+
+export interface AcmeDns01ChallengeView {
+  provider: AcmeDnsProvider;
+  propagationTimeoutSeconds?: number;
+  cloudflare?: { apiTokenRef: SecretView };
+  hetzner?: { apiTokenRef: SecretView };
+  digitalocean?: { apiTokenRef: SecretView };
+  porkbun?: { apiKeyRef: SecretView; secretKeyRef: SecretView };
+  acmeDns?: {
+    serverUrl: string;
+    username: string;
+    passwordRef: SecretView;
+    subdomain: string;
+    fullDomain?: string;
+  };
+  webhook?: {
+    url: string;
+    authorizationRef?: SecretView;
+    allowPrivateIp?: boolean;
+  };
+}
+
+export interface AcmeDns01ChallengeWrite {
+  provider: AcmeDnsProvider;
+  propagationTimeoutSeconds?: number;
+  cloudflare?: { apiTokenRef?: SecretWrite };
+  hetzner?: { apiTokenRef?: SecretWrite };
+  digitalocean?: { apiTokenRef?: SecretWrite };
+  porkbun?: { apiKeyRef?: SecretWrite; secretKeyRef?: SecretWrite };
+  acmeDns?: {
+    serverUrl: string;
+    username: string;
+    passwordRef?: SecretWrite;
+    subdomain: string;
+    fullDomain?: string;
+  };
+  webhook?: {
+    url: string;
+    authorizationRef?: SecretWrite;
+    allowPrivateIp?: boolean;
+  };
+}
+
+export interface AcmeChallengeView {
+  type: 'http-01' | 'dns-01';
+  http01?: AcmeHttp01Challenge;
+  dns01?: AcmeDns01ChallengeView;
+}
+
+export interface AcmeChallengeWrite {
+  type: 'http-01' | 'dns-01';
+  http01?: AcmeHttp01Challenge;
+  dns01?: AcmeDns01ChallengeWrite;
+}
+
+export interface AcmeOrder {
+  id: string;
+  name: string;
+  accountId: string;
+  certificateId?: string;
+  domains: string[];
+  keyAlgorithm: AcmeKeyAlgorithm;
+  renewBeforeDays: number;
+  enabled: boolean;
+  challenge: AcmeChallengeView;
+}
+
+export interface AcmeOrderWrite {
+  name: string;
+  accountId: string;
+  certificateId?: string;
+  domains: string[];
+  keyAlgorithm: AcmeKeyAlgorithm;
+  renewBeforeDays: number;
+  enabled: boolean;
+  challenge: AcmeChallengeWrite;
+}
+
+export interface AcmeOrderStatus {
+  orderId: string;
+  accountId: string;
+  certificateId?: string;
+  state: 'idle' | 'running' | 'succeeded' | 'failed';
+  lastAttemptAt?: string;
+  lastSucceededAt?: string;
+  lastError?: string;
+  nextRenewAt?: string;
+}
+
+export interface AcmeAccountStatus {
+  accountId: string;
+  registeredUri?: string;
+  status: string;
+}
+
+export interface AcmeStatusResponse {
+  items: AcmeOrderStatus[];
+  accounts: AcmeAccountStatus[];
+}
+
+export interface AcmeTriggerResponse {
+  orderId: string;
+  started?: boolean;
+  stagingTest?: boolean;
+}
+
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
@@ -612,6 +750,10 @@ export interface Snapshot {
       cas?: PKICA[];
       certificates?: PKICertificate[];
       tlsCryptKeys?: TlsCryptKey[];
+    };
+    acme?: {
+      accounts?: AcmeAccount[];
+      orders?: AcmeOrder[];
     };
     aliases?: {
       addresses: Array<Partial<AddressAlias> & { id: string; name: string }>;

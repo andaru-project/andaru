@@ -195,6 +195,20 @@ func heldSecrets(d *declaration) []heldSecret {
 	for i := range d.PKI.TLSCryptKeys {
 		pkiKey("pki.tlsCryptKeys", d.PKI.TLSCryptKeys[i].ID, "tlsCryptKeys", i, &d.PKI.TLSCryptKeys[i].KeyRef)
 	}
+	for i := range d.ACME.Accounts {
+		for _, s := range d.ACME.Accounts[i].secrets() {
+			if s.ref != nil {
+				out = append(out, heldSecret{key: objectKey{"acme.accounts", d.ACME.Accounts[i].ID}, scope: "core", path: fmt.Sprintf("/acme/accounts/%d%s", i, s.path), ref: s.ref})
+			}
+		}
+	}
+	for i := range d.ACME.Orders {
+		for _, s := range d.ACME.Orders[i].secrets() {
+			if s.ref != nil {
+				out = append(out, heldSecret{key: objectKey{"acme.orders", d.ACME.Orders[i].ID}, scope: "core", path: fmt.Sprintf("/acme/orders/%d%s", i, s.path), ref: s.ref})
+			}
+		}
+	}
 	for i := range d.Addons {
 		a := &d.Addons[i]
 		scope := addonSecretScope(a.ID)
@@ -235,6 +249,8 @@ func secretKind(collection string) string {
 		return "addon"
 	case "pki.cas", "pki.certificates", "pki.tlsCryptKeys":
 		return "pki"
+	case "acme.accounts", "acme.orders":
+		return "acme"
 	default:
 		return "password"
 	}
@@ -253,6 +269,8 @@ func secretFields(collection string, value map[string]any) []secretField {
 		return []secretField{{"/password", value, "password"}}
 	case "pki.cas", "pki.certificates", "pki.tlsCryptKeys":
 		return []secretField{{"/keyRef", value, "keyRef"}}
+	case "acme.accounts", "acme.orders":
+		return acmeSecretFields(collection, value)
 	case "notifications.channels":
 		var out []secretField
 		for _, kind := range []struct {

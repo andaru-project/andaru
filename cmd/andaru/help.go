@@ -63,6 +63,8 @@ const realizeUsage = `usage: andaru realize [OPTIONS] activate|confirm N
        andaru realize [OPTIONS] addon-ctl start|stop|restart SLUG
        andaru realize [OPTIONS] addon-bus-tokens|cert-sync PATH
        andaru realize [OPTIONS] addon-log SLUG NAME LINES PATH
+       andaru realize [OPTIONS] acme-http01-open IFACE...
+       andaru realize [OPTIONS] acme-http01-close
        andaru realize [OPTIONS] update-check|update-stage
        andaru realize [OPTIONS] update-rollback|update-reboot
        andaru realize [OPTIONS] set-hostname NAME
@@ -88,6 +90,8 @@ Verbs:
   cert-sync F          Place the certificates in file F where their services
                        read them, and reload the web server; F is removed
   addon-log S N L F    Read bounded tail of file log N for add-on S into file F
+  acme-http01-open I.. Redirect port 80 on interfaces I to the HTTP-01 responder
+  acme-http01-close    Stop redirecting port 80 to the HTTP-01 responder
   factory-reset        Run or resume the factory reset ctl factory-reset planned
   update-check         Check for signed appliance image updates and cache status
   update-stage         Download and stage the next signed appliance image
@@ -104,8 +108,9 @@ Options:
 const outboundUsage = "usage: andaru outbound [--bus-socket PATH] [--cache-dir PATH]\n"
 
 const outboundHelp = `Run andaru-outbound, the unprivileged service that talks to the outside world
-for the engine: it reads delivery jobs from the event bus and sends them, and
-fetches the lists of the address aliases fed from a URL or from host names.
+for the engine: it reads delivery jobs from the event bus and sends them,
+fetches the lists of the address aliases fed from a URL or from host names, and
+runs ACME orders, answering HTTP-01 challenges on port 8480 while one is open.
 Its systemd unit runs it as the andaru-outbound user.
 
 ` + outboundUsage + `

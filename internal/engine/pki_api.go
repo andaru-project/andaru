@@ -3,7 +3,6 @@ package engine
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -626,27 +625,14 @@ func publishCertificateRenewed(events *bus.Bus, id string, r renewal) {
 
 // beginAudit records the intent durably before anything changes; it fails closed when audit storage cannot.
 func (a *pkiAPI) beginAudit(w http.ResponseWriter, r *http.Request, actor requestActor, action audit.Action, target string) (func(audit.Result), bool) {
-	if a.coordinator == nil || a.coordinator.audits == nil {
-		return func(audit.Result) {}, true
+	var audits *audit.Store
+	if a.coordinator != nil {
+		audits = a.coordinator.audits
 	}
-	var rnd [16]byte
-	if _, err := rand.Read(rnd[:]); err != nil {
+	finish, err := beginAudit(r.Context(), audits, actor, action, target)
+	if err != nil {
 		writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Security audit storage is unavailable.")
 		return nil, false
 	}
-	opID := "pki-" + hex.EncodeToString(rnd[:])
-	sum := sha256.Sum256([]byte(string(action) + "\x00" + target))
-	if _, err := a.coordinator.audits.Begin(r.Context(), audit.Intent{OperationID: opID, Actor: actor.Actor, Source: actor.Source,
-		Action: action, Target: target, RequestHash: hex.EncodeToString(sum[:]), Category: audit.CategoryOf(action)}); err != nil {
-		slog.WarnContext(r.Context(), "pki: begin audit intent", "action", action, "target", target, "error", err)
-		writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Security audit storage is unavailable.")
-		return nil, false
-	}
-	return func(result audit.Result) {
-		ctx, cancel := context.WithTimeout(context.Background(), pkiAuditTimeout)
-		defer cancel()
-		if err := a.coordinator.audits.Finish(ctx, audit.Outcome{OperationID: opID, Result: result}); err != nil {
-			slog.Warn("pki: finish audit outcome", "action", action, "target", target, "operationId", opID, "error", err)
-		}
-	}, true
+	return finish, true
 }
