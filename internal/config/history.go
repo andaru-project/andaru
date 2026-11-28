@@ -505,7 +505,10 @@ type RealizationInput struct {
 	Value         json.RawMessage
 	Secrets       map[string]string
 	AddonSecrets  map[string]map[string]string
-	Authorization authz.Snapshot
+	// CertificateKeys are the private keys of the certificates enabled add-ons name, by certificate ID. They are not
+	// compared by SameRealization: andaru realize cert-sync deploys a renewed certificate without an apply.
+	CertificateKeys map[string]string
+	Authorization   authz.Snapshot
 }
 
 // SameRealization reports whether two saved versions realize the same network and add-ons: their declarations
@@ -537,6 +540,7 @@ func realized(value json.RawMessage) []byte {
 		return value
 	}
 	delete(d, "notifications")
+	delete(d, "pki") // its certificates are served where they are named, by cert-sync
 	// A secret view says when its secret last changed; the secret itself is compared in SameRealization, so a
 	// secret changed and changed back realizes as before.
 	var links []map[string]json.RawMessage
@@ -630,10 +634,19 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 				result.Secrets[l.Password.Secret] = state.Secrets.Scopes["core"][l.Password.Secret].Value
 			}
 		}
+		certs := certificateIndex(&state.Config)
 		for i := range state.Config.Addons {
 			a := &state.Config.Addons[i]
 			if !a.Enabled {
 				continue
+			}
+			for _, id := range addonCertificateRefs(a) {
+				if c, ok := certs[id]; ok && !c.KeyRef.Unresolved {
+					if result.CertificateKeys == nil {
+						result.CertificateKeys = map[string]string{}
+					}
+					result.CertificateKeys[id] = state.Secrets.Scopes["core"][c.KeyRef.Secret].Value
+				}
 			}
 			scoped := state.Secrets.Scopes[addonSecretScope(a.ID)]
 			for _, k := range addonSettingSecretKeys(a.Settings) {

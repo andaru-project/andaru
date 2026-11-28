@@ -93,7 +93,7 @@ func validateAddonSecretWrite(pw map[string]any, path string) *Fault {
 	rawSet, hasSet := pw["set"]
 	if hasSet {
 		s, ok := rawSet.(string)
-		if !ok || len(s) > 4096 || strings.ContainsRune(s, 0) {
+		if !ok || len(s) > maxSecretBytes || strings.ContainsRune(s, 0) {
 			return fault("VALIDATION_FAILED", path+"/set", "Secret value must be a valid string within size limits.")
 		}
 	}
@@ -228,6 +228,10 @@ func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written ma
 	for _, z := range d.Zones {
 		zones[z.ID] = true
 	}
+	certs := make(map[string]bool, len(d.PKI.Certificates))
+	for _, c := range d.PKI.Certificates {
+		certs[c.ID] = true
+	}
 	var out []FieldError
 	bad := func(path, msg string) {
 		if len(out) < 100 {
@@ -245,7 +249,7 @@ func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written ma
 				continue
 			}
 			// Validate settings and materialize defaults.
-			materialized, sErrs := addon.ValidateSettings(m, a.Settings, zones, nil)
+			materialized, sErrs := addon.ValidateSettings(m, a.Settings, zones, certs)
 			for _, fe := range sErrs {
 				bad(p+"/settings"+fe.Path, fe.Message)
 			}

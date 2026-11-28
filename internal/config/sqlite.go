@@ -18,7 +18,7 @@ import (
 
 const configApp = 0x414e4443
 const secretApp = 0x414e4453
-const additiveDDL = policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL + writerDDL + notificationDDL + addonDDL
+const additiveDDL = policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL + writerDDL + notificationDDL + addonDDL + pkiDDL
 
 const configDDL = `CREATE TABLE documents(sha256 BLOB PRIMARY KEY CHECK(length(sha256)=32),body BLOB NOT NULL);
 CREATE TABLE versions(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES versions(id),schema_version INTEGER NOT NULL,config_sha256 BLOB NOT NULL REFERENCES documents(sha256),secrets_sha256 BLOB NOT NULL CHECK(length(secrets_sha256)=32),created_at TEXT NOT NULL,actor TEXT NOT NULL,changed_object_count INTEGER NOT NULL);
@@ -53,6 +53,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS notification_creation_identity ON notification
 // uninstalled and reinstalled later under the same catalog id, so created=1 is not unique across history.
 const addonDDL = `CREATE TABLE IF NOT EXISTS addon_changes(collection TEXT NOT NULL CHECK(collection IN ('addons')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));`
 
+// pkiDDL holds the versions of the certificate authorities, certificates and tls-crypt keys, added beside the
+// others as notification_changes was.
+const pkiDDL = `CREATE TABLE IF NOT EXISTS pki_ca_changes(collection TEXT NOT NULL CHECK(collection IN ('pki.cas')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
+CREATE UNIQUE INDEX IF NOT EXISTS pki_ca_creation_identity ON pki_ca_changes(object_id) WHERE created=1;
+CREATE TABLE IF NOT EXISTS pki_certificate_changes(collection TEXT NOT NULL CHECK(collection IN ('pki.certificates')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
+CREATE UNIQUE INDEX IF NOT EXISTS pki_certificate_creation_identity ON pki_certificate_changes(object_id) WHERE created=1;
+CREATE TABLE IF NOT EXISTS pki_tlscrypt_changes(collection TEXT NOT NULL CHECK(collection IN ('pki.tlsCryptKeys')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
+CREATE UNIQUE INDEX IF NOT EXISTS pki_tlscrypt_creation_identity ON pki_tlscrypt_changes(object_id) WHERE created=1;`
+
 // dhcp6DDL holds the versions of the DHCPv6 entries, added beside the others as policy_changes was.
 const dhcp6DDL = `CREATE TABLE IF NOT EXISTS dhcp6_changes(collection TEXT NOT NULL CHECK(collection IN ('dhcp6')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS dhcp6_creation_identity ON dhcp6_changes(object_id) WHERE created=1;`
@@ -78,7 +87,7 @@ const writerDDL = `CREATE TABLE IF NOT EXISTS version_writers(version_id INTEGER
 var Writer = "development"
 
 // changeTables are all the tables object versions are recorded in.
-var changeTables = []string{"object_changes", "policy_changes", "service_changes", "nat_changes", "dhcp6_changes", "vip_changes", "role_changes", "firewall_changes", "notification_changes", "addon_changes"}
+var changeTables = []string{"object_changes", "policy_changes", "service_changes", "nat_changes", "dhcp6_changes", "vip_changes", "role_changes", "firewall_changes", "notification_changes", "addon_changes", "pki_ca_changes", "pki_certificate_changes", "pki_tlscrypt_changes"}
 
 // changeTable is where a collection's object versions are recorded.
 func changeTable(collection string) string {
@@ -99,6 +108,9 @@ func changeTable(collection string) string {
 	}
 	if collection == "addons" {
 		return "addon_changes"
+	}
+	if t, ok := map[string]string{"pki.cas": "pki_ca_changes", "pki.certificates": "pki_certificate_changes", "pki.tlsCryptKeys": "pki_tlscrypt_changes"}[collection]; ok {
+		return t
 	}
 	if collection == "dhcp6" {
 		return "dhcp6_changes"

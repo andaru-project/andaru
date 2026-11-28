@@ -266,6 +266,8 @@ type oneToOne struct {
 type management struct {
 	Segment        string   `json:"segment"`
 	AllowedSources []string `json:"allowedSources,omitempty"`
+	// Certificate is the managed certificate the web interface serves; without one it serves the bootstrap certificate.
+	Certificate string `json:"certificate,omitempty"`
 }
 
 // dhcp6Entry serves DHCPv6 on one segment with a static /64, and may delegate prefixes to routers on it.
@@ -367,6 +369,7 @@ type declaration struct {
 	VirtualAddresses []virtualAddress `json:"virtualAddresses,omitzero"`
 	Notifications    notifications    `json:"notifications,omitzero"`
 	Addons           []addonConfig    `json:"addons,omitempty"`
+	PKI              pkiSettings      `json:"pki,omitzero"`
 }
 
 type addonInterface struct {

@@ -150,7 +150,7 @@
             },
             "set": {
               "type": "string",
-              "maxLength": 4096
+              "maxLength": 8192
             },
             "expectedVersion": {
               "$ref": "#/$defs/version"
@@ -1589,6 +1589,33 @@
           "items": {
             "$ref": "#/$defs/addonStored"
           }
+        },
+        "pki": {
+          "type": "object",
+          "properties": {
+            "cas": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/pkiCAStored"
+              }
+            },
+            "certificates": {
+              "type": "array",
+              "maxItems": 1024,
+              "items": {
+                "$ref": "#/$defs/pkiCertificateStored"
+              }
+            },
+            "tlsCryptKeys": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/tlsCryptKeyStored"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1745,6 +1772,33 @@
           "items": {
             "$ref": "#/$defs/addonView"
           }
+        },
+        "pki": {
+          "type": "object",
+          "properties": {
+            "cas": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/pkiCAView"
+              }
+            },
+            "certificates": {
+              "type": "array",
+              "maxItems": 1024,
+              "items": {
+                "$ref": "#/$defs/pkiCertificateView"
+              }
+            },
+            "tlsCryptKeys": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/tlsCryptKeyView"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -2801,6 +2855,246 @@
                 },
                 "required": ["op", "collection", "id"],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.cas"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/pkiCAWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.cas"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/pkiCAWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.cas"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.certificates"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/pkiCertificateWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.certificates"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/pkiCertificateWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.certificates"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.tlsCryptKeys"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/tlsCryptKeyWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.tlsCryptKeys"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/tlsCryptKeyWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "pki.tlsCryptKeys"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -3268,6 +3562,9 @@
           },
           "minItems": 0,
           "maxItems": 1000
+        },
+        "certificate": {
+          "$ref": "#/$defs/certificateID"
         }
       },
       "required": [
@@ -4605,6 +4902,328 @@
       "type": "string",
       "minLength": 3,
       "maxLength": 512
+    },
+    "caID": {
+      "type": "string",
+      "pattern": "^ca_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "certificateID": {
+      "type": "string",
+      "pattern": "^crt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "tlsCryptKeyID": {
+      "type": "string",
+      "pattern": "^tck_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "pkiCAFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/caID"
+            },
+            "subject": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "serial": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{1,64}$"
+            },
+            "fingerprintSha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "notBefore": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "notAfter": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "certPem": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "subject",
+            "serial",
+            "fingerprintSha256",
+            "notBefore",
+            "notAfter",
+            "certPem"
+          ]
+        }
+      ]
+    },
+    "pkiCertificateFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/certificateID"
+            },
+            "caId": {
+              "$ref": "#/$defs/caID"
+            },
+            "subject": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "serial": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{1,64}$"
+            },
+            "fingerprintSha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "notBefore": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "notAfter": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "certPem": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "sans": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253
+              }
+            },
+            "chainPem": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "keyAlgorithm": {
+              "enum": [
+                "ecdsa-p256",
+                "ecdsa-p384",
+                "rsa-2048",
+                "rsa-4096"
+              ]
+            }
+          },
+          "required": [
+            "subject",
+            "serial",
+            "fingerprintSha256",
+            "notBefore",
+            "notAfter",
+            "certPem",
+            "sans",
+            "keyAlgorithm"
+          ]
+        }
+      ]
+    },
+    "tlsCryptKeyFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/tlsCryptKeyID"
+            }
+          }
+        }
+      ]
+    },
+    "pkiCAStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pkiCAFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretRef"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "pkiCAWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pkiCAFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretWrite"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "pkiCAView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pkiCAFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretView"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "pkiCertificateStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pkiCertificateFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretRef"
+            }
+          },
+          "required": [
+            "id",
+            "keyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "pkiCertificateWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pkiCertificateFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretWrite"
+            }
+          },
+          "required": [
+            "keyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "pkiCertificateView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pkiCertificateFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretView"
+            }
+          },
+          "required": [
+            "id",
+            "keyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "tlsCryptKeyStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/tlsCryptKeyFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretRef"
+            }
+          },
+          "required": [
+            "id",
+            "keyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "tlsCryptKeyWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/tlsCryptKeyFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretWrite"
+            }
+          },
+          "required": [
+            "keyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "tlsCryptKeyView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/tlsCryptKeyFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyRef": {
+              "$ref": "#/$defs/secretView"
+            }
+          },
+          "required": [
+            "id",
+            "keyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
     }
   }
 }

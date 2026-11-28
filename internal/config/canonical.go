@@ -167,6 +167,9 @@ func normalizeDeclaration(d *declaration) {
 			d.DNS.RegisterLeases = &register
 		}
 	}
+	slices.SortFunc(d.PKI.CAs, func(a, b pkiCA) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(d.PKI.Certificates, func(a, b pkiCertificate) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(d.PKI.TLSCryptKeys, func(a, b tlsCryptKey) int { return strings.Compare(a.ID, b.ID) })
 	if len(d.Addons) == 0 {
 		d.Addons = nil
 	}

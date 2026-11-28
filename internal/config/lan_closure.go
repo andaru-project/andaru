@@ -194,6 +194,36 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 		// The copy keeps the network reachable, and holds only the links' secrets: notification channels, whose
 		// secrets it lacks, are set up again after the recovery.
 		delete(d, "notifications")
+		// Nor does it hold private keys: the web interface serves its bootstrap certificate, and add-ons lose the
+		// certificates they named, until the certificates are set up again.
+		delete(d, "pki")
+		if raw, ok := d["management"]; ok {
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &m); err != nil {
+				return RestoreDocuments{}, err
+			}
+			delete(m, "certificate")
+			if d["management"], err = json.Marshal(m); err != nil {
+				return RestoreDocuments{}, err
+			}
+		}
+		if raw, ok := d["addons"]; ok {
+			var addons []map[string]any
+			if err := json.Unmarshal(raw, &addons); err != nil {
+				return RestoreDocuments{}, err
+			}
+			for _, a := range addons {
+				settings, _ := a["settings"].(map[string]any)
+				for k, v := range settings {
+					if id, ok := v.(string); ok && certificateIDPattern.MatchString(id) {
+						delete(settings, k)
+					}
+				}
+			}
+			if d["addons"], err = json.Marshal(addons); err != nil {
+				return RestoreDocuments{}, err
+			}
+		}
 		// A view shows a link's password with its state; a declaration holds only the reference.
 		if raw, ok := d["links"]; ok {
 			var links []map[string]json.RawMessage

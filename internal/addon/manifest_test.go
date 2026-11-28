@@ -126,18 +126,24 @@ func TestParseManifestRejections(t *testing.T) {
 			isVer:  true,
 		},
 		{
-			name:    "unknown field with json pointer",
-			mutate:  func(s string) string { return strings.Replace(s, `"version": "1.0.0",`, `"version": "1.0.0", "bogus": 1,`, 1) },
+			name: "unknown field with json pointer",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"version": "1.0.0",`, `"version": "1.0.0", "bogus": 1,`, 1)
+			},
 			wantErr: "/bogus",
 		},
 		{
-			name:    "duplicate json key rejected",
-			mutate:  func(s string) string { return strings.Replace(s, `"slug": "tailscale",`, `"slug": "tailscale", "slug": "other",`, 1) },
+			name: "duplicate json key rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"slug": "tailscale",`, `"slug": "tailscale", "slug": "other",`, 1)
+			},
 			wantErr: "invalid JSON",
 		},
 		{
-			name:    "tag-only image rejected",
-			mutate:  func(s string) string { return strings.Replace(s, `@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`, `:latest`, 1) },
+			name: "tag-only image rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`, `:latest`, 1)
+			},
 			wantErr: "/runtime/image",
 		},
 		{
@@ -166,8 +172,10 @@ func TestParseManifestRejections(t *testing.T) {
 			wantErr: "forbidden namespace",
 		},
 		{
-			name:    "bus publish forged notification source rejected",
-			mutate:  func(s string) string { return strings.Replace(s, `"notification/addon.tailscale"`, `"notification/engine"`, 1) },
+			name: "bus publish forged notification source rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"notification/addon.tailscale"`, `"notification/engine"`, 1)
+			},
 			wantErr: "forbidden namespace",
 		},
 		{
@@ -176,8 +184,10 @@ func TestParseManifestRejections(t *testing.T) {
 			wantErr: "/interfaces/0/name",
 		},
 		{
-			name:    "certificate-reference without certificate binding rejected",
-			mutate:  func(s string) string { return strings.Replace(s, `"type": "secret-reference"`, `"type": "certificate-reference"`, 1) },
+			name: "certificate-reference without certificate binding rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"type": "secret-reference"`, `"type": "certificate-reference"`, 1)
+			},
 			wantErr: `requires a "certificate" binding`,
 		},
 		{
@@ -221,13 +231,17 @@ func TestParseManifestRejections(t *testing.T) {
 			wantErr: "already bound",
 		},
 		{
-			name:    "add-on cannot publish certificate events",
-			mutate:  func(s string) string { return strings.Replace(s, `"topic": "notification/addon.tailscale"`, `"topic": "certificate/renewed"`, 1) },
+			name: "add-on cannot publish certificate events",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"topic": "notification/addon.tailscale"`, `"topic": "certificate/renewed"`, 1)
+			},
 			wantErr: "certificate/#",
 		},
 		{
-			name:    "add-on cannot subscribe to ACME orders",
-			mutate:  func(s string) string { return strings.Replace(s, `"topic": "config/head"`, `"topic": "acme-order/+"`, 1) },
+			name: "add-on cannot subscribe to ACME orders",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"topic": "config/head"`, `"topic": "acme-order/+"`, 1)
+			},
 			wantErr: "acme-order/#",
 		},
 		{
@@ -236,13 +250,17 @@ func TestParseManifestRejections(t *testing.T) {
 			wantErr: "/interfaces/0/name",
 		},
 		{
-			name:    "stopTimeoutSeconds above 10 rejected",
-			mutate:  func(s string) string { return strings.Replace(s, `"network": "host",`, `"network": "host", "stopTimeoutSeconds": 15,`, 1) },
+			name: "stopTimeoutSeconds above 10 rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"network": "host",`, `"network": "host", "stopTimeoutSeconds": 15,`, 1)
+			},
 			wantErr: "/runtime/stopTimeoutSeconds",
 		},
 		{
-			name:    "unprivileged profile cannot request capabilities",
-			mutate:  func(s string) string { return strings.Replace(s, `"profile": "network-interface"`, `"profile": "unprivileged"`, 1) },
+			name: "unprivileged profile cannot request capabilities",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"profile": "network-interface"`, `"profile": "unprivileged"`, 1)
+			},
 			wantErr: "/runtime/capabilities",
 		},
 		{
