@@ -174,6 +174,13 @@ func normalizeDeclaration(d *declaration) {
 	for i := range d.Routes {
 		canonicalizeRoute(&d.Routes[i])
 	}
+	if len(d.VPN.WireGuard) == 0 {
+		d.VPN.WireGuard = nil // absent, so a declaration without VPNs keeps its form
+	}
+	slices.SortFunc(d.VPN.WireGuard, func(a, b wireguardInterface) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.VPN.WireGuard {
+		canonicalizeWireGuard(&d.VPN.WireGuard[i])
+	}
 	slices.SortFunc(d.PKI.CAs, func(a, b pkiCA) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.PKI.Certificates, func(a, b pkiCertificate) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.PKI.TLSCryptKeys, func(a, b tlsCryptKey) int { return strings.Compare(a.ID, b.ID) })

@@ -163,6 +163,9 @@ type declaration struct {
 		Orders []acmeOrder `json:"orders"`
 	} `json:"acme"`
 	Routes []route `json:"routes"`
+	VPN    struct {
+		WireGuard []wireguardInterface `json:"wireguard"`
+	} `json:"vpn"`
 }
 
 // acmeOrder is what the packet filter needs of an ACME order: whether it answers HTTP-01, and on which segments.
@@ -296,8 +299,10 @@ type Input struct {
 
 // File is one rendered file. Content is safe to show; Real is not.
 type File struct {
-	Path    string   `json:"path"`
-	Mode    string   `json:"mode"`
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+	// Owner is "user:group" when the file is not root's alone; the realizer gives such a file that group.
+	Owner   string   `json:"owner,omitempty"`
 	Secret  bool     `json:"secret"`
 	Content string   `json:"content"`
 	Sources []string `json:"sources"`

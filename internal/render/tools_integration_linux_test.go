@@ -138,6 +138,7 @@ mount -t tmpfs -o mode=0755 tmpfs /run/systemd/netif
 chown systemd-network:systemd-network /run/systemd/netif
 install -d -o systemd-network -g systemd-network -m 0755 /run/systemd/netif/links /run/systemd/netif/leases /run/systemd/netif/lldp
 install -m 0644 "$1"/* /run/systemd/network/
+for key in /run/systemd/network/*.key /run/systemd/network/*.psk; do [ -e "$key" ] && chgrp systemd-network "$key" && chmod 0640 "$key"; done
 SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console timeout 5 /usr/lib/systemd/systemd-networkd 2>&1 || true
 `
 
@@ -178,19 +179,25 @@ func TestNetworkdAcceptsRenderedFiles(t *testing.T) {
 		files := map[string]string{}
 		for _, f := range render(t, fixture(t, name)).Files {
 			if strings.HasPrefix(f.Path, "/run/systemd/network/") {
-				files[filepath.Base(f.Path)] = f.Content
+				files[filepath.Base(f.Path)] = f.Real() // a WireGuard key file must hold a key networkd can read
 			}
 		}
 		log := load(t, files)
 		for file := range files {
-			// .link files are udev's: networkd never reads them, and nothing checks them offline.
-			if strings.HasSuffix(file, ".link") {
+			// .link files are udev's: networkd never reads them, and nothing checks them offline. A WireGuard key is
+			// read when its device is created, which the netdev's own line below shows.
+			if strings.HasSuffix(file, ".link") || strings.HasSuffix(file, ".key") || strings.HasSuffix(file, ".psk") {
 				continue
 			}
 			if !strings.Contains(log, "/run/systemd/network/"+file+": Successfully loaded.") {
 				t.Fatalf("%s: networkd did not load %s:\n%s", name, file, log)
 			}
 			checked++
+		}
+		for file := range files {
+			if device, ok := strings.CutSuffix(strings.TrimPrefix(file, "50-andaru-"), ".netdev"); ok && strings.HasPrefix(device, "wg") && !strings.Contains(log, device+": Created.") {
+				t.Fatalf("%s: networkd did not create %s with its key:\n%s", name, device, log)
+			}
 		}
 		if bad := complaints(log); len(bad) != 0 {
 			t.Fatalf("%s: networkd rejected rendered configuration:\n%s", name, strings.Join(bad, "\n"))

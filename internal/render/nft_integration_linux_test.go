@@ -450,3 +450,13 @@ func TestInlineLiteralsLoad(t *testing.T) {
 	})
 	l.load(in)
 }
+
+// The WireGuard interfaces' zone sets and listen-port rules load, scoped to uplinks or to named segments.
+func TestWireGuardFilterLoads(t *testing.T) {
+	l := newLab(t)
+	l.load(fixture(t, "wireguard"))
+	out, err := l.run(l.fw, "nft", "list", "chain", "inet", "andaru", "input")
+	if err != nil || !strings.Contains(out, "iifname @uplinks udp dport 51820 accept") || !strings.Contains(out, `udp dport 51821 accept`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}

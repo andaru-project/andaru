@@ -137,12 +137,15 @@ func (o *acmeOrder) secrets() []channelSecret {
 	return out
 }
 
-// acmeSecrets are an ACME object's secret references, nil for any other object.
+// acmeSecrets are an ACME object's or WireGuard interface's secret references, nil for any other object: each is
+// dropped with its object, and a replace drops those it no longer holds.
 func acmeSecrets(v any) []channelSecret {
 	switch x := v.(type) {
 	case *acmeAccount:
 		return x.secrets()
 	case *acmeOrder:
+		return x.secrets()
+	case *wireguardInterface:
 		return x.secrets()
 	}
 	return nil

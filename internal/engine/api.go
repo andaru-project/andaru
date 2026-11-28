@@ -113,6 +113,7 @@ type handlerDeps struct {
 	addonsAPI        http.Handler
 	pkiAPI           http.Handler
 	acmeAPI          http.Handler
+	wireguardAPI     http.Handler
 	stateDir         string
 }
 
@@ -183,6 +184,10 @@ func newHandlerWithDeps(d handlerDeps) http.Handler {
 		}
 		if (r.URL.Path == acmeStatusPath || strings.HasPrefix(r.URL.Path, acmeOrdersPrefix)) && d.acmeAPI != nil {
 			d.acmeAPI.ServeHTTP(w, r)
+			return
+		}
+		if (r.URL.Path == wireguardStatusPath || strings.HasPrefix(r.URL.Path, wireguardAPIPrefix)) && d.wireguardAPI != nil {
+			d.wireguardAPI.ServeHTTP(w, r)
 			return
 		}
 		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath || r.URL.Path == "/api/v1/kept/recovery" || isBackupPath(r.URL.Path)

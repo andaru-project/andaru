@@ -1,0 +1,242 @@
+### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=ens18
+
+### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0,/segments/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+DHCP=yes
+IPv6AcceptRA=yes
+
+[DHCPv4]
+UseDNS=yes
+UseNTP=no
+UseHostname=no
+UseDomains=no
+
+[DHCPv6]
+UseDNS=yes
+UseNTP=no
+UseHostname=no
+UseDomains=no
+PrefixDelegationHint=::/56
+SendRelease=no
+
+[IPv6AcceptRA]
+UseDNS=yes
+UseDomains=no
+DHCPv6Client=always
+
+### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+Name=ens19
+
+### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1,/segments/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+Address=192.0.2.1/24
+IPv6AcceptRA=no
+DHCPPrefixDelegation=yes
+IPv6SendRA=yes
+
+[DHCPPrefixDelegation]
+UplinkInterface=ens18
+SubnetId=0xbeef
+Assign=yes
+Announce=yes
+
+[IPv6SendRA]
+RouterPreference=medium
+RouterLifetimeSec=1800
+Managed=no
+OtherInformation=yes
+EmitDNS=no
+EmitDomains=no
+
+### /run/systemd/network/50-andaru-wg0-wgp_00000001-0000-4000-8000-000000000001.psk 0640 owner=root:systemd-network secret=true sources=/vpn/wireguard/0
+FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQ=
+
+### /run/systemd/network/50-andaru-wg0-wgp_00000001-0000-4000-8000-000000000001.psk (as shown)
+<redacted>
+
+### /run/systemd/network/50-andaru-wg0.key 0640 owner=root:systemd-network secret=true sources=/vpn/wireguard/0
+ERERERERERERERERERERERERERERERERERERERERERE=
+
+### /run/systemd/network/50-andaru-wg0.key (as shown)
+<redacted>
+
+### /run/systemd/network/50-andaru-wg0.netdev 0644 secret=false sources=/vpn/wireguard/0
+[NetDev]
+Name=wg0
+Kind=wireguard
+MTUBytes=1420
+
+[WireGuard]
+ListenPort=51820
+PrivateKeyFile=/run/systemd/network/50-andaru-wg0.key
+
+[WireGuardPeer]
+PublicKey=CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=
+PresharedKeyFile=/run/systemd/network/50-andaru-wg0-wgp_00000001-0000-4000-8000-000000000001.psk
+AllowedIPs=10.200.0.2/32,fd00:200::2/128
+Endpoint=[2001:db8::7]:51820
+PersistentKeepalive=25
+
+[WireGuardPeer]
+PublicKey=CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=
+AllowedIPs=10.50.0.0/16,10.200.0.3/32
+
+[WireGuardPeer]
+PublicKey=BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=
+AllowedIPs=10.70.0.0/16
+
+### /run/systemd/network/50-andaru-wg0.network 0644 secret=false sources=/routes,/vpn/wireguard/0
+[Match]
+Name=wg0
+
+[Network]
+Address=10.200.0.1/24
+Address=fd00:200::1/64
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+
+[Route]
+Destination=10.200.0.2/32
+
+[Route]
+Destination=10.200.0.3/32
+
+[Route]
+Destination=fd00:200::2/128
+
+[Route]
+Destination=10.50.0.0/16
+Metric=50
+
+[Route]
+Destination=10.80.0.0/16
+
+### /run/systemd/network/50-andaru-wg1.key 0640 owner=root:systemd-network secret=true sources=/vpn/wireguard/1
+EhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhI=
+
+### /run/systemd/network/50-andaru-wg1.key (as shown)
+<redacted>
+
+### /run/systemd/network/50-andaru-wg1.netdev 0644 secret=false sources=/vpn/wireguard/1
+[NetDev]
+Name=wg1
+Kind=wireguard
+MTUBytes=1380
+
+[WireGuard]
+ListenPort=51821
+PrivateKeyFile=/run/systemd/network/50-andaru-wg1.key
+
+### /run/systemd/network/50-andaru-wg1.network 0644 secret=false sources=/vpn/wireguard/1
+[Match]
+Name=wg1
+
+[Network]
+Address=10.201.0.1/30
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+
+### /run/systemd/network/50-andaru-wg2.key 0640 owner=root:systemd-network secret=true sources=/vpn/wireguard/2
+ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM=
+
+### /run/systemd/network/50-andaru-wg2.key (as shown)
+<redacted>
+
+### /run/systemd/network/50-andaru-wg2.netdev 0644 secret=false sources=/vpn/wireguard/2
+[NetDev]
+Name=wg2
+Kind=wireguard
+MTUBytes=1420
+
+[WireGuard]
+ListenPort=51822
+PrivateKeyFile=/run/systemd/network/50-andaru-wg2.key
+
+### /run/systemd/network/50-andaru-wg2.network 0644 secret=false sources=/vpn/wireguard/2
+[Match]
+Name=wg2
+
+[Network]
+Address=10.202.0.1/24
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+
+### /run/systemd/network/51-andaru-unclassified.network 0644 secret=false sources=
+[Match]
+Name=en*
+
+[Link]
+ActivationPolicy=down
+RequiredForOnline=no
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
+IPv6AcceptRA=no
+
+### nft:inet/andaru 0644 secret=false sources=/aliases,/management,/nat,/rules,/vpn
+# interface ens18 52:54:00:aa:bb:01
+# interface ens19 52:54:00:aa:bb:02
+table inet andaru {}
+delete table inet andaru
+table inet andaru {
+	comment "sha256:dd17a579617e7d6770c07d39607e337c3d33f57f0e830301118326f6025e7e64"
+	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
+	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19", "wg1" }; }
+	set zon_00000003_0000_4000_8000_000000000003 { type ifname; elements = { "wg0", "wg2" }; }
+	set uplinks { type ifname; elements = { "ens18" }; }
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iif lo accept
+		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+		ip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept
+		iifname "ens19" tcp dport 22 accept
+		iifname @uplinks udp dport 51820 accept
+		iifname { "ens19" } udp dport 51821 accept
+	}
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat;
+		fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade
+	}
+}
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
+### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19
+### realizable=true

@@ -75,6 +75,8 @@ type Generation struct {
 
 var (
 	ownPath = regexp.MustCompile(`^/run/systemd/network/50-andaru-[^/]+\.(network|netdev|link)$`)
+	// A WireGuard interface's private key, and each peer's pre-shared key, beside its .netdev; networkd reads them.
+	wireguardKey = regexp.MustCompile(`^/run/systemd/network/50-andaru-wg(0|[1-9][0-9]?)(\.key|-wgp_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.psk)$`)
 	// A PPPoE session is pppd's options and the unit that runs pppd on them, named after the session's interface.
 	pppOptions = regexp.MustCompile(`^` + pppDir + `[A-Za-z0-9_.:-]+\.options$`)
 	pppUnit    = regexp.MustCompile(`^` + pppUnitPrefix + `[A-Za-z0-9_.:-]+\.service$`)
@@ -101,14 +103,17 @@ func isAddonSecret(path string) bool {
 }
 
 func allowed(path string) bool {
-	return ownPath.MatchString(path) || pppOptions.MatchString(path) || pppUnit.MatchString(path) ||
+	return ownPath.MatchString(path) || wireguardKey.MatchString(path) || pppOptions.MatchString(path) || pppUnit.MatchString(path) ||
 		addonContainer.MatchString(path) || isAddonEnv(path) || isAddonSecret(path) || addonCert.MatchString(path) ||
 		path == catchAllPath || path == filterEntry || path == keaFile || path == kea6File || path == kea6Template || path == unboundFile || path == resolvedFile
 }
 
-// modeFor is the one mode a generation file may have: secrets are 0400; pppd options, Quadlets and add-on env files are 0600.
+// modeFor is the one mode a generation file may have: secrets are 0400; pppd options, Quadlets and add-on env files are
+// 0600; WireGuard keys 0640, for the systemd-network group.
 func modeFor(path string) string {
 	switch {
+	case wireguardKey.MatchString(path):
+		return "0640"
 	case isAddonSecret(path), addonCert.MatchString(path):
 		return "0400"
 	case pppOptions.MatchString(path), addonContainer.MatchString(path), isAddonEnv(path):
@@ -147,7 +152,12 @@ func normalizeAuthorization(m *Manifest) error {
 }
 
 // writeAtomic leaves either the old file or the whole new one, also across a power loss.
-func writeAtomic(path string, data []byte, mode fs.FileMode) (err error) {
+func writeAtomic(path string, data []byte, mode fs.FileMode) error {
+	return writeAtomicOwned(path, data, mode, nil)
+}
+
+// writeAtomicOwned is writeAtomic with an optional ownership step applied to the temporary file before rename.
+func writeAtomicOwned(path string, data []byte, mode fs.FileMode, chown func(string) error) (err error) {
 	dir := filepath.Dir(path)
 	// The dot prefix keeps networkd from parsing a half-written file.
 	tmp, err := os.CreateTemp(dir, ".tmp-")
@@ -165,6 +175,11 @@ func writeAtomic(path string, data []byte, mode fs.FileMode) (err error) {
 	}
 	if err = tmp.Chmod(mode); err != nil {
 		return err
+	}
+	if chown != nil {
+		if err = chown(tmp.Name()); err != nil {
+			return err
+		}
 	}
 	if err = tmp.Sync(); err != nil {
 		return err

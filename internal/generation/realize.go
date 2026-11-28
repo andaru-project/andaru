@@ -2,6 +2,8 @@ package generation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +62,8 @@ type Realizer struct {
 	afterLeaseRead func()
 	// keaUID lets unprivileged tests name a Kea user other than their own; nil: the owner of /run/kea.
 	keaUID func() uint32
+	// networkGID lets tests name systemd-network's group; nil: the group of /run/systemd/netif.
+	networkGID func() (int, error)
 	// HealthGet lets tests intercept loopback HTTP health probes for add-ons; nil uses a loopback HTTP client.
 	HealthGet func(ctx context.Context, url string) (int, error)
 }
@@ -70,6 +74,7 @@ type placed struct {
 	mode     fs.FileMode
 	uid, gid int // -1: leave as created
 	data     []byte
+	sha256   string
 }
 
 func (r Realizer) dir() string { return Dir(r.StateDir) }
@@ -170,16 +175,47 @@ func (r Realizer) files(g Generation) ([]placed, error) {
 		if err != nil {
 			return nil, err
 		}
-		mode := fs.FileMode(0o644)
+		mode, uid, gid := fs.FileMode(0o644), -1, -1
 		switch f.Mode {
 		case "0600":
 			mode = 0o600
 		case "0400":
 			mode = 0o400
+		case "0640":
+			// A WireGuard key: networkd reads it as the systemd-network group.
+			if gid, err = r.networkGroup(); err != nil {
+				return nil, err
+			}
+			mode, uid = 0o640, 0
 		}
-		out = append(out, placed{path: f.Path, mode: mode, uid: -1, gid: -1, data: data})
+		out = append(out, placed{path: f.Path, mode: mode, uid: uid, gid: gid, data: data, sha256: f.SHA256})
 	}
 	return out, nil
+}
+
+// networkGroup is systemd-networkd's group: the group of its runtime directory, which it owns, or the one the group
+// files name. /usr/lib/group is read too: an image keeps its system groups there (nss-altfiles), which a binary built
+// without cgo does not see through os/user.
+func (r Realizer) networkGroup() (int, error) {
+	if r.networkGID != nil {
+		return r.networkGID()
+	}
+	if info, err := os.Stat(r.Root + "/run/systemd/netif"); err == nil {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Gid != 0 {
+			return int(st.Gid), nil
+		}
+	}
+	for _, file := range []string{"/etc/group", "/usr/lib/group"} {
+		data, _ := os.ReadFile(r.Root + file)
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if f := strings.Split(line, ":"); len(f) >= 3 && f[0] == "systemd-network" {
+				if gid, err := strconv.Atoi(f[2]); err == nil {
+					return gid, nil
+				}
+			}
+		}
+	}
+	return 0, errors.New("the systemd-network group, which reads WireGuard keys, is unknown")
 }
 
 // live is what the pointers say is in /run now: a generation's files, or the catch-all once set up.
@@ -195,7 +231,7 @@ func (r Realizer) live(p Pointers) ([]placed, error) {
 	out := make([]placed, 0, len(g.Files))
 	for _, f := range g.Files {
 		if allowed(f.Path) && f.Path != filterEntry {
-			out = append(out, placed{path: f.Path})
+			out = append(out, placed{path: f.Path, sha256: f.SHA256})
 		}
 	}
 	return out, nil
@@ -237,13 +273,13 @@ func (r Realizer) place(from, to []placed) error {
 		if err := os.MkdirAll(filepath.Dir(target), dirMode); err != nil {
 			return err
 		}
-		if err := writeAtomic(target, f.data, f.mode); err != nil {
-			return err
-		}
+		var chown func(string) error
 		if f.uid >= 0 {
-			if err := r.Chown(target, f.uid, f.gid); err != nil {
-				return err
-			}
+			uid, gid := f.uid, f.gid
+			chown = func(p string) error { return r.Chown(p, uid, gid) }
+		}
+		if err := writeAtomicOwned(target, f.data, f.mode, chown); err != nil {
+			return err
 		}
 	}
 	if err := r.at("place:remove"); err != nil {
@@ -260,8 +296,122 @@ func (r Realizer) place(from, to []placed) error {
 	return nil
 }
 
-// settle makes networkd read the files and removes the devices only from had.
-func (r Realizer) settle(ctx context.Context, from, to []placed) error {
+// wireguardOwner extracts the WireGuard device name (wg0..wg99) for a rendered .netdev, .key, or .psk file.
+func wireguardOwner(path string) (string, bool) {
+	if filepath.Dir(path) != "/run/systemd/network" {
+		return "", false
+	}
+	rest, ok := strings.CutPrefix(filepath.Base(path), "50-andaru-")
+	if !ok {
+		return "", false
+	}
+	var name string
+	switch {
+	case strings.HasSuffix(rest, ".netdev"):
+		name = strings.TrimSuffix(rest, ".netdev")
+	case strings.HasSuffix(rest, ".key"):
+		name = strings.TrimSuffix(rest, ".key")
+	case strings.HasSuffix(rest, ".psk"):
+		i := strings.IndexByte(rest, '-')
+		if i < 0 {
+			return "", false
+		}
+		name = rest[:i]
+	default:
+		return "", false
+	}
+	if !strings.HasPrefix(name, "wg") {
+		return "", false
+	}
+	return name, true
+}
+
+// placedDigest returns the hex SHA-256 of a placed file from its manifest metadata or in-memory bytes.
+func placedDigest(f placed) string {
+	if f.sha256 != "" {
+		return f.sha256
+	}
+	if f.data != nil {
+		sum := sha256.Sum256(f.data)
+		return hex.EncodeToString(sum[:])
+	}
+	return ""
+}
+
+// changedWireGuard returns the sorted names of WireGuard devices present in both from and to whose generation
+// .netdev, .key, or .psk files differ. Comparing the source and target generations (rather than /run) preserves
+// recreation across interrupted rollbacks where place() already restored the files before settle() completed.
+func (r Realizer) changedWireGuard(from, to []placed) []string {
+	toNetdev := map[string]bool{}
+	toFiles := map[string]map[string]string{}
+	for _, f := range to {
+		name, ok := wireguardOwner(f.path)
+		if !ok {
+			continue
+		}
+		if strings.HasSuffix(f.path, ".netdev") {
+			toNetdev[name] = true
+		}
+		if toFiles[name] == nil {
+			toFiles[name] = map[string]string{}
+		}
+		toFiles[name][f.path] = placedDigest(f)
+	}
+	fromNetdev := map[string]bool{}
+	fromFiles := map[string]map[string]string{}
+	for _, f := range from {
+		name, ok := wireguardOwner(f.path)
+		if !ok {
+			continue
+		}
+		if strings.HasSuffix(f.path, ".netdev") {
+			fromNetdev[name] = true
+		}
+		if fromFiles[name] == nil {
+			fromFiles[name] = map[string]string{}
+		}
+		fromFiles[name][f.path] = placedDigest(f)
+	}
+	var changed []string
+	for name := range toNetdev {
+		if !fromNetdev[name] {
+			continue
+		}
+		want := toFiles[name]
+		cur := fromFiles[name]
+		if len(cur) != len(want) {
+			changed = append(changed, name)
+			continue
+		}
+		diff := false
+		for p, curDigest := range cur {
+			wantDigest, ok := want[p]
+			if !ok || curDigest == "" || wantDigest == "" || curDigest != wantDigest {
+				diff = true
+				break
+			}
+		}
+		if diff {
+			changed = append(changed, name)
+		}
+	}
+	slices.Sort(changed)
+	return changed
+}
+
+// settle makes networkd read the files and removes the devices only from had (plus changed WireGuard devices).
+func (r Realizer) settle(ctx context.Context, from, to []placed, recreateWG []string) error {
+	for _, name := range recreateWG {
+		// networkctl reload keeps an existing WireGuard netdev's stale peers/keys; delete it so reload recreates it.
+		if _, err := r.Run(ctx, "/usr/bin/networkctl", "delete", name); err != nil {
+			if r.Root == "" {
+				if _, statErr := os.Stat("/sys/class/net/" + name); errors.Is(statErr, fs.ErrNotExist) {
+					continue
+				}
+			}
+			return fmt.Errorf("recreate WireGuard device %s: %w", name, err)
+		}
+	}
 	if _, err := r.Run(ctx, "/usr/bin/networkctl", "reload"); err != nil {
 		return err
 	}
@@ -639,11 +789,12 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 	restored, err := r.restorable(previous, p)
 	if err == nil {
 		err = r.toward(restore, earlier, func() error {
+			recreateWG := r.changedWireGuard(next, restored)
 			if err := r.place(next, restored); err != nil {
 				return err
 			}
 			// Until a reload succeeds networkd may still run the new files: the timer keeps this generation.
-			return r.settle(restore, next, restored)
+			return r.settle(restore, next, restored, recreateWG)
 		})
 	}
 	if err != nil {
@@ -697,10 +848,11 @@ func DeclaredDNS(data []byte) []netip.Addr {
 }
 
 func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, names []string, route bool) string {
+	recreateWG := r.changedWireGuard(previous, next)
 	if err := r.place(previous, next); err != nil {
 		return err.Error()
 	}
-	if err := r.settle(ctx, previous, next); err != nil {
+	if err := r.settle(ctx, previous, next, recreateWG); err != nil {
 		return err.Error()
 	}
 	// networkd hands DNS servers to systemd-resolved only; where resolved does not manage resolv.conf there is nothing to check.
@@ -775,7 +927,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	from := make([]placed, 0, len(g.Files))
 	for _, f := range g.Files {
 		if allowed(f.Path) && f.Path != filterEntry {
-			from = append(from, placed{path: f.Path})
+			from = append(from, placed{path: f.Path, sha256: f.SHA256})
 		}
 	}
 	target, live, what, loaded, err := r.fallback(ctx, p, g.Previous)
@@ -797,10 +949,11 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
 	// fallback already loaded the restored generation's filter; going back to none, the bare filter goes first.
 	restore := func() error {
+		recreateWG := r.changedWireGuard(from, target)
 		if err := r.place(from, target); err != nil {
 			return err
 		}
-		if err := r.settle(ctx, from, target); err != nil {
+		if err := r.settle(ctx, from, target, recreateWG); err != nil {
 			return fmt.Errorf("files restored, reload failed: %w", err)
 		}
 		return nil

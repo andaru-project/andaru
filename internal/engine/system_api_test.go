@@ -62,12 +62,19 @@ func TestSystemStatus(t *testing.T) {
 }
 
 // What the box reports about itself is status: every status route asks for status.read and nothing else, but for
-// the ACME orders' status, which is the certificates' and asks for certificates.read.
+// the ACME orders' status, which is the certificates' and asks for certificates.read, and the VPNs', which ask for
+// vpn.read.
 func TestStatusRoutesNeedStatusRead(t *testing.T) {
 	seen := 0
 	for _, route := range buildEngineRoutes() {
 		if route.Path == acmeStatusPath {
 			if route.Capability != authz.CertificatesRead {
+				t.Errorf("%s %s needs %q", route.Method, route.Path, route.Capability)
+			}
+			continue
+		}
+		if route.Path == wireguardStatusPath {
+			if route.Capability != authz.VPNRead {
 				t.Errorf("%s %s needs %q", route.Method, route.Path, route.Capability)
 			}
 			continue

@@ -604,3 +604,20 @@ func TestConfigRoutes(t *testing.T) {
 		t.Fatal("a route result was refused")
 	}
 }
+
+func TestConfigWireGuard(t *testing.T) {
+	id := "wg_00000001-0000-4000-8000-000000000001"
+	for args, want := range map[string]ctlRequest{
+		"config list vpn/wireguard":      {method: "GET", path: "/api/v1/config/vpn/wireguard", kind: "collection"},
+		"config create vpn/wireguard":    {method: "POST", path: "/api/v1/config/vpn/wireguard", kind: "object"},
+		"config get vpn/wireguard " + id: {method: "GET", path: "/api/v1/config/vpn/wireguard/" + id, kind: "object"},
+	} {
+		req, err := ctlOperation(strings.Fields(args), io.Discard)
+		if err != nil || req.method != want.method || req.path != want.path || req.kind != want.kind {
+			t.Fatalf("%s: %+v %v", args, req, err)
+		}
+	}
+	if !validChanged(config.ChangedView{Collection: "vpn.wireguard", ID: id, Deleted: true}) {
+		t.Fatal("a WireGuard result was refused")
+	}
+}

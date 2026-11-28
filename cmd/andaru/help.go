@@ -63,6 +63,7 @@ const realizeUsage = `usage: andaru realize [OPTIONS] activate|confirm N
        andaru realize [OPTIONS] addon-ctl start|stop|restart SLUG
        andaru realize [OPTIONS] addon-bus-tokens|cert-sync PATH
        andaru realize [OPTIONS] addon-log SLUG NAME LINES PATH
+       andaru realize [OPTIONS] wg-status PATH
        andaru realize [OPTIONS] acme-http01-open IFACE...
        andaru realize [OPTIONS] acme-http01-close
        andaru realize [OPTIONS] update-check|update-stage
@@ -90,6 +91,8 @@ Verbs:
   cert-sync F          Place the certificates in file F where their services
                        read them, and reload the web server; F is removed
   addon-log S N L F    Read bounded tail of file log N for add-on S into file F
+  wg-status F          Write the WireGuard interfaces' and peers' state into
+                       file F, keys left out
   acme-http01-open I.. Redirect port 80 on interfaces I to the HTTP-01 responder
   acme-http01-close    Stop redirecting port 80 to the HTTP-01 responder
   factory-reset        Run or resume the factory reset ctl factory-reset planned
@@ -170,7 +173,7 @@ Commands:
 
 Collections: links, segments, zones, aliases/addresses, aliases/ports, dhcp,
   dhcp6, virtualAddresses, notifications/channels, rules, nat/port-forwards,
-  nat/one-to-one, routes
+  nat/one-to-one, routes, vpn/wireguard
 Singletons: management, nat/outbound, dns
 Lists: rules, nat/port-forwards, nat/one-to-one
 

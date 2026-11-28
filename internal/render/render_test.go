@@ -47,7 +47,7 @@ func fixture(t *testing.T, name string) Input {
 	if err = json.Unmarshal(raw, &rows); err != nil {
 		t.Fatal(err)
 	}
-	return Input{Declaration: declaration, Links: links(rows...), Facts: allFacts, Secrets: map[string]string{"WAN_PASSWORD": "kpn"}}
+	return Input{Declaration: declaration, Links: links(rows...), Facts: allFacts, Secrets: map[string]string{"WAN_PASSWORD": "kpn", "WG0_KEY": "ERERERERERERERERERERERERERERERERERERERERERE=", "WG1_KEY": "EhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhI=", "WG2_KEY": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM=", "WG0_LAPTOP_PSK": "FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQ="}}
 }
 
 func render(t *testing.T, in Input) Result {
@@ -63,7 +63,11 @@ func render(t *testing.T, in Input) Result {
 func golden(result Result) string {
 	var b strings.Builder
 	for _, f := range result.Files {
-		fmt.Fprintf(&b, "### %s %s secret=%v sources=%s\n%s\n", f.Path, f.Mode, f.Secret, strings.Join(f.Sources, ","), f.Real())
+		owner := ""
+		if f.Owner != "" {
+			owner = " owner=" + f.Owner
+		}
+		fmt.Fprintf(&b, "### %s %s%s secret=%v sources=%s\n%s\n", f.Path, f.Mode, owner, f.Secret, strings.Join(f.Sources, ","), f.Real())
 		if f.Secret {
 			fmt.Fprintf(&b, "### %s (as shown)\n%s\n", f.Path, f.Content)
 		}

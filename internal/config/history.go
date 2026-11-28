@@ -590,6 +590,62 @@ func realized(value json.RawMessage) []byte {
 			return value
 		}
 	}
+	// A disabled WireGuard interface or peer renders nothing, names and descriptions are not rendered, and its keys
+	// are compared in SameRealization.
+	if raw, ok := d["vpn"]; ok {
+		var err error
+		var vpn struct {
+			WireGuard []map[string]json.RawMessage `json:"wireguard"`
+		}
+		if json.Unmarshal(raw, &vpn) != nil {
+			return value
+		}
+		vpn.WireGuard = slices.DeleteFunc(vpn.WireGuard, func(w map[string]json.RawMessage) bool { return string(w["enabled"]) != "true" })
+		secretBinding := func(raw json.RawMessage) json.RawMessage {
+			var ref struct {
+				Secret     string `json:"secret"`
+				Unresolved bool   `json:"unresolved,omitempty"`
+			}
+			if json.Unmarshal(raw, &ref) != nil || ref.Secret == "" {
+				return raw
+			}
+			b, err := json.Marshal(ref)
+			if err != nil {
+				return raw
+			}
+			return b
+		}
+		for _, w := range vpn.WireGuard {
+			delete(w, "name")
+			delete(w, "description")
+			if ref, has := w["privateKeyRef"]; has {
+				w["privateKeyRef"] = secretBinding(ref)
+			}
+			var peers []map[string]json.RawMessage
+			if json.Unmarshal(w["peers"], &peers) != nil {
+				continue
+			}
+			peers = slices.DeleteFunc(peers, func(p map[string]json.RawMessage) bool { return string(p["enabled"]) != "true" })
+			for _, p := range peers {
+				delete(p, "name")
+				delete(p, "description")
+				if ref, has := p["presharedKeyRef"]; has {
+					p["presharedKeyRef"] = secretBinding(ref)
+				}
+			}
+			if len(peers) == 0 {
+				delete(w, "peers")
+			} else if w["peers"], err = json.Marshal(peers); err != nil {
+				return value
+			}
+		}
+		delete(d, "vpn")
+		if len(vpn.WireGuard) > 0 {
+			if d["vpn"], err = json.Marshal(vpn.WireGuard); err != nil {
+				return value
+			}
+		}
+	}
 	// A secret view says when its secret last changed; the secret itself is compared in SameRealization, so a
 	// secret changed and changed back realizes as before.
 	var links []map[string]json.RawMessage
@@ -683,6 +739,7 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 				result.Secrets[l.Password.Secret] = state.Secrets.Scopes["core"][l.Password.Secret].Value
 			}
 		}
+		realizedWireGuardSecrets(&state.Config, state.Secrets, result.Secrets)
 		certs := certificateIndex(&state.Config)
 		for i := range state.Config.Addons {
 			a := &state.Config.Addons[i]
