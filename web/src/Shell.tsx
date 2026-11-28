@@ -36,6 +36,7 @@ import { UpdatesScreen } from './screens/UpdatesScreen';
 import { formatSafeModeReasons, SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import { VirtualIpsScreen } from './screens/VirtualIpsScreen';
+import { WireGuardScreen } from './screens/WireGuardScreen';
 import { ZonesScreen } from './screens/ZonesScreen';
 import type { NotificationList, Session, User } from './types';
 import { ConnectionContext, useEvents, useResource, useVisiblePoll, type Resource } from './useResource';
@@ -70,6 +71,7 @@ const pageTitles: Record<string, string> = {
   '/firewall/nat': 'NAT',
   '/firewall/aliases': 'Aliases',
   '/firewall/zones': 'Zones',
+  '/vpn/wireguard': 'WireGuard',
   '/changes': 'Review and apply',
   '/system/details': 'System details',
   '/system/certificates': 'Certificates',
@@ -232,6 +234,12 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     },
     { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }, { to: '/firewall/nat', label: 'NAT', visible: canReadChanges }, { to: '/firewall/aliases', label: 'Aliases', visible: canReadChanges }, { to: '/firewall/zones', label: 'Zones', visible: canReadChanges }] },
     {
+      label: 'VPN',
+      items: [
+        { to: '/vpn/wireguard', label: 'WireGuard', visible: canReadChanges || capabilities.has('vpn.read') },
+      ],
+    },
+    {
       label: 'Diagnostics',
       items: [
         { to: '/diagnostics/traffic-flow', label: 'Traffic simulator', visible: canReadChanges },
@@ -289,6 +297,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     ['/firewall/nat', <NatScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/zones', <ZonesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/vpn/wireguard', <WireGuardScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/diagnostics/traffic-flow', <TrafficFlowScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} api={api} canRename={capabilities.has('configuration.apply')} onSessionLost={onSessionLost} />],

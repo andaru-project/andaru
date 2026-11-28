@@ -61,6 +61,7 @@ describe('RoutesScreen', () => {
     fetchRoutes({
       '/api/v1/config/routes': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleRoute] }),
       '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
+      '/api/v1/config/vpn/wireguard': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
       'POST /api/v1/config/routes': (init) => {
         createdBody = JSON.parse(String(init?.body ?? '{}'));
         return jsonResponse(201, { state: 'saved', savedVersion: '6', ...sampleRoute });
@@ -141,6 +142,7 @@ describe('RoutesScreen', () => {
         return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleRoute] });
       },
       '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
+      '/api/v1/config/vpn/wireguard': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
       'POST /api/v1/config/routes': () => jsonResponse(422, {
         error: {
           code: 'VALIDATION_FAILED',
@@ -220,6 +222,7 @@ describe('RoutesScreen', () => {
         return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleRoute] });
       },
       '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
+      '/api/v1/config/vpn/wireguard': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
     });
 
     render(

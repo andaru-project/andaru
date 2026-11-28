@@ -751,6 +751,99 @@ export interface StaticRoute {
   enabled: boolean;
 }
 
+export interface WireGuardPeer {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  publicKey: string;
+  presharedKeyRef?: SecretView;
+  allowedIps?: string[];
+  endpoint?: string;
+  persistentKeepalive?: number;
+  routeAllowedIps?: boolean;
+}
+
+export interface WireGuardPeerWrite {
+  id?: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  publicKey: string;
+  presharedKeyRef?: SecretWrite | Record<string, never>;
+  allowedIps?: string[];
+  endpoint?: string;
+  persistentKeepalive?: number;
+  routeAllowedIps?: boolean;
+}
+
+export interface WireGuardInterface {
+  id: string;
+  name: string;
+  description?: string;
+  ifname: string;
+  enabled: boolean;
+  zone?: string;
+  listenPort: number;
+  allowListenPort?: boolean;
+  allowListenSegments?: string[];
+  mtu?: number;
+  addresses?: string[];
+  privateKeyRef: SecretView;
+  publicKey?: string;
+  peers?: WireGuardPeer[];
+}
+
+export interface WireGuardInterfaceWrite {
+  name: string;
+  description?: string;
+  ifname: string;
+  enabled: boolean;
+  zone?: string;
+  listenPort: number;
+  allowListenPort?: boolean;
+  allowListenSegments?: string[];
+  mtu?: number;
+  addresses?: string[];
+  privateKeyRef?: SecretWrite | Record<string, never>;
+  peers?: WireGuardPeerWrite[];
+}
+
+export interface WireGuardKeypairResponse {
+  privateKey: string;
+  publicKey: string;
+  presharedKey?: string;
+}
+
+export interface WireGuardStatusPeer {
+  id?: string;
+  name?: string;
+  publicKey: string;
+  endpoint?: string;
+  latestHandshakeAt?: string;
+  rxBytes: number;
+  txBytes: number;
+  online: boolean;
+}
+
+export interface WireGuardStatusInterface {
+  id: string;
+  ifname: string;
+  publicKey: string;
+  listenPort: number;
+  peers: WireGuardStatusPeer[];
+}
+
+export interface WireGuardStatusResponse {
+  items: WireGuardStatusInterface[];
+}
+
+export interface WireGuardPeerConfigRequest {
+  endpoint?: string;
+  dns?: string[];
+  includePsk?: boolean;
+}
+
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
@@ -773,6 +866,9 @@ export interface Snapshot {
     acme?: {
       accounts?: AcmeAccount[];
       orders?: AcmeOrder[];
+    };
+    vpn?: {
+      wireguard?: WireGuardInterface[];
     };
     aliases?: {
       addresses: Array<Partial<AddressAlias> & { id: string; name: string }>;

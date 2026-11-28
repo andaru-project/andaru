@@ -78,6 +78,11 @@ import type {
   VersionDetail,
   VirtualAddress,
   WebSessionPage,
+  WireGuardInterface,
+  WireGuardInterfaceWrite,
+  WireGuardKeypairResponse,
+  WireGuardPeerConfigRequest,
+  WireGuardStatusResponse,
   Zone,
 } from './types';
 
@@ -994,6 +999,71 @@ export class ApiClient {
     return this.request<AcmeTriggerResponse>(`/api/v1/acme/orders/${encodeURIComponent(id)}/test-staging`, {
       method: 'POST',
     }, true);
+  }
+
+  wireguardInterfaces() {
+    return this.request<SavedList<WireGuardInterface>>('/api/v1/config/vpn/wireguard');
+  }
+
+  saveWireguardInterface(entry: WireGuardInterfaceWrite, saved?: SavedObject<WireGuardInterface>) {
+    return this.save('/api/v1/config/vpn/wireguard', entry, saved);
+  }
+
+  deleteWireguardInterface(id: string, version: string) {
+    return this.request<void>(`/api/v1/config/vpn/wireguard/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  wireguardStatus() {
+    return this.request<WireGuardStatusResponse>('/api/v1/status/vpn/wireguard');
+  }
+
+  generateWireguardKeypair(includePsk = false) {
+    return this.request<WireGuardKeypairResponse>('/api/v1/vpn/wireguard/keypair', {
+      method: 'POST',
+      body: JSON.stringify(includePsk ? { includePsk: true } : {}),
+    }, true);
+  }
+
+  async wireguardPeerConfig(
+    id: string,
+    peerId: string,
+    body: WireGuardPeerConfigRequest = {},
+  ): Promise<{ text: string; filename: string }> {
+    const { response, callerSignal, signal, cleanup } = await this.send(
+      `/api/v1/vpn/wireguard/${encodeURIComponent(id)}/peers/${encodeURIComponent(peerId)}/config`,
+      { method: 'POST', body: JSON.stringify(body) },
+      true,
+      'text/plain',
+    );
+    try {
+      if (!response.ok) {
+        let errBody: unknown;
+        try {
+          errBody = await response.json();
+        } catch (err) {
+          if (callerSignal?.aborted) throw err;
+          if (signal?.aborted) throw this.disconnectedError();
+          errBody = undefined;
+        }
+        throw this.toApiError(response, errBody);
+      }
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (err) {
+        if (callerSignal?.aborted) throw err;
+        throw this.disconnectedError();
+      }
+      return {
+        text,
+        filename: filenameFromDisposition(response.headers.get('Content-Disposition'), `wireguard-${peerId}.conf`),
+      };
+    } finally {
+      cleanup();
+    }
   }
 
   private async requestBlob(
