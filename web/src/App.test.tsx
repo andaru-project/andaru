@@ -86,7 +86,7 @@ it('shows every branch to an administrator and starts on the dashboard', async (
   expect(branch('System')).toHaveAttribute('aria-expanded', 'false');
   expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Rules', 'NAT', 'Aliases', 'Zones']);
   await userEvent.click(branch('VPN'));
-  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'WireGuard']);
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'WireGuard', 'IPsec']);
   await userEvent.click(branch('Diagnostics'));
   expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Traffic simulator', 'Tools & events']);
   await userEvent.click(branch('Network'));

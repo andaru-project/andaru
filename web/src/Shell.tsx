@@ -20,6 +20,7 @@ import { DashboardScreen } from './screens/DashboardScreen';
 import { DhcpScreen } from './screens/DhcpScreen';
 import { DnsScreen } from './screens/DnsScreen';
 import { InterfacesScreen } from './screens/InterfacesScreen';
+import { IPsecScreen } from './screens/IPsecScreen';
 import { Bell } from './screens/Marks';
 import { NatScreen } from './screens/NatScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
@@ -72,6 +73,7 @@ const pageTitles: Record<string, string> = {
   '/firewall/aliases': 'Aliases',
   '/firewall/zones': 'Zones',
   '/vpn/wireguard': 'WireGuard',
+  '/vpn/ipsec': 'IPsec',
   '/changes': 'Review and apply',
   '/system/details': 'System details',
   '/system/certificates': 'Certificates',
@@ -239,6 +241,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
       label: 'VPN',
       items: [
         { to: '/vpn/wireguard', label: 'WireGuard', visible: canReadChanges || capabilities.has('vpn.read') },
+        { to: '/vpn/ipsec', label: 'IPsec', visible: canReadChanges || capabilities.has('vpn.read') },
       ],
     },
     {
@@ -300,6 +303,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/zones', <ZonesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/vpn/wireguard', <WireGuardScreen api={api} session={session} clientPrivateKeys={wgClientPrivateKeys} onClientPrivateKeysChange={setWgClientPrivateKeys} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/vpn/ipsec', <IPsecScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/diagnostics/traffic-flow', <TrafficFlowScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} api={api} canRename={capabilities.has('configuration.apply')} onSessionLost={onSessionLost} />],

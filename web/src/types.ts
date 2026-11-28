@@ -846,6 +846,123 @@ export interface WireGuardPeerConfigRequest {
   includePsk?: boolean;
 }
 
+export type IPsecMode = 'route-based' | 'policy-based' | 'road-warrior';
+export type IPsecLocalAuthType = 'psk' | 'cert';
+export type IPsecRemoteAuthType = 'psk' | 'cert' | 'eap-mschapv2';
+export type IPsecStartAction = 'trap' | 'start' | 'none';
+
+export interface IPsecEapUser {
+  username: string;
+  passwordRef: SecretView;
+}
+
+export interface IPsecEapUserWrite {
+  username: string;
+  passwordRef: SecretWrite | Record<string, never>;
+}
+
+export interface IPsecAuth {
+  localType: IPsecLocalAuthType;
+  remoteType: IPsecRemoteAuthType;
+  localId: string;
+  remoteId?: string;
+  pskRef?: SecretView;
+  localCertId?: string;
+  caId?: string;
+  eapUsers?: IPsecEapUser[];
+}
+
+export interface IPsecAuthWrite {
+  localType: IPsecLocalAuthType;
+  remoteType: IPsecRemoteAuthType;
+  localId: string;
+  remoteId?: string;
+  pskRef?: SecretWrite | Record<string, never>;
+  localCertId?: string;
+  caId?: string;
+  eapUsers?: IPsecEapUserWrite[];
+}
+
+export interface IPsecConnection {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  mode: IPsecMode;
+  ifname?: string;
+  xfrmIfId?: number;
+  zone?: string;
+  tunnelAddresses?: string[];
+  localSegment?: string;
+  localAddress?: string;
+  remoteAddress?: string;
+  ikeVersion?: number;
+  proposals?: string[];
+  espProposals?: string[];
+  auth: IPsecAuth;
+  localSubnets?: string[];
+  remoteSubnets?: string[];
+  virtualPool?: string[];
+  dpdDelaySeconds?: number;
+  startAction?: IPsecStartAction;
+  natTraversal?: boolean;
+}
+
+export interface IPsecConnectionWrite {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  mode: IPsecMode;
+  ifname?: string;
+  xfrmIfId?: number;
+  zone?: string;
+  tunnelAddresses?: string[];
+  localSegment?: string;
+  localAddress?: string;
+  remoteAddress?: string;
+  ikeVersion?: number;
+  proposals?: string[];
+  espProposals?: string[];
+  auth: IPsecAuthWrite;
+  localSubnets?: string[];
+  remoteSubnets?: string[];
+  virtualPool?: string[];
+  dpdDelaySeconds?: number;
+  startAction?: IPsecStartAction;
+  natTraversal?: boolean;
+}
+
+export interface IPsecChildSAStatus {
+  name: string;
+  state: string;
+  localTs?: string[];
+  remoteTs?: string[];
+  bytesIn: number;
+  bytesOut: number;
+  rekeySec?: number;
+}
+
+export interface IPsecIkeSAStatus {
+  uniqueId: string;
+  state: string;
+  localHost: string;
+  remoteHost: string;
+  establishedSec?: number;
+  childSAs?: IPsecChildSAStatus[];
+}
+
+export interface IPsecStatusItem {
+  id: string;
+  name: string;
+  applied?: boolean;
+  ikeSAs?: IPsecIkeSAStatus[];
+}
+
+export interface IPsecStatusResponse {
+  serviceActive: boolean;
+  items: IPsecStatusItem[];
+}
+
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
@@ -871,6 +988,7 @@ export interface Snapshot {
     };
     vpn?: {
       wireguard?: WireGuardInterface[];
+      ipsec?: IPsecConnection[];
     };
     aliases?: {
       addresses: Array<Partial<AddressAlias> & { id: string; name: string }>;
