@@ -85,14 +85,22 @@ func prepareWireGuard(value map[string]any, old any, create bool) (string, error
 		}
 		return m
 	}
+	keptPrivate := false
 	if empty(value["privateKeyRef"]) {
 		if create || before == nil {
 			return "/privateKeyRef", errors.New("A private key is required.")
 		}
 		value["privateKeyRef"] = asMap(&before.PrivateKeyRef)
+		keptPrivate = true
+	} else if before != nil {
+		if m, ok := value["privateKeyRef"].(map[string]any); ok {
+			if _, hasSet := m["set"]; !hasSet && m["secret"] == before.PrivateKeyRef.Secret {
+				keptPrivate = true
+			}
+		}
 	}
 	delete(value, "publicKey")
-	if before != nil && before.PublicKey != "" {
+	if keptPrivate && before != nil && before.PublicKey != "" {
 		value["publicKey"] = before.PublicKey
 	}
 	peers, _ := value["peers"].([]any)
@@ -143,20 +151,47 @@ func WireGuardPublicKey(private string) (string, error) {
 	return base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), nil
 }
 
-// validEndpoint accepts host:port or [IPv6]:port with a port of 1 to 65535 and no space or control character.
+// validEndpointHost accepts a unicast/non-4in6 IP address (bracketed iff IPv6 when bracketed) or a DNS hostname.
+func validEndpointHost(host string) bool {
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		return a.Zone() == "" && !a.Is4In6()
+	}
+	// Hostname: dot-separated ASCII labels of [A-Za-z0-9-], no leading/trailing hyphen or empty label.
+	if strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return false
+	}
+	for label := range strings.SplitSeq(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// validEndpoint accepts host:port or [IPv6]:port with a canonical port of 1 to 65535 and no space/control/format chars.
 func validEndpoint(s string) bool {
-	if strings.ContainsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+	if strings.ContainsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) {
 		return false
 	}
 	host, port, err := net.SplitHostPort(s)
 	n, perr := strconv.Atoi(port)
-	if err != nil || perr != nil || n < 1 || n > 65535 || host == "" || strings.ContainsAny(host, "[]") {
+	if err != nil || perr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port || host == "" || strings.ContainsAny(host, "[]") {
 		return false
 	}
+	bracketed := strings.HasPrefix(s, "[")
 	if a, err := netip.ParseAddr(host); err == nil {
-		return a.Zone() == "" && (a.Is4() || strings.HasPrefix(s, "["))
+		return a.Zone() == "" && !a.Is4In6() && bracketed == a.Is6()
 	}
-	return !strings.Contains(host, ":")
+	return !bracketed && !strings.Contains(host, ":") && validEndpointHost(host)
 }
 
 func validateWireGuard(d *declaration) []FieldError {
@@ -189,6 +224,13 @@ func validateWireGuard(d *declaration) []FieldError {
 		}
 		if seen["if:"+w.Ifname] {
 			bad(p+"/ifname", "Another interface has this name.")
+		}
+		if w.Enabled {
+			portKey := fmt.Sprintf("port:%d", w.ListenPort)
+			if seen[portKey] {
+				bad(p+"/listenPort", "Another enabled WireGuard interface uses this listen port.")
+			}
+			seen[portKey] = true
 		}
 		seen[w.ID], seen["name:"+w.Name], seen["if:"+w.Ifname] = true, true, true
 		if w.Zone != "" && !zones[w.Zone] {
@@ -245,14 +287,21 @@ func validateWireGuard(d *declaration) []FieldError {
 			if len(peer.AllowedIPs) == 0 && peer.Enabled {
 				bad(pp+"/allowedIps", "An enabled peer needs an allowed IP prefix.")
 			}
+			peerPrefixes := map[netip.Prefix]bool{}
 			for k, a := range peer.AllowedIPs {
 				x, err := netip.ParsePrefix(a)
 				if err != nil || x.Addr().Is4In6() || x.Addr().Zone() != "" {
 					bad(fmt.Sprintf("%s/allowedIps/%d", pp, k), "Expected an IPv4 or IPv6 prefix in CIDR notation.")
 					continue
 				}
+				x = x.Masked()
+				if peerPrefixes[x] {
+					bad(fmt.Sprintf("%s/allowedIps/%d", pp, k), "Duplicate allowed IP prefix.")
+					continue
+				}
+				peerPrefixes[x] = true
 				// WireGuard routes a prefix to one peer: a second enabled peer would silently take it over.
-				if x = x.Masked(); peer.Enabled && routed[x] {
+				if peer.Enabled && routed[x] {
 					bad(fmt.Sprintf("%s/allowedIps/%d", pp, k), "Another enabled peer of this interface has this prefix.")
 				}
 				if peer.Enabled {
@@ -361,44 +410,45 @@ func checkAllWireGuardKeys(d *declaration, secrets secretDocument) []FieldError 
 // unresolvedWireGuard is where an enabled interface would run without a key: its own, or an enabled peer's.
 func unresolvedWireGuard(d *declaration) []FieldError {
 	var out []FieldError
-	for i, w := range d.VPN.WireGuard {
+	for i := range d.VPN.WireGuard {
+		w := &d.VPN.WireGuard[i]
 		if !w.Enabled {
 			continue
 		}
-		for _, s := range w.secrets() {
-			if !s.ref.Unresolved {
-				continue
+		if w.PrivateKeyRef.Unresolved {
+			out = append(out, FieldError{
+				Path:    fmt.Sprintf("/vpn/wireguard/%d/privateKeyRef", i),
+				Message: "Secret " + w.PrivateKeyRef.Secret + " is unresolved; explicitly bind or set it before applying.",
+			})
+		}
+		for j := range w.Peers {
+			p := &w.Peers[j]
+			if p.Enabled && p.PresharedKeyRef != nil && p.PresharedKeyRef.Unresolved {
+				out = append(out, FieldError{
+					Path:    fmt.Sprintf("/vpn/wireguard/%d/peers/%d/presharedKeyRef", i, j),
+					Message: "Secret " + p.PresharedKeyRef.Secret + " is unresolved; explicitly bind or set it before applying.",
+				})
 			}
-			if n, ok := peerIndex(s.path); ok && !w.Peers[n].Enabled {
-				continue
-			}
-			out = append(out, FieldError{Path: fmt.Sprintf("/vpn/wireguard/%d%s", i, s.path), Message: "Secret " + s.ref.Secret + " is unresolved; explicitly bind or set it before applying."})
 		}
 	}
 	return out
 }
 
-// peerIndex is the peer a secret path below an interface names.
-func peerIndex(path string) (int, bool) {
-	rest, ok := strings.CutPrefix(path, "/peers/")
-	if !ok {
-		return 0, false
-	}
-	n, err := strconv.Atoi(strings.TrimSuffix(rest, "/presharedKeyRef"))
-	return n, err == nil
-}
-
 // realizedWireGuardSecrets are the keys the enabled interfaces and their enabled peers render.
 func realizedWireGuardSecrets(d *declaration, secrets secretDocument, into map[string]string) {
-	for _, w := range d.VPN.WireGuard {
+	for i := range d.VPN.WireGuard {
+		w := &d.VPN.WireGuard[i]
 		if !w.Enabled {
 			continue
 		}
-		for _, s := range w.secrets() {
-			if n, ok := peerIndex(s.path); s.ref.Unresolved || ok && !w.Peers[n].Enabled {
-				continue
+		if !w.PrivateKeyRef.Unresolved {
+			into[w.PrivateKeyRef.Secret] = secrets.Scopes["core"][w.PrivateKeyRef.Secret].Value
+		}
+		for j := range w.Peers {
+			p := &w.Peers[j]
+			if p.Enabled && p.PresharedKeyRef != nil && !p.PresharedKeyRef.Unresolved {
+				into[p.PresharedKeyRef.Secret] = secrets.Scopes["core"][p.PresharedKeyRef.Secret].Value
 			}
-			into[s.ref.Secret] = secrets.Scopes["core"][s.ref.Secret].Value
 		}
 	}
 }

@@ -218,10 +218,11 @@ func (r Realizer) Teardown(ctx context.Context) error {
 	// The catch-all stays: the reset ends behind deny-all, where WAN must not take a lease either.
 	keep := []placed{catchAll}
 	r.noteOffloadDefaults(ctx)
+	recreateWG := r.changedWireGuard(set, keep)
 	if err := r.place(set, keep); err != nil {
 		return err
 	}
-	if err := r.settle(ctx, set, keep); err != nil {
+	if err := r.settle(ctx, set, keep, recreateWG); err != nil {
 		return err
 	}
 	return r.cleanupAddonsOnTeardown(ctx)

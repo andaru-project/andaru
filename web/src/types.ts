@@ -824,6 +824,7 @@ export interface WireGuardStatusPeer {
   rxBytes: number;
   txBytes: number;
   online: boolean;
+  applied?: boolean;
 }
 
 export interface WireGuardStatusInterface {
@@ -831,6 +832,7 @@ export interface WireGuardStatusInterface {
   ifname: string;
   publicKey: string;
   listenPort: number;
+  active?: boolean;
   peers: WireGuardStatusPeer[];
 }
 

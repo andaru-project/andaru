@@ -1241,6 +1241,24 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 					}
 				}
 			}
+		} else if i < 0 && key.Collection == "vpn.wireguard" && (tail == "/ifname" || tail == "/listenPort") {
+			if existing, ok := index[key].(*wireguardInterface); ok {
+				for candidate, op := range origins {
+					if candidate.Collection != "vpn.wireguard" {
+						continue
+					}
+					w, ok := index[candidate].(*wireguardInterface)
+					if !ok {
+						continue
+					}
+					match := (tail == "/ifname" && w.Ifname == existing.Ifname) ||
+						(tail == "/listenPort" && w.Enabled && existing.Enabled && w.ListenPort == existing.ListenPort)
+					if match && (i < 0 || op < i) {
+						i = op
+						path = input.path(op, tail, true)
+					}
+				}
+			}
 		}
 		if i < 0 {
 			for j, op := range input.Operations {

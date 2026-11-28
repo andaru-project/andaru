@@ -617,7 +617,9 @@ func realized(value json.RawMessage) []byte {
 					p["presharedKeyRef"] = json.RawMessage("true") // its value is in Secrets; that it has one is rendered
 				}
 			}
-			if w["peers"], err = json.Marshal(peers); err != nil {
+			if len(peers) == 0 {
+				delete(w, "peers")
+			} else if w["peers"], err = json.Marshal(peers); err != nil {
 				return value
 			}
 		}

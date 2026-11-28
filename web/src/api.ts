@@ -1032,46 +1032,26 @@ export class ApiClient {
     peerId: string,
     body: WireGuardPeerConfigRequest = {},
   ): Promise<{ text: string; filename: string }> {
-    const { response, callerSignal, signal, cleanup } = await this.send(
+    const { data, headers } = await this.requestRaw(
       `/api/v1/vpn/wireguard/${encodeURIComponent(id)}/peers/${encodeURIComponent(peerId)}/config`,
       { method: 'POST', body: JSON.stringify(body) },
       true,
       'text/plain',
+      (res) => res.text(),
     );
-    try {
-      if (!response.ok) {
-        let errBody: unknown;
-        try {
-          errBody = await response.json();
-        } catch (err) {
-          if (callerSignal?.aborted) throw err;
-          if (signal?.aborted) throw this.disconnectedError();
-          errBody = undefined;
-        }
-        throw this.toApiError(response, errBody);
-      }
-      let text: string;
-      try {
-        text = await response.text();
-      } catch (err) {
-        if (callerSignal?.aborted) throw err;
-        throw this.disconnectedError();
-      }
-      return {
-        text,
-        filename: filenameFromDisposition(response.headers.get('Content-Disposition'), `wireguard-${peerId}.conf`),
-      };
-    } finally {
-      cleanup();
-    }
+    return {
+      text: data,
+      filename: filenameFromDisposition(headers.get('Content-Disposition'), `wireguard-${peerId}.conf`),
+    };
   }
 
-  private async requestBlob(
+  private async requestRaw<T>(
     path: string,
     init: RequestInit,
     csrf: boolean,
     accept: string,
-  ): Promise<{ blob: Blob; headers: Headers }> {
+    read: (response: Response) => Promise<T>,
+  ): Promise<{ data: T; headers: Headers }> {
     const { response, carried, callerSignal, signal, cleanup } = await this.send(path, init, csrf, accept);
     try {
       if (!response.ok) {
@@ -1088,9 +1068,9 @@ export class ApiClient {
         }
         throw this.toApiError(response, body);
       }
-      let blob: Blob;
+      let data: T;
       try {
-        blob = await response.blob();
+        data = await read(response);
       } catch (err) {
         if (callerSignal?.aborted) {
           input ||= carried;
@@ -1098,10 +1078,20 @@ export class ApiClient {
         }
         throw this.disconnectedError();
       }
-      return { blob, headers: response.headers };
+      return { data, headers: response.headers };
     } finally {
       cleanup();
     }
+  }
+
+  private async requestBlob(
+    path: string,
+    init: RequestInit,
+    csrf: boolean,
+    accept: string,
+  ): Promise<{ blob: Blob; headers: Headers }> {
+    const { data, headers } = await this.requestRaw(path, init, csrf, accept, (res) => res.blob());
+    return { blob: data, headers };
   }
 
   async createBackup(options: BackupCreateOptions): Promise<BackupDownload> {

@@ -40,6 +40,17 @@ const sampleSegment = {
   },
 };
 
+const samplePeer = {
+  id: 'wgp_00000000-0000-4000-8000-000000000010',
+  name: 'Workstation',
+  enabled: true,
+  publicKey: 'PEER_PUB_KEY_12345678901234567890123456789=',
+  presharedKeyRef: { secret: 'wg_psk_01', isSet: true, version: '1' },
+  allowedIps: ['10.200.0.2/32'],
+  persistentKeepalive: 25,
+  routeAllowedIps: true,
+};
+
 const sampleIface: WireGuardInterface = {
   id: 'wg_00000000-0000-4000-8000-000000000001',
   name: 'Remote Access',
@@ -53,18 +64,7 @@ const sampleIface: WireGuardInterface = {
   addresses: ['10.200.0.1/24'],
   privateKeyRef: { secret: 'wg_key_01', isSet: true, version: '1' },
   publicKey: 'SERVER_PUB_KEY_123456789012345678901234567=',
-  peers: [
-    {
-      id: 'wgp_00000000-0000-4000-8000-000000000010',
-      name: 'Workstation',
-      enabled: true,
-      publicKey: 'PEER_PUB_KEY_12345678901234567890123456789=',
-      presharedKeyRef: { secret: 'wg_psk_01', isSet: true, version: '1' },
-      allowedIps: ['10.200.0.2/32'],
-      persistentKeepalive: 25,
-      routeAllowedIps: true,
-    },
-  ],
+  peers: [samplePeer],
 };
 
 describe('WireGuardScreen', () => {
@@ -92,16 +92,18 @@ describe('WireGuardScreen', () => {
             ifname: 'wg0',
             publicKey: sampleIface.publicKey,
             listenPort: 51820,
+            active: true,
             peers: [
               {
-                id: sampleIface.peers[0].id,
+                id: samplePeer.id,
                 name: 'Workstation',
-                publicKey: sampleIface.peers[0].publicKey,
+                publicKey: samplePeer.publicKey,
                 endpoint: '198.51.100.10:53120',
                 latestHandshakeAt: '2026-11-28T06:50:00Z',
                 rxBytes: 2048,
                 txBytes: 4096,
                 online: true,
+                applied: true,
               },
             ],
           },
@@ -129,7 +131,7 @@ describe('WireGuardScreen', () => {
         currentIface = {
           ...sampleIface,
           peers: [
-            ...sampleIface.peers,
+            samplePeer,
             {
               id: 'wgp_phone',
               name: 'Phone',
@@ -203,7 +205,7 @@ describe('WireGuardScreen', () => {
     await waitFor(() => expect(createdIfaceBody).toMatchObject({
       name: 'Site B',
       ifname: 'wg1',
-      listenPort: 51820,
+      listenPort: 51821,
       addresses: ['10.201.0.1/24'],
       privateKeyRef: { set: 'IFACE_PRIV_KEY_SECRET_44_CHARS_12345678901=', expectedVersion: '0' },
     }));
@@ -243,18 +245,58 @@ describe('WireGuardScreen', () => {
     expect(onSaved).toHaveBeenCalled();
   });
 
-  it('hides write and control actions for read-only users and handles 401 session loss', async () => {
+  it('hides write and control actions for read-only users, renders Not applied and omitted peers cleanly, and triggers onSessionLost on 401', async () => {
+    const user = userEvent.setup();
     const onSessionLost = vi.fn();
+    let fail401 = false;
+
+    const bareDisabledIface: WireGuardInterface = {
+      id: 'wg_00000000-0000-4000-8000-000000000002',
+      name: 'Backup Tunnel',
+      ifname: 'wg1',
+      enabled: false,
+      listenPort: 51821,
+      privateKeyRef: { secret: 'wg_key_02', isSet: false, version: '0', unresolved: true },
+    };
 
     fetchRoutes({
-      '/api/v1/config/vpn/wireguard': () => jsonResponse(200, {
-        state: 'saved',
-        savedVersion: '5',
-        items: [{ version: '2', value: sampleIface }],
-      }),
+      '/api/v1/config/vpn/wireguard': () => {
+        if (fail401) {
+          return jsonResponse(401, { error: { code: 'UNAUTHORIZED', message: 'Session expired.', details: [] } });
+        }
+        return jsonResponse(200, {
+          state: 'saved',
+          savedVersion: '5',
+          items: [
+            { version: '2', value: sampleIface },
+            { version: '2', value: bareDisabledIface },
+          ],
+        });
+      },
       '/api/v1/config/zones': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleZone] }),
       '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
-      '/api/v1/status/vpn/wireguard': () => jsonResponse(200, { items: [] }),
+      '/api/v1/status/vpn/wireguard': () => jsonResponse(200, {
+        items: [
+          {
+            id: sampleIface.id,
+            ifname: 'wg0',
+            publicKey: sampleIface.publicKey ?? '',
+            listenPort: 51820,
+            active: false,
+            peers: [
+              {
+                id: samplePeer.id,
+                name: 'Workstation',
+                publicKey: samplePeer.publicKey,
+                rxBytes: 0,
+                txBytes: 0,
+                online: false,
+                applied: false,
+              },
+            ],
+          },
+        ],
+      }),
     });
 
     render(
@@ -267,9 +309,16 @@ describe('WireGuardScreen', () => {
     );
 
     expect(await screen.findByText('Remote Access')).toBeInTheDocument();
+    expect(screen.getByText('Backup Tunnel')).toBeInTheDocument();
+    expect(screen.getByText('Key unresolved')).toBeInTheDocument();
+    expect(screen.getByText('Not applied')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add interface' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add peer to Remote Access' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Export config for peer Workstation' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete interface Remote Access' })).not.toBeInTheDocument();
+
+    fail401 = true;
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
 });

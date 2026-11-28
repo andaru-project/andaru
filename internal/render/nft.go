@@ -79,6 +79,10 @@ func (r *renderer) filterChains() {
 			uplinks = append(uplinks, name)
 		}
 	}
+	for _, w := range r.wireguards() {
+		segmentZone[w.Ifname] = w.Zone
+		zones[w.Zone] = append(zones[w.Zone], w.Ifname)
+	}
 	hasAddonZones := false
 	for i, a := range d.Addons {
 		if !a.Enabled || r.in.Catalog == nil {
@@ -105,9 +109,6 @@ func (r *renderer) filterChains() {
 			zones[ifc.Zone] = append(zones[ifc.Zone], ifc.Name)
 			hasAddonZones = true
 		}
-	}
-	for _, w := range r.wireguards() {
-		zones[w.Zone] = append(zones[w.Zone], w.Ifname)
 	}
 	for _, z := range d.Zones {
 		f.set(setName(z.ID), "ifname", "", quoted(zones[z.ID]), "")

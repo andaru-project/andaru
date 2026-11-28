@@ -152,7 +152,12 @@ func normalizeAuthorization(m *Manifest) error {
 }
 
 // writeAtomic leaves either the old file or the whole new one, also across a power loss.
-func writeAtomic(path string, data []byte, mode fs.FileMode) (err error) {
+func writeAtomic(path string, data []byte, mode fs.FileMode) error {
+	return writeAtomicOwned(path, data, mode, nil)
+}
+
+// writeAtomicOwned is writeAtomic with an optional ownership step applied to the temporary file before rename.
+func writeAtomicOwned(path string, data []byte, mode fs.FileMode, chown func(string) error) (err error) {
 	dir := filepath.Dir(path)
 	// The dot prefix keeps networkd from parsing a half-written file.
 	tmp, err := os.CreateTemp(dir, ".tmp-")
@@ -170,6 +175,11 @@ func writeAtomic(path string, data []byte, mode fs.FileMode) (err error) {
 	}
 	if err = tmp.Chmod(mode); err != nil {
 		return err
+	}
+	if chown != nil {
+		if err = chown(tmp.Name()); err != nil {
+			return err
+		}
 	}
 	if err = tmp.Sync(); err != nil {
 		return err

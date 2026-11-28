@@ -134,33 +134,27 @@ function penaltyScore(modules: boolean[][]): number {
   let penalty = 0;
 
   // Rule 1: adjacent modules in row/column in same color.
-  for (let r = 0; r < size; r++) {
-    let runColor = modules[r][0];
+  const runPenalty = (seq: boolean[]): number => {
+    let score = 0;
+    let runColor = seq[0];
     let runLen = 1;
-    for (let c = 1; c < size; c++) {
-      if (modules[r][c] === runColor) {
+    for (let i = 1; i < seq.length; i++) {
+      if (seq[i] === runColor) {
         runLen++;
       } else {
-        if (runLen >= 5) penalty += runLen - 2;
-        runColor = modules[r][c];
+        if (runLen >= 5) score += runLen - 2;
+        runColor = seq[i];
         runLen = 1;
       }
     }
-    if (runLen >= 5) penalty += runLen - 2;
-  }
+    if (runLen >= 5) score += runLen - 2;
+    return score;
+  };
+  for (let r = 0; r < size; r++) penalty += runPenalty(modules[r]);
   for (let c = 0; c < size; c++) {
-    let runColor = modules[0][c];
-    let runLen = 1;
-    for (let r = 1; r < size; r++) {
-      if (modules[r][c] === runColor) {
-        runLen++;
-      } else {
-        if (runLen >= 5) penalty += runLen - 2;
-        runColor = modules[r][c];
-        runLen = 1;
-      }
-    }
-    if (runLen >= 5) penalty += runLen - 2;
+    const col: boolean[] = [];
+    for (let r = 0; r < size; r++) col.push(modules[r][c]);
+    penalty += runPenalty(col);
   }
 
   // Rule 2: 2x2 blocks of same color.
@@ -335,17 +329,13 @@ export function encodeQr(text: string): QrMatrix {
   const dataBlocks: Uint8Array[] = [];
   const ecBlocks: Uint8Array[] = [];
   let offset = 0;
-  for (let i = 0; i < g1Count; i++) {
-    const block = dataBytes.subarray(offset, offset + g1Data);
-    offset += g1Data;
-    dataBlocks.push(block);
-    ecBlocks.push(rsRemainder(block, gen));
-  }
-  for (let i = 0; i < g2Count; i++) {
-    const block = dataBytes.subarray(offset, offset + g2Data);
-    offset += g2Data;
-    dataBlocks.push(block);
-    ecBlocks.push(rsRemainder(block, gen));
+  for (const [blockCount, blockLen] of [[g1Count, g1Data], [g2Count, g2Data]] as const) {
+    for (let i = 0; i < blockCount; i++) {
+      const block = dataBytes.subarray(offset, offset + blockLen);
+      offset += blockLen;
+      dataBlocks.push(block);
+      ecBlocks.push(rsRemainder(block, gen));
+    }
   }
 
   const maxDataLen = Math.max(g1Data, g2Data);

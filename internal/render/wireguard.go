@@ -155,10 +155,8 @@ func (r *renderer) wireguardListeners() []string {
 		}
 		var names []string
 		for _, id := range w.AllowListenSegments {
-			for _, s := range r.d.Segments {
-				if s.ID == id && r.usable[s.Link] {
-					names = append(names, r.name[s.Link])
-				}
+			if s, ok := r.segmentByID(id); ok && r.usable[s.Link] {
+				names = append(names, r.name[s.Link])
 			}
 		}
 		slices.Sort(names)

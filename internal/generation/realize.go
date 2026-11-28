@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -198,7 +199,7 @@ func (r Realizer) networkGroup() (int, error) {
 		return r.networkGID()
 	}
 	if info, err := os.Stat(r.Root + "/run/systemd/netif"); err == nil {
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Gid != 0 {
 			return int(st.Gid), nil
 		}
 	}
@@ -270,13 +271,13 @@ func (r Realizer) place(from, to []placed) error {
 		if err := os.MkdirAll(filepath.Dir(target), dirMode); err != nil {
 			return err
 		}
-		if err := writeAtomic(target, f.data, f.mode); err != nil {
-			return err
-		}
+		var chown func(string) error
 		if f.uid >= 0 {
-			if err := r.Chown(target, f.uid, f.gid); err != nil {
-				return err
-			}
+			uid, gid := f.uid, f.gid
+			chown = func(p string) error { return r.Chown(p, uid, gid) }
+		}
+		if err := writeAtomicOwned(target, f.data, f.mode, chown); err != nil {
+			return err
 		}
 	}
 	if err := r.at("place:remove"); err != nil {
@@ -293,8 +294,107 @@ func (r Realizer) place(from, to []placed) error {
 	return nil
 }
 
-// settle makes networkd read the files and removes the devices only from had.
-func (r Realizer) settle(ctx context.Context, from, to []placed) error {
+// wireguardOwner extracts the WireGuard device name (wg0..wg99) for a rendered .netdev, .key, or .psk file.
+func wireguardOwner(path string) (string, bool) {
+	if filepath.Dir(path) != "/run/systemd/network" {
+		return "", false
+	}
+	rest, ok := strings.CutPrefix(filepath.Base(path), "50-andaru-")
+	if !ok {
+		return "", false
+	}
+	var name string
+	switch {
+	case strings.HasSuffix(rest, ".netdev"):
+		name = strings.TrimSuffix(rest, ".netdev")
+	case strings.HasSuffix(rest, ".key"):
+		name = strings.TrimSuffix(rest, ".key")
+	case strings.HasSuffix(rest, ".psk"):
+		i := strings.IndexByte(rest, '-')
+		if i < 0 {
+			return "", false
+		}
+		name = rest[:i]
+	default:
+		return "", false
+	}
+	if !strings.HasPrefix(name, "wg") {
+		return "", false
+	}
+	return name, true
+}
+
+// changedWireGuard returns the sorted names of WireGuard devices present in both from and to whose on-disk
+// .netdev, .key, or .psk files differ from to. networkctl reload does not remove deleted peers or update
+// modified keys on an existing WireGuard netdev, so changed devices must be deleted before reload.
+func (r Realizer) changedWireGuard(from, to []placed) []string {
+	toNetdev := map[string]bool{}
+	toFiles := map[string]map[string][]byte{}
+	for _, f := range to {
+		name, ok := wireguardOwner(f.path)
+		if !ok {
+			continue
+		}
+		if strings.HasSuffix(f.path, ".netdev") {
+			toNetdev[name] = true
+		}
+		if toFiles[name] == nil {
+			toFiles[name] = map[string][]byte{}
+		}
+		toFiles[name][f.path] = f.data
+	}
+	fromNetdev := map[string]bool{}
+	fromPaths := map[string][]string{}
+	for _, f := range from {
+		name, ok := wireguardOwner(f.path)
+		if !ok {
+			continue
+		}
+		if strings.HasSuffix(f.path, ".netdev") {
+			fromNetdev[name] = true
+		}
+		fromPaths[name] = append(fromPaths[name], f.path)
+	}
+	var changed []string
+	for name := range toNetdev {
+		if !fromNetdev[name] {
+			continue
+		}
+		want := toFiles[name]
+		cur := fromPaths[name]
+		if len(cur) != len(want) {
+			changed = append(changed, name)
+			continue
+		}
+		diff := false
+		for _, p := range cur {
+			expected, ok := want[p]
+			if !ok {
+				diff = true
+				break
+			}
+			disk, err := os.ReadFile(r.Root + p)
+			if err != nil || !bytes.Equal(disk, expected) {
+				diff = true
+				break
+			}
+		}
+		if diff {
+			changed = append(changed, name)
+		}
+	}
+	slices.Sort(changed)
+	return changed
+}
+
+// settle makes networkd read the files and removes the devices only from had (plus changed WireGuard devices).
+func (r Realizer) settle(ctx context.Context, from, to []placed, recreateWG []string) error {
+	for _, name := range recreateWG {
+		// networkctl reload keeps an existing WireGuard netdev's stale peers/keys; delete it so reload recreates it.
+		if _, err := r.Run(ctx, "/usr/bin/networkctl", "delete", name); err != nil {
+			slog.Warn("recreate WireGuard device", "device", name, "error", err)
+		}
+	}
 	if _, err := r.Run(ctx, "/usr/bin/networkctl", "reload"); err != nil {
 		return err
 	}
@@ -672,11 +772,12 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 	restored, err := r.restorable(previous, p)
 	if err == nil {
 		err = r.toward(restore, earlier, func() error {
+			recreateWG := r.changedWireGuard(next, restored)
 			if err := r.place(next, restored); err != nil {
 				return err
 			}
 			// Until a reload succeeds networkd may still run the new files: the timer keeps this generation.
-			return r.settle(restore, next, restored)
+			return r.settle(restore, next, restored, recreateWG)
 		})
 	}
 	if err != nil {
@@ -730,10 +831,11 @@ func DeclaredDNS(data []byte) []netip.Addr {
 }
 
 func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, names []string, route bool) string {
+	recreateWG := r.changedWireGuard(previous, next)
 	if err := r.place(previous, next); err != nil {
 		return err.Error()
 	}
-	if err := r.settle(ctx, previous, next); err != nil {
+	if err := r.settle(ctx, previous, next, recreateWG); err != nil {
 		return err.Error()
 	}
 	// networkd hands DNS servers to systemd-resolved only; where resolved does not manage resolv.conf there is nothing to check.
@@ -830,10 +932,11 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
 	// fallback already loaded the restored generation's filter; going back to none, the bare filter goes first.
 	restore := func() error {
+		recreateWG := r.changedWireGuard(from, target)
 		if err := r.place(from, target); err != nil {
 			return err
 		}
-		if err := r.settle(ctx, from, target); err != nil {
+		if err := r.settle(ctx, from, target, recreateWG); err != nil {
 			return fmt.Errorf("files restored, reload failed: %w", err)
 		}
 		return nil

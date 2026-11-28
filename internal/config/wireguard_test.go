@@ -148,7 +148,7 @@ func TestWireGuardValidation(t *testing.T) {
 	second := wgIface(map[string]any{"id": wgB, "name": "site"})
 	refusedWith(t, wgFixture(t, wgIface(nil), second), "/vpn/wireguard/1/ifname", "Another interface")
 	refusedWith(t, wgFixture(t, wgIface(nil), merge(second, map[string]any{"ifname": "wg1", "name": "road"})), "/vpn/wireguard/1/name", "Name already exists")
-	accepted(t, wgFixture(t, wgIface(nil), merge(second, map[string]any{"ifname": "wg1"})))
+	accepted(t, wgFixture(t, wgIface(nil), merge(second, map[string]any{"ifname": "wg1", "listenPort": 51821})))
 }
 
 func merge(a, b map[string]any) map[string]any {
@@ -377,5 +377,79 @@ func TestKeptRecoveryKeepsWireGuard(t *testing.T) {
 	}
 	if !strings.Contains(string(docs.ConfigurationSecrets), `"WG0_KEY":{"kind":"wireguard"`) {
 		t.Fatalf("kinds: %s", docs.ConfigurationSecrets)
+	}
+}
+
+func TestWireGuardReviewRegressions(t *testing.T) {
+	// Disabled peer with duplicate masked allowedIps must be rejected so canonicalizeWireGuard cannot create uniqueItems violations.
+	dupDisabled := wgFixture(t, wgIface(map[string]any{
+		"peers": []any{wgPeer(map[string]any{
+			"enabled":    false,
+			"allowedIps": []any{"10.30.0.1/24", "10.30.0.2/24"},
+		})},
+	}))
+	refusedWith(t, dupDisabled, "/vpn/wireguard/0/peers/0/allowedIps/1", "Duplicate allowed IP prefix.")
+
+	// Enabled interfaces must not share a listenPort, while disabled ones may.
+	dupPort := wgFixture(t,
+		wgIface(map[string]any{"id": wgA, "name": "a", "ifname": "wg0", "listenPort": 51820}),
+		wgIface(map[string]any{"id": wgB, "name": "b", "ifname": "wg1", "listenPort": 51820}),
+	)
+	refusedWith(t, dupPort, "/vpn/wireguard/1/listenPort", "Another enabled WireGuard interface uses this listen port.")
+	disabledPort := wgFixture(t,
+		wgIface(map[string]any{"id": wgA, "name": "a", "ifname": "wg0", "listenPort": 51820}),
+		wgIface(map[string]any{"id": wgB, "name": "b", "ifname": "wg1", "listenPort": 51820, "enabled": false}),
+	)
+	accepted(t, disabledPort)
+
+	// Strict validEndpoint checks.
+	for _, bad := range []string{
+		"peer.example.com:+51820",
+		"peer.example.com:051820",
+		"[192.0.2.1]:51820",
+		"[peer.example.com]:51820",
+		"[::ffff:192.0.2.1]:51820",
+		"bad#host:51820",
+		"bad/path:51820",
+	} {
+		if validEndpoint(bad) {
+			t.Errorf("validEndpoint accepted %q", bad)
+		}
+	}
+
+	// SameRealization treats no peers and only-disabled peers identically.
+	noPeers := RealizationInput{Value: json.RawMessage(`{"links":[],"vpn":{"wireguard":[{"id":"w1","name":"a","ifname":"wg0","enabled":true,"listenPort":51820}]}}`)}
+	disabledPeer := RealizationInput{Value: json.RawMessage(`{"links":[],"vpn":{"wireguard":[{"id":"w1","name":"a","ifname":"wg0","enabled":true,"listenPort":51820,"peers":[{"id":"p1","name":"x","enabled":false,"publicKey":"k"}]}]}}`)}
+	if !SameRealization(noPeers, disabledPeer) {
+		t.Error("disabled-only peers should realize identically to no peers")
+	}
+
+	// rebaseValidation attributes ifname and listenPort collisions on replace to /ifname and /listenPort, not /id.
+	s := seededState(t)
+	s.Config.Management = &management{Segment: lanSeg}
+	c1, _ := ObjectChange("create", "vpn.wireguard", "", nil, []byte(`{"name":"first","ifname":"wg0","enabled":true,"zone":"`+lanZone+`","listenPort":51820,"addresses":["10.200.0.1/24"],"privateKeyRef":{"secret":"WG_A","set":"`+wgKey(1)+`","expectedVersion":"0"}}`))
+	_ = c1.AssignID(0, wgA)
+	p1, err := prepareChanges(&s, c1, "8", fixedTime)
+	if err != nil {
+		t.Fatal(faultText(err))
+	}
+	s = p1.State
+	c2, _ := ObjectChange("create", "vpn.wireguard", "", nil, []byte(`{"name":"second","ifname":"wg1","enabled":true,"zone":"`+lanZone+`","listenPort":51821,"addresses":["10.201.0.1/24"],"privateKeyRef":{"secret":"WG_B","set":"`+wgKey(2)+`","expectedVersion":"0"}}`))
+	_ = c2.AssignID(0, wgB)
+	p2, err := prepareChanges(&s, c2, "9", fixedTime)
+	if err != nil {
+		t.Fatal(faultText(err))
+	}
+	s = p2.State
+	vA := s.Versions[objectKey{"vpn.wireguard", wgA}].Version
+	dupIf, _ := ObjectChange("replace", "vpn.wireguard", wgA, &vA, []byte(`{"name":"first","ifname":"wg1","enabled":true,"zone":"`+lanZone+`","listenPort":51820,"addresses":["10.200.0.1/24"],"privateKeyRef":{}}`))
+	_, err = prepareChanges(&s, dupIf, "10", fixedTime)
+	if f := requireFault(t, err, "VALIDATION_FAILED"); len(f.Details) != 1 || f.Details[0].Path != "/ifname" {
+		t.Fatalf("expected /ifname collision, got %+v", f)
+	}
+	dupP, _ := ObjectChange("replace", "vpn.wireguard", wgA, &vA, []byte(`{"name":"first","ifname":"wg0","enabled":true,"zone":"`+lanZone+`","listenPort":51821,"addresses":["10.200.0.1/24"],"privateKeyRef":{}}`))
+	_, err = prepareChanges(&s, dupP, "10", fixedTime)
+	if f := requireFault(t, err, "VALIDATION_FAILED"); len(f.Details) != 1 || f.Details[0].Path != "/listenPort" {
+		t.Fatalf("expected /listenPort collision, got %+v", f)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -70,14 +71,18 @@ func (a *wireguardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// decodeBody reads a small JSON object into v, refusing unknown fields; an empty body is {}.
+// decodeBody reads a small JSON object into v, refusing unknown fields and trailing tokens; an empty body is {}.
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	raw, err := readRequestBody(w, r, 4<<10)
 	if err == nil && len(bytes.TrimSpace(raw)) > 0 {
 		d := json.NewDecoder(bytes.NewReader(raw))
 		d.DisallowUnknownFields()
-		if err = d.Decode(v); err == nil && d.More() {
-			err = errors.New("trailing data")
+		if err = d.Decode(v); err == nil {
+			if err = d.Decode(&struct{}{}); err == io.EOF {
+				err = nil
+			} else if err == nil {
+				err = errors.New("trailing data")
+			}
 		}
 	}
 	if err != nil {
@@ -108,7 +113,7 @@ func (a *wireguardAPI) keypair(w http.ResponseWriter, r *http.Request) {
 	}
 	key, err := newWireGuardKey()
 	var psk [32]byte
-	if err == nil {
+	if err == nil && req.IncludePSK {
 		_, err = rand.Read(psk[:])
 	}
 	if err != nil {
@@ -123,6 +128,72 @@ func (a *wireguardAPI) keypair(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, out)
 }
 
+// formatClientEndpoint validates an optional host[:port] or [IPv6][:port] endpoint override and appends listenPort when omitted.
+func formatClientEndpoint(raw string, listenPort int) (string, bool) {
+	if raw == "" {
+		return fmt.Sprintf("<ENDPOINT>:%d", listenPort), true
+	}
+	if len(raw) > 261 || strings.ContainsFunc(raw, func(c rune) bool { return unicode.IsSpace(c) || unicode.IsControl(c) || unicode.Is(unicode.Cf, c) }) {
+		return "", false
+	}
+	host := raw
+	port := listenPort
+	bracketed := false
+	if strings.HasPrefix(raw, "[") {
+		if h, p, err := net.SplitHostPort(raw); err == nil {
+			n, perr := strconv.Atoi(p)
+			if perr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != p {
+				return "", false
+			}
+			host, port, bracketed = h, n, true
+		} else if strings.HasSuffix(raw, "]") {
+			host, bracketed = raw[1:len(raw)-1], true
+		} else {
+			return "", false
+		}
+	} else if strings.Count(raw, ":") == 1 {
+		h, p, err := net.SplitHostPort(raw)
+		if err != nil {
+			return "", false
+		}
+		n, perr := strconv.Atoi(p)
+		if perr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != p {
+			return "", false
+		}
+		host, port = h, n
+	}
+	if host == "" || strings.ContainsAny(host, "[]") {
+		return "", false
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		if a.Zone() != "" || a.Is4In6() {
+			return "", false
+		}
+		if bracketed && !a.Is6() {
+			return "", false
+		}
+		if a.Is6() {
+			return fmt.Sprintf("[%s]:%d", a.String(), port), true
+		}
+		return fmt.Sprintf("%s:%d", a.String(), port), true
+	}
+	if bracketed || strings.Contains(host, ":") || len(host) > 253 || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return "", false
+	}
+	for label := range strings.SplitSeq(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return "", false
+			}
+		}
+	}
+	return fmt.Sprintf("%s:%d", host, port), true
+}
+
 // peerConfig is a peer's wg-quick configuration, its private key left as a placeholder the client fills in.
 func (a *wireguardAPI) peerConfig(w http.ResponseWriter, r *http.Request, id, peerID string) {
 	var req struct {
@@ -133,8 +204,8 @@ func (a *wireguardAPI) peerConfig(w http.ResponseWriter, r *http.Request, id, pe
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if req.Endpoint != "" && strings.ContainsFunc(req.Endpoint, func(c rune) bool { return unicode.IsSpace(c) || unicode.IsControl(c) }) || len(req.Endpoint) > 261 {
-		invalidField("/endpoint", "Expected a host name or address, with a port or without.").write(w, r)
+	if _, ok := formatClientEndpoint(req.Endpoint, 51820); !ok {
+		invalidField("/endpoint", "Expected a host name or address, with a valid port (1 to 65535) or without.").write(w, r)
 		return
 	}
 	if len(req.DNS) > 8 {
@@ -142,7 +213,7 @@ func (a *wireguardAPI) peerConfig(w http.ResponseWriter, r *http.Request, id, pe
 		return
 	}
 	for i, s := range req.DNS {
-		if a, err := netip.ParseAddr(s); err != nil || a.Zone() != "" {
+		if a, err := netip.ParseAddr(s); err != nil || a.Zone() != "" || a.Is4In6() {
 			invalidField(fmt.Sprintf("/dns/%d", i), "Expected an IPv4 or IPv6 address.").write(w, r)
 			return
 		}
@@ -168,16 +239,7 @@ func (a *wireguardAPI) peerConfig(w http.ResponseWriter, r *http.Request, id, pe
 		writeError(w, r, http.StatusConflict, "WIREGUARD_KEY_UNRESOLVED", "The interface's private key is unresolved; set it first.")
 		return
 	}
-	endpoint := req.Endpoint
-	if endpoint == "" {
-		endpoint = "<ENDPOINT>"
-	}
-	if _, _, err := net.SplitHostPort(endpoint); err != nil {
-		if strings.Contains(endpoint, ":") && !strings.HasPrefix(endpoint, "[") {
-			endpoint = "[" + endpoint + "]"
-		}
-		endpoint += ":" + strconv.Itoa(iface.ListenPort)
-	}
+	endpoint, _ := formatClientEndpoint(req.Endpoint, iface.ListenPort)
 	var b strings.Builder
 	b.WriteString("[Interface]\nPrivateKey = <PRIVATE_KEY>\n")
 	if len(peer.AllowedIPs) > 0 {
@@ -213,13 +275,18 @@ func (a *wireguardAPI) peerConfig(w http.ResponseWriter, r *http.Request, id, pe
 		b.WriteString("PresharedKey = " + psk + "\n")
 	}
 	var allowed []string
+	seenAllowed := map[string]bool{}
 	for _, s := range iface.Addresses {
 		if x, err := netip.ParsePrefix(s); err == nil {
-			allowed = append(allowed, x.Masked().String())
+			masked := x.Masked().String()
+			if !seenAllowed[masked] {
+				seenAllowed[masked] = true
+				allowed = append(allowed, masked)
+			}
 		}
 	}
 	if len(allowed) > 0 {
-		b.WriteString("AllowedIPs = " + strings.Join(slices.Compact(allowed), ", ") + "\n")
+		b.WriteString("AllowedIPs = " + strings.Join(allowed, ", ") + "\n")
 	}
 	b.WriteString("Endpoint = " + endpoint + "\n")
 	if peer.PersistentKeepalive > 0 {
@@ -241,6 +308,7 @@ type wireguardPeerStatus struct {
 	RxBytes           uint64     `json:"rxBytes"`
 	TxBytes           uint64     `json:"txBytes"`
 	Online            bool       `json:"online"`
+	Applied           bool       `json:"applied"`
 }
 
 type wireguardStatus struct {
@@ -248,11 +316,12 @@ type wireguardStatus struct {
 	Ifname     string                `json:"ifname"`
 	PublicKey  string                `json:"publicKey"`
 	ListenPort int                   `json:"listenPort"`
+	Active     bool                  `json:"active"`
 	Peers      []wireguardPeerStatus `json:"peers"`
 }
 
 // statusView joins what the kernel reports with the saved interfaces: each saved one, its running peers named
-// where they are saved, and its saved enabled peers the kernel does not hold, as offline.
+// where they are saved, and its saved enabled peers the kernel does not hold, as offline (applied: false).
 func (a *wireguardAPI) statusView(w http.ResponseWriter, r *http.Request) {
 	ifaces, err := a.store.WireGuardInterfaces(r.Context())
 	if err != nil {
@@ -275,9 +344,10 @@ func (a *wireguardAPI) statusView(w http.ResponseWriter, r *http.Request) {
 		seen := map[string]bool{}
 		if k := slices.IndexFunc(runtime.Interfaces, func(x generation.WireGuardRuntime) bool { return x.Ifname == iface.Ifname }); k >= 0 {
 			live := runtime.Interfaces[k]
+			item.Active = true
 			item.PublicKey, item.ListenPort = live.PublicKey, live.ListenPort
 			for _, p := range live.Peers {
-				s := wireguardPeerStatus{PublicKey: p.PublicKey, Endpoint: p.Endpoint, RxBytes: p.RxBytes, TxBytes: p.TxBytes, Online: p.Online}
+				s := wireguardPeerStatus{PublicKey: p.PublicKey, Endpoint: p.Endpoint, RxBytes: p.RxBytes, TxBytes: p.TxBytes, Online: p.Online, Applied: true}
 				if saved, ok := byKey[p.PublicKey]; ok {
 					s.ID, s.Name = saved.ID, saved.Name
 				}

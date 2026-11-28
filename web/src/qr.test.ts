@@ -71,4 +71,76 @@ describe('encodeQr', () => {
       expect(qr.modules[qr.size - 8][8]).toBe(true);
     }
   });
+
+  it('round-trips the ISO 18004 format bits, mask, and Byte-mode UTF-8 payload for version 1', () => {
+    const payload = 'Hello, WireGuard!';
+    const qr = encodeQr(payload);
+    expect(qr.version).toBe(1);
+    const { size, modules } = qr;
+
+    // Read 15-bit format info from both redundant copies (ISO 18004 Figure 25) and verify they match.
+    let fmtA = 0;
+    for (let i = 0; i <= 5; i++) fmtA |= (modules[i][8] ? 1 : 0) << i;
+    fmtA |= (modules[7][8] ? 1 : 0) << 6;
+    fmtA |= (modules[8][8] ? 1 : 0) << 7;
+    fmtA |= (modules[8][7] ? 1 : 0) << 8;
+    for (let i = 9; i < 15; i++) fmtA |= (modules[8][14 - i] ? 1 : 0) << i;
+
+    let fmtB = 0;
+    for (let i = 0; i < 8; i++) fmtB |= (modules[8][size - 1 - i] ? 1 : 0) << i;
+    for (let i = 8; i < 15; i++) fmtB |= (modules[size - 15 + i][8] ? 1 : 0) << i;
+    expect(fmtA).toBe(fmtB);
+
+    const unmaskedFmt = fmtA ^ 0x5412;
+    const ecLevel = (unmaskedFmt >>> 13) & 0b11;
+    const mask = (unmaskedFmt >>> 10) & 0b111;
+    expect(ecLevel).toBe(0b01); // Level L
+
+    // Unmask data modules in standard zigzag order (version 1 has no alignment patterns or version info).
+    const isFunc = (r: number, c: number) =>
+      (r <= 8 && c <= 8)
+      || (r <= 8 && c >= size - 8)
+      || (r >= size - 8 && c <= 8)
+      || r === 6
+      || c === 6;
+    const applyMask = (r: number, c: number) => {
+      switch (mask) {
+        case 0: return (r + c) % 2 === 0;
+        case 1: return r % 2 === 0;
+        case 2: return c % 3 === 0;
+        case 3: return (r + c) % 3 === 0;
+        case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+        case 5: return ((r * c) % 2) + ((r * c) % 3) === 0;
+        case 6: return (((r * c) % 2) + ((r * c) % 3)) % 2 === 0;
+        case 7: return (((r + c) % 2) + ((r * c) % 3)) % 2 === 0;
+        default: return false;
+      }
+    };
+
+    const bits: number[] = [];
+    for (let right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5;
+      const upward = ((right + 1) & 2) === 0;
+      for (let step = 0; step < size; step++) {
+        const row = upward ? size - 1 - step : step;
+        for (let j = 0; j < 2; j++) {
+          const col = right - j;
+          if (isFunc(row, col)) continue;
+          bits.push((modules[row][col] !== applyMask(row, col)) ? 1 : 0);
+        }
+      }
+    }
+
+    const readBits = (start: number, count: number) => {
+      let v = 0;
+      for (let i = 0; i < count; i++) v = (v << 1) | bits[start + i];
+      return v;
+    };
+    expect(readBits(0, 4)).toBe(0b0100); // Byte mode
+    const len = readBits(4, 8);
+    expect(len).toBe(payload.length);
+    const decoded = new Uint8Array(len);
+    for (let i = 0; i < len; i++) decoded[i] = readBits(12 + i * 8, 8);
+    expect(new TextDecoder().decode(decoded)).toBe(payload);
+  });
 });
