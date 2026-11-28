@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,40 +26,64 @@ const (
 
 var addonLogCatalogDir = addon.DefaultCatalogDir
 
-// readAddonBusTokensFile strictly reads a root-owned 0600 JSON map of slug -> bus token without following symlinks.
-func readAddonBusTokensFile(path string) (map[string]string, error) {
+// readStagedJSON strictly reads a root-owned 0600 JSON document the engine staged, without following symlinks, into v.
+func readStagedJSON(path, what string, v any) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, errors.New("bus tokens file path must be canonical and absolute")
+		return errors.New(what + " path must be canonical and absolute")
 	}
 	if err := securefs.CheckAncestors(filepath.Dir(path)); err != nil {
-		return nil, err
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open bus tokens file: %w", err)
+		return fmt.Errorf("open %s: %w", what, err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("stat bus tokens file: %w", err)
+		return fmt.Errorf("stat %s: %w", what, err)
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !securefs.RootOwned(info) {
-		return nil, errors.New("bus tokens file must be a root-owned 0600 regular file")
+		return errors.New(what + " must be a root-owned 0600 regular file")
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxAddonBusTokensBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("read bus tokens file: %w", err)
+		return fmt.Errorf("read %s: %w", what, err)
 	}
 	if len(raw) > maxAddonBusTokensBytes {
-		return nil, errors.New("bus tokens file exceeds maximum size")
+		return errors.New(what + " exceeds maximum size")
 	}
-	var tokens map[string]string
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	if err := dec.Decode(&tokens); err != nil {
-		return nil, fmt.Errorf("decode bus tokens file: %w", err)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("decode %s: %w", what, err)
 	}
 	if dec.Decode(&struct{}{}) != io.EOF {
-		return nil, errors.New("unexpected trailing data in bus tokens file")
+		return errors.New("unexpected trailing data in " + what)
+	}
+	return nil
+}
+
+// readCertSyncFile reads the engine's staged cert-sync payload and removes it at once: it holds private keys.
+func readCertSyncFile(path string) (generation.CertSync, error) {
+	var payload generation.CertSync
+	err := readStagedJSON(path, "cert-sync file", &payload)
+	if err == nil || !errors.Is(err, fs.ErrNotExist) {
+		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) && err == nil {
+			err = fmt.Errorf("remove cert-sync file: %w", rmErr)
+		}
+	}
+	if err != nil {
+		return generation.CertSync{}, err
+	}
+	return payload, payload.Validate()
+}
+
+// readAddonBusTokensFile strictly reads a root-owned 0600 JSON map of slug -> bus token without following symlinks.
+func readAddonBusTokensFile(path string) (map[string]string, error) {
+	var tokens map[string]string
+	if err := readStagedJSON(path, "bus tokens file", &tokens); err != nil {
+		return nil, err
 	}
 	if tokens == nil {
 		return nil, errors.New("bus tokens file must be a JSON object")
