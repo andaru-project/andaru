@@ -124,8 +124,8 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 				route, id = "object", parts[3]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
-		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "vpn" && parts[2] == "wireguard":
-			collection = "vpn.wireguard"
+		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "vpn" && (parts[2] == "wireguard" || parts[2] == "ipsec"):
+			collection = "vpn." + parts[2]
 			if len(parts) == 3 {
 				route = "collection"
 				allowed = []string{"GET", "HEAD", "POST"}

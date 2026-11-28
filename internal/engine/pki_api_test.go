@@ -136,3 +136,45 @@ func TestCertSyncKeepsWebWhenDeletedInHead(t *testing.T) {
 		t.Fatalf("invalidate did not force re-sync: err=%v calls=%d", err, calls)
 	}
 }
+
+// An enabled IPsec connection's certificate is staged under /run/andaru-ipsec only while the live generation placed it.
+func TestCertSyncStagesIPsecCertificates(t *testing.T) {
+	stateDir, runtimeDir := t.TempDir(), t.TempDir()
+	dir := generation.Dir(stateDir)
+	const crt = "crt_00000001-0000-4000-8000-000000000001"
+	pem := "/run/andaru-ipsec/x509/" + crt + ".pem"
+	live := func(files map[string][]byte) {
+		var entries []generation.FileEntry
+		for path := range files {
+			entries = append(entries, generation.FileEntry{Path: path, Mode: "0644"})
+		}
+		id, err := generation.Create(dir, generation.Manifest{SavedVersion: "5", Files: entries}, files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(map[string]any{"confirmed": id, "lastKnownGood": nil, "pending": nil, "live": id})
+		if err := os.WriteFile(filepath.Join(dir, "pointers.json"), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bindings := func(context.Context, config.Version) ([]config.CertificateConsumer, map[string]config.CertificateMaterial, error) {
+		return []config.CertificateConsumer{{Kind: "ipsec", CertificateID: crt}}, map[string]config.CertificateMaterial{crt: {CertPEM: "CERT\n", ChainPEM: "CHAIN\n", Key: "KEY"}}, nil
+	}
+	var got generation.CertSync
+	c := newCertSync(stateDir, runtimeDir, nil, bindings, func(_ context.Context, file string) error {
+		b, _ := os.ReadFile(file)
+		got = generation.CertSync{}
+		return json.Unmarshal(b, &got)
+	})
+	live(map[string][]byte{})
+	if err := c.sync(context.Background()); err != nil || got.IPsec != nil {
+		t.Fatalf("staged for a generation without it: %+v %v", got, err)
+	}
+	live(map[string][]byte{pem: []byte("OLD\n")})
+	if err := c.sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got.IPsec["x509/"+crt+".pem"] != "CERT\nCHAIN\n" || got.IPsec["private/"+crt+".key"] != "KEY\n" || got.Validate() != nil {
+		t.Fatalf("staged %+v", got.IPsec)
+	}
+}

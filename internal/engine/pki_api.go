@@ -229,6 +229,15 @@ func (c *certSync) payload(ctx context.Context) (int, generation.CertSync, error
 		switch consumer.Kind {
 		case "management":
 			payload.Web = &generation.CertPair{Cert: joinPEM(m.CertPEM, m.ChainPEM), Key: m.Key}
+		case "ipsec":
+			cert, key := "x509/"+consumer.CertificateID+".pem", "private/"+consumer.CertificateID+".key"
+			if !slices.ContainsFunc(g.Files, func(f generation.FileEntry) bool { return f.Path == render.IPsecDir+cert }) {
+				continue // not realized: the live generation does not run this connection
+			}
+			if payload.IPsec == nil {
+				payload.IPsec = map[string]string{}
+			}
+			payload.IPsec[cert], payload.IPsec[key] = joinPEM(m.CertPEM, m.ChainPEM), strings.TrimRight(m.Key, "\n")+"\n"
 		case "addon":
 			if c.catalog == nil {
 				continue
