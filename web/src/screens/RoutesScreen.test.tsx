@@ -62,6 +62,7 @@ describe('RoutesScreen', () => {
       '/api/v1/config/routes': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleRoute] }),
       '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
       '/api/v1/config/vpn/wireguard': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
+      '/api/v1/config/vpn/ipsec': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
       'POST /api/v1/config/routes': (init) => {
         createdBody = JSON.parse(String(init?.body ?? '{}'));
         return jsonResponse(201, { state: 'saved', savedVersion: '6', ...sampleRoute });
@@ -143,6 +144,7 @@ describe('RoutesScreen', () => {
       },
       '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
       '/api/v1/config/vpn/wireguard': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
+      '/api/v1/config/vpn/ipsec': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
       'POST /api/v1/config/routes': () => jsonResponse(422, {
         error: {
           code: 'VALIDATION_FAILED',
@@ -223,6 +225,7 @@ describe('RoutesScreen', () => {
       },
       '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
       '/api/v1/config/vpn/wireguard': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
+      '/api/v1/config/vpn/ipsec': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
     });
 
     render(
@@ -241,5 +244,95 @@ describe('RoutesScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(await screen.findByText('Branch Office')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add route' })).toBeEnabled();
+  });
+
+  it('supports route-based IPsec XFRM targets and hides the gateway input', async () => {
+    const user = userEvent.setup();
+    let createdBody: unknown;
+
+    fetchRoutes({
+      '/api/v1/config/routes': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '5',
+        items: [{
+          version: '1',
+          value: {
+            id: 'rte_ipsec',
+            name: 'HQ Tunnel',
+            destination: '10.88.0.0/16',
+            target: { kind: 'ipsec', id: 'ips_hq' },
+            enabled: true,
+          },
+        }],
+      }),
+      '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
+      '/api/v1/config/vpn/wireguard': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
+      '/api/v1/config/vpn/ipsec': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '5',
+        items: [
+          {
+            version: '1',
+            value: {
+              id: 'ips_hq',
+              name: 'HQ XFRM',
+              enabled: true,
+              mode: 'route-based',
+              ifname: 'ipsec0',
+              xfrmIfId: 1,
+              zone: 'zon_vpn',
+              remoteAddress: '198.51.100.1',
+              auth: { localType: 'psk', remoteType: 'psk', localId: 'gw.example.com' },
+            },
+          },
+          {
+            version: '1',
+            value: {
+              id: 'ips_policy',
+              name: 'Policy Only',
+              enabled: true,
+              mode: 'policy-based',
+              zone: 'zon_vpn',
+              remoteAddress: '198.51.100.2',
+              auth: { localType: 'psk', remoteType: 'psk', localId: 'gw.example.com' },
+            },
+          },
+        ],
+      }),
+      'POST /api/v1/config/routes': (init) => {
+        createdBody = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(201, {
+          state: 'saved',
+          savedVersion: '6',
+          version: '1',
+          value: { id: 'rte_new', ...(createdBody as Record<string, unknown>) },
+        });
+      },
+    });
+
+    render(
+      <RoutesScreen
+        api={new ApiClient('csrf')}
+        session={adminSession}
+        onSaved={vi.fn()}
+        onSessionLost={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('HQ XFRM (ipsec0)')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Add route' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add static route' });
+    expect(within(dialog).queryByLabelText(/^Gateway/)).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: 'Remote Branch' } });
+    fireEvent.change(within(dialog).getByLabelText(/^Destination CIDR/), { target: { value: '10.99.0.0/24' } });
+    await user.click(within(dialog).getByRole('button', { name: 'Add route' }));
+
+    await waitFor(() => expect(createdBody).toEqual({
+      name: 'Remote Branch',
+      destination: '10.99.0.0/24',
+      target: { kind: 'ipsec', id: 'ips_hq' },
+      enabled: true,
+    }));
   });
 });

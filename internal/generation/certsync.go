@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/andaru-project/andaru/internal/addon"
@@ -19,10 +20,10 @@ import (
 
 const (
 	// WebCertificate and WebKey are the managed certificate andaru-web serves instead of its bootstrap one.
-	WebCertificate     = "/run/andaru-web/tls.crt"
-	WebKey             = "/run/andaru-web/tls.key"
-	webReloadPending   = "/run/andaru-web/.reload-pending"
-	webUnit            = "andaru-web.service"
+	WebCertificate   = "/run/andaru-web/tls.crt"
+	WebKey           = "/run/andaru-web/tls.key"
+	webReloadPending = "/run/andaru-web/.reload-pending"
+	webUnit          = "andaru-web.service"
 	// MaxCertSyncBytes is the shared size bound for staged cert-sync payloads (covers up to 64 add-ons with max PEM chains).
 	MaxCertSyncBytes = 16 << 20
 )
@@ -42,6 +43,9 @@ type CertSync struct {
 	Web *CertPair `json:"web"`
 	// Addons are, by slug, the files of each add-on's certs directory, by file name.
 	Addons map[string]map[string]string `json:"addons"`
+	// IPsec are the IPsec connections' certificates and keys, by path under /run/andaru-ipsec
+	// (x509/<id>.pem, private/<id>.key).
+	IPsec map[string]string `json:"ipsec,omitempty"`
 }
 
 // CertPair is a PEM certificate, its chain appended, and its private key.
@@ -78,6 +82,11 @@ func (s CertSync) Validate() error {
 			}
 		}
 	}
+	for name := range s.IPsec {
+		if !ipsecCredential.MatchString(ipsecDir + "/" + name) {
+			return fmt.Errorf("cert-sync: invalid IPsec credential %q", name)
+		}
+	}
 	return nil
 }
 
@@ -111,7 +120,7 @@ func (r Realizer) SyncCertificates(ctx context.Context, s CertSync) error {
 			return err
 		}
 	}
-	return errors.Join(r.syncWebCertificate(ctx, s.Web, s.KeepWeb), r.syncAddonCertificates(s.Addons))
+	return errors.Join(r.syncWebCertificate(ctx, s.Web, s.KeepWeb), r.syncAddonCertificates(s.Addons), r.syncIPsecCertificates(ctx, s.IPsec))
 }
 
 func (r Realizer) syncWebCertificate(ctx context.Context, pair *CertPair, keepWeb bool) error {
@@ -263,4 +272,120 @@ func writeOwned(path string, data []byte, uid, gid int, labelFrom string) (bool,
 		return false, err
 	}
 	return true, syncDir(filepath.Dir(path))
+}
+
+// syncIPsecCertificates rewrites IPsec leaf certs, intermediate chains, CAs, and private keys that changed while a
+// generation runs strongSwan, persists a reload-pending marker across transient failures, and reloads strongSwan with
+// swanctl --load-all --clear so updated local.certs and CA chains take effect without dropping live SAs.
+func (r Realizer) syncIPsecCertificates(ctx context.Context, files map[string]string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if _, err := os.Lstat(r.Root + ipsecConf); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", ipsecConf, err)
+	}
+	for _, dir := range []string{ipsecDir, ipsecDir + "/x509", ipsecDir + "/x509ca", ipsecDir + "/private"} {
+		info, err := os.Lstat(r.Root + dir)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("stat %s: %w", dir, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("cert-sync: %s is not a real directory", dir)
+		}
+	}
+	pendingPath := r.Root + ipsecReloadPending
+	_, pendingErr := os.Lstat(pendingPath)
+	reloadPending := pendingErr == nil
+
+	// Determine whether any credential or chain file differs before mutating disk so we persist .reload-pending
+	// before the first write/removal (matching syncWebCertificate's crash/failure recovery invariant).
+	syncedCertIDs := map[string]bool{}
+	var toWrite []string
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		if rest, ok := strings.CutPrefix(name, "x509/"); ok && strings.HasSuffix(rest, ".pem") {
+			syncedCertIDs[strings.TrimSuffix(rest, ".pem")] = true
+		}
+		path, mode := r.Root+ipsecDir+"/"+name, fs.FileMode(0o644)
+		if strings.HasPrefix(name, "private/") {
+			mode = 0o400
+		}
+		if !sameRegularFile(path, []byte(files[name]), mode) {
+			toWrite = append(toWrite, name)
+		}
+	}
+	var toRemove []string
+	if len(syncedCertIDs) > 0 {
+		entries, err := os.ReadDir(r.Root + ipsecDir + "/x509ca")
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if idx := strings.Index(name, "-chain-"); idx > 0 {
+				certID := name[:idx]
+				rel := "x509ca/" + name
+				if syncedCertIDs[certID] && files[rel] == "" {
+					toRemove = append(toRemove, rel)
+				}
+			}
+		}
+	}
+	if len(toWrite) == 0 && len(toRemove) == 0 && !reloadPending {
+		return nil
+	}
+	if err := writeAtomic(pendingPath, []byte("1\n"), 0o600); err != nil {
+		return fmt.Errorf("mark IPsec reload pending: %w", err)
+	}
+	for _, name := range toWrite {
+		path, mode := r.Root+ipsecDir+"/"+name, fs.FileMode(0o644)
+		if strings.HasPrefix(name, "private/") {
+			mode = 0o400
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		if err := writeAtomic(path, []byte(files[name]), mode); err != nil {
+			return fmt.Errorf("place IPsec credential %s: %w", name, err)
+		}
+	}
+	for _, rel := range toRemove {
+		if err := os.Remove(r.Root + ipsecDir + "/" + rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	if err := r.ipsecCredentialDirs(ctx); err != nil {
+		return err
+	}
+	stateOut, stateErr := r.Run(ctx, "/usr/bin/systemctl", "is-active", strongswanUnit)
+	state := strings.TrimSpace(string(stateOut))
+	switch state {
+	case "inactive", "dead", "deactivating", "failed", "unknown":
+		// Confirmed inactive: charon will load the updated credentials when next started.
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	case "active":
+		if stateErr != nil {
+			return fmt.Errorf("probe strongSwan state: %w", stateErr)
+		}
+	default:
+		if stateErr != nil {
+			return fmt.Errorf("probe strongSwan state: %w", stateErr)
+		}
+		return fmt.Errorf("strongSwan is %q; deferring credential reload", state)
+	}
+	if _, err := r.Run(ctx, swanctl, "--load-all", "--clear", "--file", ipsecConf, "--noprompt"); err != nil {
+		return fmt.Errorf("reload the IPsec credentials: %w", err)
+	}
+	if err := os.Remove(pendingPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }

@@ -311,6 +311,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		wireguardAPI: &wireguardAPI{store: store, audits: audits, stateDir: stateDir, status: func(ctx context.Context, file string) error {
 			return runner.Realize(ctx, "wg-status", 0, file)
 		}},
+		ipsecAPI: &ipsecAPI{store: store, audits: audits, stateDir: stateDir,
+			status: func(ctx context.Context, file string) error { return runner.Realize(ctx, "ipsec-status", 0, file) },
+			control: func(ctx context.Context, action, id string) error {
+				return runner.Realize(ctx, "ipsec-ctl", 0, action, id)
+			}},
 		stateDir: stateDir,
 	})
 	if web == nil {

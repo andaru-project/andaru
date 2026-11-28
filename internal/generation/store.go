@@ -104,19 +104,20 @@ func isAddonSecret(path string) bool {
 
 func allowed(path string) bool {
 	return ownPath.MatchString(path) || wireguardKey.MatchString(path) || pppOptions.MatchString(path) || pppUnit.MatchString(path) ||
-		addonContainer.MatchString(path) || isAddonEnv(path) || isAddonSecret(path) || addonCert.MatchString(path) ||
+		addonContainer.MatchString(path) || isAddonEnv(path) || isAddonSecret(path) || addonCert.MatchString(path) || isIPsecFile(path) ||
 		path == catchAllPath || path == filterEntry || path == keaFile || path == kea6File || path == kea6Template || path == unboundFile || path == resolvedFile
 }
 
 // modeFor is the one mode a generation file may have: secrets are 0400; pppd options, Quadlets and add-on env files are
-// 0600; WireGuard keys 0640, for the systemd-network group.
+// 0600; WireGuard keys 0640, for the systemd-network group; swanctl.conf, which holds pre-shared keys, 0600 and the
+// IPsec certificates' keys 0400.
 func modeFor(path string) string {
 	switch {
 	case wireguardKey.MatchString(path):
 		return "0640"
-	case isAddonSecret(path), addonCert.MatchString(path):
+	case isAddonSecret(path), addonCert.MatchString(path), ipsecKey(path):
 		return "0400"
-	case pppOptions.MatchString(path), addonContainer.MatchString(path), isAddonEnv(path):
+	case pppOptions.MatchString(path), addonContainer.MatchString(path), isAddonEnv(path), path == ipsecConf:
 		return "0600"
 	default:
 		return "0644"

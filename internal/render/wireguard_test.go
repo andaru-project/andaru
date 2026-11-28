@@ -62,8 +62,10 @@ func TestWireGuardFindings(t *testing.T) {
 // Without uplinks the listen rule still loads: an empty set matches nothing.
 func TestWireGuardListenWithoutUplinks(t *testing.T) {
 	r := render(t, change(t, fixture(t, "wireguard"), func(d map[string]any) {
-		v4 := item(d, "segments", 0)["addressing"].(map[string]any)["ipv4"].(map[string]any)
+		addr := item(d, "segments", 0)["addressing"].(map[string]any)
+		v4 := addr["ipv4"].(map[string]any)
 		v4["mode"], v4["addresses"] = "static", []any{"198.51.100.2/24"}
+		addr["ipv6"] = map[string]any{"mode": "none"}
 	}))
 	script := fileEnding(t, r, nftPath).Content
 	if !strings.Contains(script, "set uplinks { type ifname; }") || !strings.Contains(script, "iifname @uplinks udp dport 51820 accept") {

@@ -67,6 +67,10 @@ type fakeNetworkd struct {
 	// offloads are the features every device asks for, which ethtool -K changes; each -K call joins offloadSets.
 	offloads    map[string]bool
 	offloadSets []string
+	// strongswan says strongswan.service runs; sas is what swanctl --list-sas --pretty prints.
+	strongswan bool
+	sas        string
+	sasErr     error // fails swanctl --list-sas
 }
 
 func (f *fakeNetworkd) netFiles() map[string]string {
@@ -193,6 +197,16 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		return []byte(out.String()), nil
 	case strings.HasPrefix(command, "systemctl show -p LoadState --value andaru-pppoe-"):
 		return []byte(map[bool]string{false: "not-found\n", true: "loaded\n"}[f.pppLoaded]), nil
+	case command == "systemctl is-active --quiet strongswan.service":
+		if !f.strongswan {
+			return nil, errors.New("inactive")
+		}
+	case command == "systemctl start strongswan.service":
+		f.strongswan = true
+	case command == "systemctl stop strongswan.service":
+		f.strongswan, f.sas = false, ""
+	case command == "swanctl --list-sas --pretty":
+		return []byte(f.sas), f.sasErr
 	case command == "systemctl is-active --quiet systemd-networkd.service":
 		if f.stopped {
 			return nil, errors.New("inactive")

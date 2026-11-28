@@ -227,14 +227,25 @@ func (r Realizer) live(p Pointers) ([]placed, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Only the paths matter for what is being replaced, so a corrupt live generation is no obstacle.
+	return r.replaced(g), nil
+}
+
+// replaced is what a generation placed, as the set being replaced: paths and hashes, plus swanctl.conf's content so
+// IPsec can tell which connections changed. Only the paths matter otherwise, so a corrupt generation is no obstacle.
+func (r Realizer) replaced(g Generation) []placed {
 	out := make([]placed, 0, len(g.Files))
 	for _, f := range g.Files {
 		if allowed(f.Path) && f.Path != filterEntry {
-			out = append(out, placed{path: f.Path, sha256: f.SHA256})
+			p := placed{path: f.Path, sha256: f.SHA256}
+			if f.Path == ipsecConf {
+				if data, err := g.content(r.dir(), f); err == nil {
+					p.data = data
+				}
+			}
+			out = append(out, p)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func has(set []placed, path string) bool {
@@ -269,6 +280,11 @@ func (r Realizer) place(from, to []placed) error {
 				return err
 			}
 			dirMode = 0o700
+		} else if strings.HasPrefix(f.path, ipsecDir+"/") {
+			if err := os.MkdirAll(r.Root+ipsecDir, 0o700); err != nil {
+				return err
+			}
+			dirMode = 0o700
 		}
 		if err := os.MkdirAll(filepath.Dir(target), dirMode); err != nil {
 			return err
@@ -296,7 +312,8 @@ func (r Realizer) place(from, to []placed) error {
 	return nil
 }
 
-// wireguardOwner extracts the WireGuard device name (wg0..wg99) for a rendered .netdev, .key, or .psk file.
+// wireguardOwner extracts the WireGuard device name (wg0..wg99) for a rendered .netdev, .key, or .psk file, or the
+// XFRM device name (ipsec0..ipsec99) for a rendered .netdev: networkctl reload changes neither device in place.
 func wireguardOwner(path string) (string, bool) {
 	if filepath.Dir(path) != "/run/systemd/network" {
 		return "", false
@@ -320,7 +337,7 @@ func wireguardOwner(path string) (string, bool) {
 	default:
 		return "", false
 	}
-	if !strings.HasPrefix(name, "wg") {
+	if !strings.HasPrefix(name, "wg") && !(strings.HasPrefix(name, "ipsec") && strings.HasSuffix(path, ".netdev")) {
 		return "", false
 	}
 	return name, true
@@ -409,7 +426,7 @@ func (r Realizer) settle(ctx context.Context, from, to []placed, recreateWG []st
 					continue
 				}
 			}
-			return fmt.Errorf("recreate WireGuard device %s: %w", name, err)
+			return fmt.Errorf("recreate tunnel device %s: %w", name, err)
 		}
 	}
 	if _, err := r.Run(ctx, "/usr/bin/networkctl", "reload"); err != nil {
@@ -432,6 +449,9 @@ func (r Realizer) settle(ctx context.Context, from, to []placed, recreateWG []st
 		return err
 	}
 	if err := r.services(ctx, from, to); err != nil {
+		return err
+	}
+	if err := r.ipsec(ctx, from, to); err != nil {
 		return err
 	}
 	return r.addons(ctx, from, to)
@@ -924,12 +944,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 		return fmt.Errorf("roll back %d: the confirmation deadline has not passed", id)
 	}
 	// from is this generation whatever the live pointer says: a kill may have left the pointer behind the files.
-	from := make([]placed, 0, len(g.Files))
-	for _, f := range g.Files {
-		if allowed(f.Path) && f.Path != filterEntry {
-			from = append(from, placed{path: f.Path, sha256: f.SHA256})
-		}
-	}
+	from := r.replaced(g)
 	target, live, what, loaded, err := r.fallback(ctx, p, g.Previous)
 	if err != nil {
 		if errors.Is(err, errFilterLoad) {

@@ -18,6 +18,7 @@ import (
 // vpnSettings are the native VPN interfaces Andaru renders for systemd-networkd.
 type vpnSettings struct {
 	WireGuard []wireguardInterface `json:"wireguard,omitempty"`
+	IPsec     []ipsecConnection    `json:"ipsec,omitempty"`
 }
 
 // wireguardInterface is one WireGuard interface. PublicKey is derived from the private key whenever a write sets
@@ -73,25 +74,27 @@ func wireguardSecretFields(value map[string]any) []secretField {
 	return out
 }
 
+// secretRefMap renders a stored secret reference back into a write-side map, keeping any unresolved marker.
+func secretRefMap(ref *secretReference) map[string]any {
+	m := map[string]any{"secret": ref.Secret}
+	if ref.Unresolved {
+		m["unresolved"] = true
+	}
+	return m
+}
+
 // prepareWireGuard settles a written interface before its secrets are read: peers without an ID are given one, a
 // private key left out or written as {} keeps the stored one, a pre-shared key written as {} keeps the peer's (by
 // peer ID) while one left out is dropped, and publicKey is the stored one until checkWireGuardKeys derives it.
 func prepareWireGuard(value map[string]any, old any, create bool) (string, error) {
 	before, _ := old.(*wireguardInterface)
 	empty := func(v any) bool { m, ok := v.(map[string]any); return v == nil || ok && len(m) == 0 }
-	asMap := func(ref *secretReference) map[string]any {
-		m := map[string]any{"secret": ref.Secret}
-		if ref.Unresolved {
-			m["unresolved"] = true
-		}
-		return m
-	}
 	keptPrivate := false
 	if empty(value["privateKeyRef"]) {
 		if create || before == nil {
 			return "/privateKeyRef", errors.New("A private key is required.")
 		}
-		value["privateKeyRef"] = asMap(&before.PrivateKeyRef)
+		value["privateKeyRef"] = secretRefMap(&before.PrivateKeyRef)
 		keptPrivate = true
 	} else if before != nil {
 		if m, ok := value["privateKeyRef"].(map[string]any); ok {
@@ -123,7 +126,7 @@ func prepareWireGuard(value map[string]any, old any, create bool) (string, error
 				continue
 			}
 			if j := slices.IndexFunc(before.Peers, func(o wireguardPeer) bool { return o.ID == peer["id"] }); j >= 0 && before.Peers[j].PresharedKeyRef != nil {
-				peer["presharedKeyRef"] = asMap(before.Peers[j].PresharedKeyRef)
+				peer["presharedKeyRef"] = secretRefMap(before.Peers[j].PresharedKeyRef)
 			}
 		}
 	}

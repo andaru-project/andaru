@@ -164,24 +164,34 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			}
 		}
 		comment := fmt.Sprintf("comment %q", pf.ID)
+		hasPolicies := len(f.policies) > 0
 		for _, zone := range pf.IngressZones {
-			for _, from := range froms {
-				parts := slices.DeleteFunc([]string{"iifname @" + setName(zone), from, to, portMatch(pf.Protocol, first, last), action, comment}, func(s string) bool { return s == "" })
-				prerouting = append(prerouting, strings.Join(parts, " "))
-				if pf.NoRedirect || pf.FilterRule != "auto" {
-					continue
+			ingressMatches := []string{"iifname @" + setName(zone)}
+			if hasPolicies {
+				ingressMatches = []string{"meta mark & " + ipsecPolicyInMark + " == 0 iifname @" + setName(zone)}
+				for _, reqid := range f.policies[zone] {
+					ingressMatches = append(ingressMatches, fmt.Sprintf("meta ipsec exists ipsec in reqid %d", reqid))
 				}
-				// Bound to this forward: only connections it translated (its mark), from its sources, to its target.
-				// The translated address names the family; a local target has none, so the rule says it.
-				daddr := nfproto
-				if !local {
-					daddr = "ip daddr " + pf.Target.Address
-				}
-				rule := slices.DeleteFunc([]string{"iifname @" + setName(zone), from, "ct mark & 0x0000ffff == " + mark, daddr, portMatch(pf.Protocol, tfirst, tlast), "accept", comment}, func(s string) bool { return s == "" })
-				if local {
-					input = append(input, strings.Join(rule, " "))
-				} else {
-					forward = append(forward, strings.Join(rule, " "))
+			}
+			for _, ingress := range ingressMatches {
+				for _, from := range froms {
+					parts := slices.DeleteFunc([]string{ingress, from, to, portMatch(pf.Protocol, first, last), action, comment}, func(s string) bool { return s == "" })
+					prerouting = append(prerouting, strings.Join(parts, " "))
+					if pf.NoRedirect || pf.FilterRule != "auto" {
+						continue
+					}
+					// Bound to this forward: only connections it translated (its mark), from its sources, to its target.
+					// The translated address names the family; a local target has none, so the rule says it.
+					daddr := nfproto
+					if !local {
+						daddr = "ip daddr " + pf.Target.Address
+					}
+					rule := slices.DeleteFunc([]string{ingress, from, "ct mark & 0x0000ffff == " + mark, daddr, portMatch(pf.Protocol, tfirst, tlast), "accept", comment}, func(s string) bool { return s == "" })
+					if local {
+						input = append(input, strings.Join(rule, " "))
+					} else {
+						forward = append(forward, strings.Join(rule, " "))
+					}
 				}
 			}
 		}
@@ -332,8 +342,14 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 				}
 			}
 		}
+		// Decrypted policy-based IPsec traffic carries the inbound-policy mark and must not pass as zone traffic.
+		// Validation keeps 1:1 off policy-based IPsec zones; the guard keeps their traffic out of other zones' entries.
+		ingress := "iifname @" + setName(o.Zone)
+		if len(f.policies) > 0 {
+			ingress = "meta mark & " + ipsecPolicyInMark + " == 0 " + ingress
+		}
 		for _, s := range sources {
-			prerouting = append(prerouting, join("iifname @"+setName(o.Zone), s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
+			prerouting = append(prerouting, join(ingress, s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
 		}
 		if o.Reflection {
 			f.reflection = true

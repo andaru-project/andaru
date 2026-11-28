@@ -219,6 +219,9 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		if err := r.sessions(ctx, nil, set); err != nil {
 			slog.Error("start the PPPoE sessions", "error", err)
 		}
+		if err := r.bootIPsec(ctx, set); err != nil {
+			slog.Error("start strongSwan", "error", err)
+		}
 		if err := r.bootPrefixes(); err != nil {
 			slog.Error("fill the DHCPv6 subnets of delegated segments", "error", err)
 		}

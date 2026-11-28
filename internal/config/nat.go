@@ -243,6 +243,8 @@ func validateNAT(d *declaration) []FieldError {
 		unique("/nat/oneToOne", i, o.identity, seen)
 		if !zones[o.Zone] {
 			bad(p+"/zone", "Expected an existing zone.")
+		} else if o.Enabled && !o.NoBinat && policyIPsecZone(d, o.Zone) {
+			bad(p+"/zone", policyOneToOneMessage)
 		}
 		for j, a := range o.Destination {
 			ref(fmt.Sprintf("%s/destination/%d", p, j), a)

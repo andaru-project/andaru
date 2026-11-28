@@ -1671,6 +1671,13 @@
               "items": {
                 "$ref": "#/$defs/wireguardStored"
               }
+            },
+            "ipsec": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ipsecStored"
+              }
             }
           },
           "additionalProperties": false
@@ -1893,6 +1900,13 @@
               "maxItems": 100,
               "items": {
                 "$ref": "#/$defs/wireguardView"
+              }
+            },
+            "ipsec": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ipsecView"
               }
             }
           },
@@ -3513,6 +3527,86 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "vpn.ipsec"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/ipsecWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "vpn.ipsec"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/ipsecWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "vpn.ipsec"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -3601,6 +3695,9 @@
         },
         {
           "$ref": "#/$defs/wireguardView"
+        },
+        {
+          "$ref": "#/$defs/ipsecView"
         }
       ]
     },
@@ -5346,9 +5443,17 @@
       "type": "string",
       "pattern": "^ca_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
+    "caRef": {
+      "type": "string",
+      "pattern": "^(ca_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
     "certificateID": {
       "type": "string",
       "pattern": "^crt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "certificateRef": {
+      "type": "string",
+      "pattern": "^(crt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
     },
     "tlsCryptKeyID": {
       "type": "string",
@@ -6524,6 +6629,393 @@
           "required": [
             "id",
             "privateKeyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ipsecID": {
+      "type": "string",
+      "pattern": "^ips_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "ipsecAuthFields": {
+      "type": "object",
+      "properties": {
+        "localType": {
+          "enum": [
+            "psk",
+            "cert"
+          ]
+        },
+        "remoteType": {
+          "enum": [
+            "psk",
+            "cert",
+            "eap-mschapv2"
+          ]
+        },
+        "localId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\s{}\"'#\\\\]+$"
+        },
+        "remoteId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\s{}\"'#\\\\]+$"
+        }
+      },
+      "required": [
+        "localType",
+        "remoteType",
+        "localId"
+      ]
+    },
+    "ipsecFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ipsecID"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "mode": {
+              "enum": [
+                "route-based",
+                "policy-based",
+                "road-warrior"
+              ]
+            },
+            "ifname": {
+              "type": "string",
+              "pattern": "^ipsec([0-9]|[1-9][0-9])$"
+            },
+            "xfrmIfId": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "zone": {
+              "$ref": "#/$defs/zoneRef"
+            },
+            "tunnelAddresses": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "localSegment": {
+              "$ref": "#/$defs/segmentRef"
+            },
+            "localAddress": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "remoteAddress": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
+            },
+            "ikeVersion": {
+              "const": 2
+            },
+            "proposals": {
+              "type": "array",
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$",
+                "maxLength": 128
+              }
+            },
+            "espProposals": {
+              "type": "array",
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$",
+                "maxLength": 128
+              }
+            },
+            "localSubnets": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "remoteSubnets": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "virtualPool": {
+              "type": "array",
+              "maxItems": 8,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "dpdDelaySeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3600
+            },
+            "startAction": {
+              "enum": [
+                "trap",
+                "start",
+                "none"
+              ]
+            },
+            "natTraversal": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "mode",
+            "ikeVersion",
+            "auth"
+          ]
+        }
+      ]
+    },
+    "ipsecEapUserStored": {
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\s{}\"'#\\\\]+$"
+        },
+        "passwordRef": {
+          "$ref": "#/$defs/secretRef"
+        }
+      },
+      "required": [
+        "username",
+        "passwordRef"
+      ],
+      "additionalProperties": false
+    },
+    "ipsecAuthStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ipsecAuthFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "localCertId": {
+              "$ref": "#/$defs/certificateID"
+            },
+            "caId": {
+              "$ref": "#/$defs/caID"
+            },
+            "pskRef": {
+              "$ref": "#/$defs/secretRef"
+            },
+            "eapUsers": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/ipsecEapUserStored"
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ipsecStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ipsecFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "auth": {
+              "$ref": "#/$defs/ipsecAuthStored"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ipsecEapUserWrite": {
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\s{}\"'#\\\\]+$"
+        },
+        "passwordRef": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/secretWrite"
+            },
+            {
+              "type": "object",
+              "maxProperties": 0
+            }
+          ]
+        }
+      },
+      "required": [
+        "username",
+        "passwordRef"
+      ],
+      "additionalProperties": false
+    },
+    "ipsecAuthWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ipsecAuthFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "localCertId": {
+              "$ref": "#/$defs/certificateRef"
+            },
+            "caId": {
+              "$ref": "#/$defs/caRef"
+            },
+            "pskRef": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/secretWrite"
+                },
+                {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              ]
+            },
+            "eapUsers": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/ipsecEapUserWrite"
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ipsecWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ipsecFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "auth": {
+              "$ref": "#/$defs/ipsecAuthWrite"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ipsecEapUserView": {
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\s{}\"'#\\\\]+$"
+        },
+        "passwordRef": {
+          "$ref": "#/$defs/secretView"
+        }
+      },
+      "required": [
+        "username",
+        "passwordRef"
+      ],
+      "additionalProperties": false
+    },
+    "ipsecAuthView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ipsecAuthFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "localCertId": {
+              "$ref": "#/$defs/certificateID"
+            },
+            "caId": {
+              "$ref": "#/$defs/caID"
+            },
+            "pskRef": {
+              "$ref": "#/$defs/secretView"
+            },
+            "eapUsers": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/ipsecEapUserView"
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ipsecView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ipsecFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "auth": {
+              "$ref": "#/$defs/ipsecAuthView"
+            }
+          },
+          "required": [
+            "id"
           ]
         }
       ],

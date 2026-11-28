@@ -8,3 +8,8 @@
 ; from /run/andaru-addons/bus-socket. andaru-engine runs as unconfined_service_t.
 (filecon "/run/andaru-addons/bus-socket(/.*)?" any (system_u object_r container_file_t ((s0) (s0))))
 (allow container_t unconfined_service_t (unix_stream_socket (connectto)))
+; strongSwan (ipsec_t, ipsec_mgmt_t) reads swanctl.conf and its credentials from /run/andaru-ipsec; OpenVPN reads its
+; configuration from /run/andaru-openvpn and creates its management sockets under /run/andaru-openvpn/run.
+(filecon "/run/andaru-ipsec(/.*)?" any (system_u object_r ipsec_conf_file_t ((s0) (s0))))
+(filecon "/run/andaru-openvpn(/.*)?" any (system_u object_r openvpn_etc_t ((s0) (s0))))
+(filecon "/run/andaru-openvpn/run(/.*)?" any (system_u object_r openvpn_var_run_t ((s0) (s0))))

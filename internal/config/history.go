@@ -590,22 +590,22 @@ func realized(value json.RawMessage) []byte {
 			return value
 		}
 	}
-	// A disabled WireGuard interface or peer renders nothing, names and descriptions are not rendered, and its keys
-	// are compared in SameRealization.
+	// A disabled WireGuard interface or peer, or IPsec connection, renders nothing, names and descriptions are not
+	// rendered, and their secrets are compared in SameRealization: a reference keeps only its binding.
 	if raw, ok := d["vpn"]; ok {
 		var err error
 		var vpn struct {
-			WireGuard []map[string]json.RawMessage `json:"wireguard"`
+			WireGuard []map[string]json.RawMessage `json:"wireguard,omitempty"`
+			IPsec     []map[string]json.RawMessage `json:"ipsec,omitempty"`
 		}
 		if json.Unmarshal(raw, &vpn) != nil {
 			return value
 		}
-		vpn.WireGuard = slices.DeleteFunc(vpn.WireGuard, func(w map[string]json.RawMessage) bool { return string(w["enabled"]) != "true" })
+		disabled := func(m map[string]json.RawMessage) bool { return string(m["enabled"]) != "true" }
+		vpn.WireGuard = slices.DeleteFunc(vpn.WireGuard, disabled)
+		vpn.IPsec = slices.DeleteFunc(vpn.IPsec, disabled)
 		secretBinding := func(raw json.RawMessage) json.RawMessage {
-			var ref struct {
-				Secret     string `json:"secret"`
-				Unresolved bool   `json:"unresolved,omitempty"`
-			}
+			var ref secretReference
 			if json.Unmarshal(raw, &ref) != nil || ref.Secret == "" {
 				return raw
 			}
@@ -625,7 +625,7 @@ func realized(value json.RawMessage) []byte {
 			if json.Unmarshal(w["peers"], &peers) != nil {
 				continue
 			}
-			peers = slices.DeleteFunc(peers, func(p map[string]json.RawMessage) bool { return string(p["enabled"]) != "true" })
+			peers = slices.DeleteFunc(peers, disabled)
 			for _, p := range peers {
 				delete(p, "name")
 				delete(p, "description")
@@ -639,9 +639,32 @@ func realized(value json.RawMessage) []byte {
 				return value
 			}
 		}
+		for _, c := range vpn.IPsec {
+			delete(c, "name")
+			delete(c, "description")
+			var auth map[string]json.RawMessage
+			if json.Unmarshal(c["auth"], &auth) != nil || auth == nil {
+				continue
+			}
+			if ref, has := auth["pskRef"]; has {
+				auth["pskRef"] = secretBinding(ref)
+			}
+			var users []map[string]json.RawMessage
+			if json.Unmarshal(auth["eapUsers"], &users) == nil && len(users) > 0 {
+				for _, u := range users {
+					u["passwordRef"] = secretBinding(u["passwordRef"])
+				}
+				if auth["eapUsers"], err = json.Marshal(users); err != nil {
+					return value
+				}
+			}
+			if c["auth"], err = json.Marshal(auth); err != nil {
+				return value
+			}
+		}
 		delete(d, "vpn")
-		if len(vpn.WireGuard) > 0 {
-			if d["vpn"], err = json.Marshal(vpn.WireGuard); err != nil {
+		if len(vpn.WireGuard)+len(vpn.IPsec) > 0 {
+			if d["vpn"], err = json.Marshal(vpn); err != nil {
 				return value
 			}
 		}
@@ -741,6 +764,13 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 		}
 		realizedWireGuardSecrets(&state.Config, state.Secrets, result.Secrets)
 		certs := certificateIndex(&state.Config)
+		addCertKey := func(id, key string) {
+			if result.CertificateKeys == nil {
+				result.CertificateKeys = map[string]string{}
+			}
+			result.CertificateKeys[id] = key
+		}
+		realizedIPsecSecrets(&state.Config, state.Secrets, certs, result.Secrets, addCertKey)
 		for i := range state.Config.Addons {
 			a := &state.Config.Addons[i]
 			if !a.Enabled {
@@ -748,10 +778,7 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 			}
 			for _, id := range addonCertificateRefs(a) {
 				if c, ok := certs[id]; ok && !c.KeyRef.Unresolved {
-					if result.CertificateKeys == nil {
-						result.CertificateKeys = map[string]string{}
-					}
-					result.CertificateKeys[id] = state.Secrets.Scopes["core"][c.KeyRef.Secret].Value
+					addCertKey(id, state.Secrets.Scopes["core"][c.KeyRef.Secret].Value)
 				}
 			}
 			scoped := state.Secrets.Scopes[addonSecretScope(a.ID)]

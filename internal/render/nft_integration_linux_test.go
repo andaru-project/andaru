@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -458,5 +459,25 @@ func TestWireGuardFilterLoads(t *testing.T) {
 	out, err := l.run(l.fw, "nft", "list", "chain", "inet", "andaru", "input")
 	if err != nil || !strings.Contains(out, "iifname @uplinks udp dport 51820 accept") || !strings.Contains(out, `udp dport 51821 accept`) {
 		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// The IPsec connections' rules load: IKE, NAT-T and ESP input, XFRM interfaces in their zones, and a policy-based
+// connection's zone matched by its reqid, also kept out of the masquerade.
+func TestIPsecFilterLoads(t *testing.T) {
+	l := newLab(t)
+	l.load(fixture(t, "ipsec"))
+	req := strconv.Itoa(ipsecReqid("ips_00000002-0000-4000-8000-000000000002", map[int]bool{}))
+	for chain, want := range map[string][]string{
+		"input":       {"iifname @uplinks udp dport { 500, 4500 } accept", "meta ipsec exists ipsec in reqid " + req, `iifname "ens18" udp dport 500 accept`},
+		"forward":     {"ipsec out reqid " + req},
+		"postrouting": {"ipsec out reqid " + req + " accept"},
+	} {
+		out, err := l.run(l.fw, "nft", "list", "chain", "inet", "andaru", chain)
+		for _, line := range want {
+			if err != nil || !strings.Contains(out, line) {
+				t.Fatalf("%s lacks %q: %v\n%s", chain, line, err, out)
+			}
+		}
 	}
 }

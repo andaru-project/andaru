@@ -195,7 +195,7 @@ func TestNetworkdAcceptsRenderedFiles(t *testing.T) {
 			checked++
 		}
 		for file := range files {
-			if device, ok := strings.CutSuffix(strings.TrimPrefix(file, "50-andaru-"), ".netdev"); ok && strings.HasPrefix(device, "wg") && !strings.Contains(log, device+": Created.") {
+			if device, ok := strings.CutSuffix(strings.TrimPrefix(file, "50-andaru-"), ".netdev"); ok && (strings.HasPrefix(device, "wg") || strings.HasPrefix(device, "ipsec")) && !strings.Contains(log, device+": Created.") {
 				t.Fatalf("%s: networkd did not create %s with its key:\n%s", name, device, log)
 			}
 		}

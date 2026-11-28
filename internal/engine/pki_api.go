@@ -223,12 +223,36 @@ func (c *certSync) payload(ctx context.Context) (int, generation.CertSync, error
 			}
 			continue
 		}
+		if consumer.Kind == "ipsec-ca" {
+			ca := "x509ca/" + consumer.CertificateID + ".pem"
+			if !slices.ContainsFunc(g.Files, func(f generation.FileEntry) bool { return f.Path == render.IPsecDir+ca }) {
+				continue // not realized: the live generation does not trust this CA
+			}
+			if payload.IPsec == nil {
+				payload.IPsec = map[string]string{}
+			}
+			payload.IPsec[ca] = strings.TrimRight(m.CertPEM, "\n") + "\n"
+			continue
+		}
 		if m.Unresolved || m.Key == "" {
 			continue // with no key there is nothing to serve: management falls back to the bootstrap certificate
 		}
 		switch consumer.Kind {
 		case "management":
 			payload.Web = &generation.CertPair{Cert: joinPEM(m.CertPEM, m.ChainPEM), Key: m.Key}
+		case "ipsec":
+			cert, key := "x509/"+consumer.CertificateID+".pem", "private/"+consumer.CertificateID+".key"
+			if !slices.ContainsFunc(g.Files, func(f generation.FileEntry) bool { return f.Path == render.IPsecDir+cert }) {
+				continue // not realized: the live generation does not run this connection
+			}
+			if payload.IPsec == nil {
+				payload.IPsec = map[string]string{}
+			}
+			payload.IPsec[cert] = strings.TrimRight(m.CertPEM, "\n") + "\n"
+			payload.IPsec[key] = strings.TrimRight(m.Key, "\n") + "\n"
+			for n, blk := range render.SplitPEMCertificates(m.ChainPEM) {
+				payload.IPsec[fmt.Sprintf("x509ca/%s-chain-%d.pem", consumer.CertificateID, n)] = blk
+			}
 		case "addon":
 			if c.catalog == nil {
 				continue

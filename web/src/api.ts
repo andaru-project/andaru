@@ -37,6 +37,9 @@ import type {
   GenerateTlsCryptKeyRequest,
   History,
   ImportCertificateRequest,
+  IPsecConnection,
+  IPsecConnectionWrite,
+  IPsecStatusResponse,
   LeaseView,
   LinkStatus,
   LldpNeighbor,
@@ -1043,6 +1046,37 @@ export class ApiClient {
       text: data,
       filename: filenameFromDisposition(headers.get('Content-Disposition'), `wireguard-${peerId}.conf`),
     };
+  }
+
+  ipsecConnections() {
+    return this.request<SavedList<IPsecConnection>>('/api/v1/config/vpn/ipsec');
+  }
+
+  saveIpsecConnection(entry: IPsecConnectionWrite, saved?: SavedObject<IPsecConnection>) {
+    return this.save('/api/v1/config/vpn/ipsec', entry, saved);
+  }
+
+  deleteIpsecConnection(id: string, version: string) {
+    return this.request<void>(`/api/v1/config/vpn/ipsec/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  ipsecStatus() {
+    return this.request<IPsecStatusResponse>('/api/v1/status/vpn/ipsec');
+  }
+
+  initiateIpsec(id: string) {
+    return this.request<{ ok: boolean }>(`/api/v1/vpn/ipsec/${encodeURIComponent(id)}/initiate`, {
+      method: 'POST',
+    }, true);
+  }
+
+  terminateIpsec(id: string) {
+    return this.request<{ ok: boolean }>(`/api/v1/vpn/ipsec/${encodeURIComponent(id)}/terminate`, {
+      method: 'POST',
+    }, true);
   }
 
   private async requestRaw<T>(

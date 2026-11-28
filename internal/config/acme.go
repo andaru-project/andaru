@@ -147,6 +147,8 @@ func acmeSecrets(v any) []channelSecret {
 		return x.secrets()
 	case *wireguardInterface:
 		return x.secrets()
+	case *ipsecConnection:
+		return x.secrets()
 	}
 	return nil
 }

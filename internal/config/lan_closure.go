@@ -257,16 +257,19 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 				return RestoreDocuments{}, err
 			}
 		}
-		// The copy keeps WireGuard up, for remote access to a recovered host: each key reference loses its view state,
-		// and one the copy does not hold (a disabled interface's or peer's) is left unresolved.
+		// The copy keeps WireGuard and pre-shared-key or EAP IPsec up, for remote access to a recovered host: each
+		// secret reference loses its view state, and one the copy does not hold (a disabled interface's, peer's or
+		// connection's) is left unresolved. A connection that names a certificate or CA goes with the PKI, and so do
+		// the routes through it.
 		if raw, ok := d["vpn"]; ok {
 			var vpn struct {
-				WireGuard []map[string]any `json:"wireguard"`
+				WireGuard []map[string]any `json:"wireguard,omitempty"`
+				IPsec     []map[string]any `json:"ipsec,omitempty"`
 			}
 			if err := json.Unmarshal(raw, &vpn); err != nil {
 				return RestoreDocuments{}, err
 			}
-			reference := func(parent map[string]any, field string) {
+			reference := func(parent map[string]any, field, kind string) {
 				view, ok := parent[field].(map[string]any)
 				if !ok {
 					return
@@ -276,20 +279,57 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 				if _, held := doc.Secrets[name]; !held {
 					ref["unresolved"] = true
 				}
-				kinds[name] = "wireguard"
+				kinds[name] = kind
 				parent[field] = ref
 			}
 			for _, w := range vpn.WireGuard {
-				reference(w, "privateKeyRef")
+				reference(w, "privateKeyRef", "wireguard")
 				peers, _ := w["peers"].([]any)
 				for _, p := range peers {
 					if peer, ok := p.(map[string]any); ok {
-						reference(peer, "presharedKeyRef")
+						reference(peer, "presharedKeyRef", "wireguard")
+					}
+				}
+			}
+			dropped := map[string]bool{}
+			vpn.IPsec = slices.DeleteFunc(vpn.IPsec, func(c map[string]any) bool {
+				auth, _ := c["auth"].(map[string]any)
+				if auth["localCertId"] != nil || auth["caId"] != nil {
+					id, _ := c["id"].(string)
+					dropped[id] = true
+					return true
+				}
+				return false
+			})
+			for _, c := range vpn.IPsec {
+				auth, _ := c["auth"].(map[string]any)
+				if auth == nil {
+					continue
+				}
+				reference(auth, "pskRef", "ipsec")
+				users, _ := auth["eapUsers"].([]any)
+				for _, u := range users {
+					if user, ok := u.(map[string]any); ok {
+						reference(user, "passwordRef", "ipsec")
 					}
 				}
 			}
 			if d["vpn"], err = json.Marshal(vpn); err != nil {
 				return RestoreDocuments{}, err
+			}
+			if raw, ok := d["routes"]; ok && len(dropped) > 0 {
+				var routes []map[string]any
+				if err := json.Unmarshal(raw, &routes); err != nil {
+					return RestoreDocuments{}, err
+				}
+				routes = slices.DeleteFunc(routes, func(r map[string]any) bool {
+					t, _ := r["target"].(map[string]any)
+					id, _ := t["id"].(string)
+					return t["kind"] == "ipsec" && dropped[id]
+				})
+				if d["routes"], err = json.Marshal(routes); err != nil {
+					return RestoreDocuments{}, err
+				}
 			}
 			if declarationBody, err = json.Marshal(d); err != nil {
 				return RestoreDocuments{}, err

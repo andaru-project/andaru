@@ -114,6 +114,7 @@ type handlerDeps struct {
 	pkiAPI           http.Handler
 	acmeAPI          http.Handler
 	wireguardAPI     http.Handler
+	ipsecAPI         http.Handler
 	stateDir         string
 }
 
@@ -188,6 +189,10 @@ func newHandlerWithDeps(d handlerDeps) http.Handler {
 		}
 		if (r.URL.Path == wireguardStatusPath || strings.HasPrefix(r.URL.Path, wireguardAPIPrefix)) && d.wireguardAPI != nil {
 			d.wireguardAPI.ServeHTTP(w, r)
+			return
+		}
+		if (r.URL.Path == ipsecStatusPath || strings.HasPrefix(r.URL.Path, ipsecAPIPrefix)) && d.ipsecAPI != nil {
+			d.ipsecAPI.ServeHTTP(w, r)
 			return
 		}
 		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath || r.URL.Path == "/api/v1/kept/recovery" || isBackupPath(r.URL.Path)

@@ -63,7 +63,8 @@ const realizeUsage = `usage: andaru realize [OPTIONS] activate|confirm N
        andaru realize [OPTIONS] addon-ctl start|stop|restart SLUG
        andaru realize [OPTIONS] addon-bus-tokens|cert-sync PATH
        andaru realize [OPTIONS] addon-log SLUG NAME LINES PATH
-       andaru realize [OPTIONS] wg-status PATH
+       andaru realize [OPTIONS] wg-status|ipsec-status PATH
+       andaru realize [OPTIONS] ipsec-ctl initiate|terminate CONNECTION
        andaru realize [OPTIONS] acme-http01-open IFACE...
        andaru realize [OPTIONS] acme-http01-close
        andaru realize [OPTIONS] update-check|update-stage
@@ -93,6 +94,9 @@ Verbs:
   addon-log S N L F    Read bounded tail of file log N for add-on S into file F
   wg-status F          Write the WireGuard interfaces' and peers' state into
                        file F, keys left out
+  ipsec-status F       Write strongSwan's state, its connections and their SAs,
+                       into file F
+  ipsec-ctl A C        Initiate or terminate (A) IPsec connection C (ips_...)
   acme-http01-open I.. Redirect port 80 on interfaces I to the HTTP-01 responder
   acme-http01-close    Stop redirecting port 80 to the HTTP-01 responder
   factory-reset        Run or resume the factory reset ctl factory-reset planned
@@ -173,7 +177,7 @@ Commands:
 
 Collections: links, segments, zones, aliases/addresses, aliases/ports, dhcp,
   dhcp6, virtualAddresses, notifications/channels, rules, nat/port-forwards,
-  nat/one-to-one, routes, vpn/wireguard
+  nat/one-to-one, routes, vpn/wireguard, vpn/ipsec
 Singletons: management, nat/outbound, dns
 Lists: rules, nat/port-forwards, nat/one-to-one
 

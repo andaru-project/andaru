@@ -7,20 +7,15 @@ import (
 	"strings"
 )
 
-type wireguardRef struct {
-	Secret     string `json:"secret"`
-	Unresolved bool   `json:"unresolved"`
-}
-
 type wireguardPeer struct {
-	ID                  string        `json:"id"`
-	Enabled             bool          `json:"enabled"`
-	PublicKey           string        `json:"publicKey"`
-	PresharedKeyRef     *wireguardRef `json:"presharedKeyRef"`
-	AllowedIPs          []string      `json:"allowedIps"`
-	Endpoint            string        `json:"endpoint"`
-	PersistentKeepalive int           `json:"persistentKeepalive"`
-	RouteAllowedIPs     *bool         `json:"routeAllowedIps"`
+	ID                  string     `json:"id"`
+	Enabled             bool       `json:"enabled"`
+	PublicKey           string     `json:"publicKey"`
+	PresharedKeyRef     *secretRef `json:"presharedKeyRef"`
+	AllowedIPs          []string   `json:"allowedIps"`
+	Endpoint            string     `json:"endpoint"`
+	PersistentKeepalive int        `json:"persistentKeepalive"`
+	RouteAllowedIPs     *bool      `json:"routeAllowedIps"`
 }
 
 type wireguardInterface struct {
@@ -33,7 +28,7 @@ type wireguardInterface struct {
 	AllowListenSegments []string        `json:"allowListenSegments"`
 	MTU                 int             `json:"mtu"`
 	Addresses           []string        `json:"addresses"`
-	PrivateKeyRef       wireguardRef    `json:"privateKeyRef"`
+	PrivateKeyRef       secretRef       `json:"privateKeyRef"`
 	Peers               []wireguardPeer `json:"peers"`
 }
 
@@ -44,17 +39,17 @@ const keyOwner = "root:systemd-network"
 func (r *renderer) wireguards() []wireguardInterface {
 	var out []wireguardInterface
 	for _, w := range r.d.VPN.WireGuard {
-		if w.Enabled && !r.taken(w.Ifname) {
+		if w.Enabled && !r.taken(w.Ifname, "wireguard") {
 			out = append(out, w)
 		}
 	}
 	return out
 }
 
-// taken says a device other than a WireGuard one already has the name.
-func (r *renderer) taken(name string) bool {
+// taken says a device of another kind than the one Andaru makes for a tunnel already has the name.
+func (r *renderer) taken(name, kind string) bool {
 	for _, l := range r.in.Links {
-		if l.Name == name && l.Kind != "wireguard" {
+		if l.Name == name && l.Kind != kind {
 			return true
 		}
 	}
@@ -68,7 +63,7 @@ func (r *renderer) wireguard() {
 		if !w.Enabled {
 			continue
 		}
-		if r.taken(w.Ifname) {
+		if r.taken(w.Ifname, "wireguard") {
 			r.find("error", "NAME_COLLISION", path+"/ifname", "Another device already has the interface name "+w.Ifname+".")
 			continue
 		}
@@ -131,7 +126,7 @@ func (r *renderer) wireguard() {
 
 // secretFile renders a WireGuard key file, shown redacted. A key the input does not hold is an error: the interface
 // would come up without it.
-func (r *renderer) secretFile(path, field string, ref wireguardRef, sources []string) {
+func (r *renderer) secretFile(path, field string, ref secretRef, sources []string) {
 	value, ok := r.in.Secrets[ref.Secret]
 	if !ok || ref.Unresolved {
 		r.find("error", "SECRET_UNAVAILABLE", field, "Secret "+ref.Secret+" is not available; set it before applying.")

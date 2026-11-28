@@ -18,7 +18,7 @@ import {
 } from '@mantine/core';
 import { useCallback, useRef, useState, type FormEvent } from 'react';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
-import type { RouteTargetKind, SavedObject, Segment, Session, StaticRoute, WireGuardInterface } from '../types';
+import type { IPsecConnection, RouteTargetKind, SavedObject, Segment, Session, StaticRoute, WireGuardInterface } from '../types';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
 
@@ -33,6 +33,7 @@ interface LoadedRoutes {
   routes: Array<SavedObject<StaticRoute>>;
   segments: Segment[];
   wireguard: WireGuardInterface[];
+  ipsec: IPsecConnection[];
 }
 
 const MAX_METRIC = 4_294_967_295;
@@ -54,22 +55,27 @@ export function RoutesScreen({ api, session, onSaved, onSessionLost }: RoutesScr
   const [deleteError, setDeleteError] = useState('');
 
   const load = useCallback(async (): Promise<LoadedRoutes> => {
-    const [routesRes, segmentsRes, wgRes] = await Promise.all([
+    const [routesRes, segmentsRes, wgRes, ipsecRes] = await Promise.all([
       api.routes(),
       api.segments(),
       api.wireguardInterfaces(),
+      api.ipsecConnections(),
     ]);
     return {
       routes: routesRes.items,
       segments: segmentsRes.items.map((item) => item.value),
       wireguard: wgRes.items.map((item) => item.value),
+      ipsec: ipsecRes.items
+        .map((item) => item.value)
+        .filter((conn) => conn.mode !== 'policy-based' && Boolean(conn.ifname)),
     };
   }, [api]);
 
   const resource = useResource(load, onSessionLost);
   const segments = resource.data?.segments ?? [];
   const wireguard = resource.data?.wireguard ?? [];
-  const hasTargets = segments.length > 0 || wireguard.length > 0;
+  const ipsec = resource.data?.ipsec ?? [];
+  const hasTargets = segments.length > 0 || wireguard.length > 0 || ipsec.length > 0;
 
   function handleSaved(message: string) {
     setNotice(message);
@@ -133,9 +139,10 @@ export function RoutesScreen({ api, session, onSaved, onSessionLost }: RoutesScr
       )}
 
       <Loaded resource={resource} what="static routes">
-        {({ routes, segments: loadedSegments, wireguard: loadedWireguard }) => {
+        {({ routes, segments: loadedSegments, wireguard: loadedWireguard, ipsec: loadedIpsec }) => {
           const segmentsById = new Map(loadedSegments.map((s) => [s.id, s.name]));
           const wireguardById = new Map(loadedWireguard.map((w) => [w.id, `${w.name} (${w.ifname})`]));
+          const ipsecById = new Map(loadedIpsec.map((c) => [c.id, `${c.name} (${c.ifname})`]));
           const sortedRoutes = [...routes].sort((a, b) =>
             a.value.destination.localeCompare(b.value.destination, undefined, { numeric: true })
             || a.value.name.localeCompare(b.value.name, undefined, { sensitivity: 'base' }));
@@ -145,7 +152,7 @@ export function RoutesScreen({ api, session, onSaved, onSessionLost }: RoutesScr
               <Alert role="status" title="No static routes configured">
                 {!canWrite
                   ? 'No static routes are currently configured.'
-                  : loadedSegments.length === 0 && loadedWireguard.length === 0
+                  : loadedSegments.length === 0 && loadedWireguard.length === 0 && loadedIpsec.length === 0
                     ? 'Configure at least one network segment or VPN interface before adding static routes.'
                     : 'Add a static route to direct traffic for a specific IPv4 or IPv6 prefix to a segment or VPN interface.'}
               </Alert>
@@ -186,7 +193,9 @@ export function RoutesScreen({ api, session, onSaved, onSessionLost }: RoutesScr
                             <Text size="sm">
                               {r.target.kind === 'wireguard'
                                 ? (wireguardById.get(r.target.id) ?? r.target.id)
-                                : (segmentsById.get(r.target.id) ?? r.target.id)}
+                                : r.target.kind === 'ipsec'
+                                  ? (ipsecById.get(r.target.id) ?? r.target.id)
+                                  : (segmentsById.get(r.target.id) ?? r.target.id)}
                             </Text>
                           </Group>
                         </Table.Td>
@@ -251,6 +260,7 @@ export function RoutesScreen({ api, session, onSaved, onSessionLost }: RoutesScr
           existing={editor === 'new' ? undefined : editor}
           segments={segments}
           wireguard={wireguard}
+          ipsec={ipsec}
           onClose={() => setEditor(undefined)}
           onSaved={(saved) => {
             setEditor(undefined);
@@ -290,24 +300,30 @@ interface RouteModalProps {
   existing?: SavedObject<StaticRoute>;
   segments: Segment[];
   wireguard: WireGuardInterface[];
+  ipsec: IPsecConnection[];
   onClose(): void;
   onSaved(saved: SavedObject<StaticRoute>): void;
   onConflict(): void;
   onSessionLost(): void;
 }
 
-function RouteModal({ api, existing, segments, wireguard, onClose, onSaved, onConflict, onSessionLost }: RouteModalProps) {
+function RouteModal({ api, existing, segments, wireguard, ipsec, onClose, onSaved, onConflict, onSessionLost }: RouteModalProps) {
   const sortedSegments = [...segments].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   const sortedWireguard = [...wireguard].sort((a, b) => a.ifname.localeCompare(b.ifname, undefined, { numeric: true }));
+  const sortedIpsec = [...ipsec].sort((a, b) => (a.ifname ?? '').localeCompare(b.ifname ?? '', undefined, { numeric: true }));
   const defaultKind: RouteTargetKind = existing?.value.target.kind
-    ?? (sortedSegments.length > 0 ? 'segment' : 'wireguard');
+    ?? (sortedSegments.length > 0 ? 'segment' : sortedWireguard.length > 0 ? 'wireguard' : 'ipsec');
   const [name, setName] = useState(existing?.value.name ?? '');
   const [description, setDescription] = useState(existing?.value.description ?? '');
   const [destination, setDestination] = useState(existing?.value.destination ?? '');
   const [targetKind, setTargetKind] = useState<RouteTargetKind>(defaultKind);
   const [targetId, setTargetId] = useState(
     existing?.value.target.id
-      ?? (defaultKind === 'wireguard' ? sortedWireguard[0]?.id : sortedSegments[0]?.id)
+      ?? (defaultKind === 'wireguard'
+        ? sortedWireguard[0]?.id
+        : defaultKind === 'ipsec'
+          ? sortedIpsec[0]?.id
+          : sortedSegments[0]?.id)
       ?? '',
   );
   const [gateway, setGateway] = useState(existing?.value.gateway ?? '');
@@ -322,11 +338,14 @@ function RouteModal({ api, existing, segments, wireguard, onClose, onSaved, onCo
   const kindOptions = [
     ...(sortedSegments.length > 0 || targetKind === 'segment' ? [{ value: 'segment', label: 'Segment' }] : []),
     ...(sortedWireguard.length > 0 || targetKind === 'wireguard' ? [{ value: 'wireguard', label: 'WireGuard' }] : []),
+    ...(sortedIpsec.length > 0 || targetKind === 'ipsec' ? [{ value: 'ipsec', label: 'IPsec' }] : []),
   ];
 
   const targetData = targetKind === 'wireguard'
     ? sortedWireguard.map((w) => ({ value: w.id, label: `${w.name} (${w.ifname})` }))
-    : sortedSegments.map((s) => ({ value: s.id, label: s.name }));
+    : targetKind === 'ipsec'
+      ? sortedIpsec.map((c) => ({ value: c.id, label: `${c.name} (${c.ifname})` }))
+      : sortedSegments.map((s) => ({ value: s.id, label: s.name }));
   if (targetId && !targetData.some((i) => i.value === targetId)) {
     targetData.unshift({ value: targetId, label: `${targetId} (missing ${targetKind})` });
   }
@@ -335,6 +354,9 @@ function RouteModal({ api, existing, segments, wireguard, onClose, onSaved, onCo
     setTargetKind(nextKind);
     if (nextKind === 'wireguard') {
       setTargetId(sortedWireguard[0]?.id ?? '');
+      setGateway('');
+    } else if (nextKind === 'ipsec') {
+      setTargetId(sortedIpsec[0]?.id ?? '');
       setGateway('');
     } else {
       setTargetId(sortedSegments[0]?.id ?? '');
@@ -351,7 +373,14 @@ function RouteModal({ api, existing, segments, wireguard, onClose, onSaved, onCo
       nextErrors.set('destination', 'Enter an IPv4 or IPv6 destination in CIDR notation.');
     }
     if (!targetId.trim()) {
-      nextErrors.set('target/id', targetKind === 'wireguard' ? 'Select a WireGuard interface.' : 'Select a target segment.');
+      nextErrors.set(
+        'target/id',
+        targetKind === 'wireguard'
+          ? 'Select a WireGuard interface.'
+          : targetKind === 'ipsec'
+            ? 'Select an IPsec interface.'
+            : 'Select a target segment.',
+      );
     }
 
     let parsedMetric: number | undefined;
@@ -454,12 +483,18 @@ function RouteModal({ api, existing, segments, wireguard, onClose, onSaved, onCo
                   data={kindOptions}
                   value={targetKind}
                   onChange={(val) => {
-                    if (val === 'segment' || val === 'wireguard') handleTargetKindChange(val);
+                    if (val === 'segment' || val === 'wireguard' || val === 'ipsec') handleTargetKindChange(val);
                   }}
                 />
               )}
               <Select
-                label={targetKind === 'wireguard' ? 'Target WireGuard interface' : 'Target segment'}
+                label={
+                  targetKind === 'wireguard'
+                    ? 'Target WireGuard interface'
+                    : targetKind === 'ipsec'
+                      ? 'Target IPsec interface'
+                      : 'Target segment'
+                }
                 required
                 searchable
                 allowDeselect={false}

@@ -73,7 +73,7 @@ func TestStatusRoutesNeedStatusRead(t *testing.T) {
 			}
 			continue
 		}
-		if route.Path == wireguardStatusPath {
+		if route.Path == wireguardStatusPath || route.Path == ipsecStatusPath {
 			if route.Capability != authz.VPNRead {
 				t.Errorf("%s %s needs %q", route.Method, route.Path, route.Capability)
 			}

@@ -10,6 +10,11 @@ import (
 )
 
 // The structs below decode the public snapshot JSON; the served JSON Schema is the contract.
+type secretRef struct {
+	Secret     string `json:"secret"`
+	Unresolved bool   `json:"unresolved"`
+}
+
 type link struct {
 	ID                 string   `json:"id"`
 	Kind               string   `json:"kind"`
@@ -31,11 +36,8 @@ type link struct {
 	TransmitHashPolicy string   `json:"transmitHashPolicy"`
 	LLDP               string   `json:"lldp"`
 	EmitLLDP           string   `json:"emitLldp"`
-	Username           string   `json:"username"`
-	Password           *struct {
-		Secret     string `json:"secret"`
-		Unresolved bool   `json:"unresolved"`
-	} `json:"password"`
+	Username           string     `json:"username"`
+	Password           *secretRef `json:"password"`
 	// Offloads holds only the offloads the operator set; the device default stands for the rest.
 	Offloads map[string]bool `json:"offloads"`
 }
@@ -157,6 +159,7 @@ type declaration struct {
 	VirtualAddresses []virtualAddress `json:"virtualAddresses"`
 	Addons           []addonEntry     `json:"addons"`
 	PKI              struct {
+		CAs          []certificate `json:"cas"`
 		Certificates []certificate `json:"certificates"`
 	} `json:"pki"`
 	ACME struct {
@@ -165,6 +168,7 @@ type declaration struct {
 	Routes []route `json:"routes"`
 	VPN    struct {
 		WireGuard []wireguardInterface `json:"wireguard"`
+		IPsec     []ipsecConnection    `json:"ipsec"`
 	} `json:"vpn"`
 }
 
@@ -289,7 +293,8 @@ type Input struct {
 	Declaration  json.RawMessage
 	Secrets      map[string]string
 	AddonSecrets map[string]map[string]string
-	// CertificateKeys are the private keys of the certificates enabled add-ons name, by certificate ID.
+	// CertificateKeys are the private keys of the certificates enabled add-ons and IPsec connections name, by
+	// certificate ID.
 	CertificateKeys map[string]string
 	Catalog         *addon.Catalog
 	StateDir        string

@@ -304,7 +304,7 @@ func (s *Store) PKICertificateAuthorities(ctx context.Context) (result []PKIObje
 // CertificateConsumer is one service's binding to a certificate: the management web server, or an add-on's
 // certificate-reference setting.
 type CertificateConsumer struct {
-	// Kind is "management" or "addon".
+	// Kind is "management", "addon" or "ipsec" (an enabled connection's local certificate).
 	Kind string
 	// AddonID is the add-on's catalog ID, and Setting the name of its certificate-reference setting.
 	AddonID, Setting string
@@ -337,6 +337,17 @@ func (s *Store) CertificateBindings(ctx context.Context, live Version) (consumer
 					}
 				}
 			}
+			for _, c := range state.Config.VPN.IPsec {
+				if !c.Enabled {
+					continue
+				}
+				if c.Auth.LocalCertID != "" {
+					consumers = append(consumers, CertificateConsumer{Kind: "ipsec", CertificateID: c.Auth.LocalCertID})
+				}
+				if c.Auth.CAID != "" {
+					consumers = append(consumers, CertificateConsumer{Kind: "ipsec-ca", CertificateID: c.Auth.CAID})
+				}
+			}
 			return nil
 		})
 		if err != nil {
@@ -349,7 +360,17 @@ func (s *Store) CertificateBindings(ctx context.Context, live Version) (consumer
 	}
 	err = s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
 		certs := certificateIndex(&state.Config)
+		cas := map[string]*pkiCA{}
+		for i := range state.Config.PKI.CAs {
+			cas[state.Config.PKI.CAs[i].ID] = &state.Config.PKI.CAs[i]
+		}
 		for _, c := range consumers {
+			if c.Kind == "ipsec-ca" {
+				if ca, ok := cas[c.CertificateID]; ok {
+					material[c.CertificateID] = CertificateMaterial{Name: ca.Name, CertPEM: ca.CertPEM}
+				}
+				continue
+			}
 			x, ok := certs[c.CertificateID]
 			if !ok {
 				continue // deleted since: the consumer keeps what it has until an apply
