@@ -342,8 +342,13 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 				}
 			}
 		}
+		// Decrypted policy-based IPsec traffic carries the inbound-policy mark and must not pass as zone traffic.
+		ingress := "iifname @" + setName(o.Zone)
+		if len(f.policies) > 0 {
+			ingress = "meta mark & " + ipsecPolicyInMark + " == 0 " + ingress
+		}
 		for _, s := range sources {
-			prerouting = append(prerouting, join("iifname @"+setName(o.Zone), s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
+			prerouting = append(prerouting, join(ingress, s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
 		}
 		if o.Reflection {
 			f.reflection = true

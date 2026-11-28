@@ -52,8 +52,8 @@ func TestIPsecPaths(t *testing.T) {
 		ipsecConf:  "0600",
 		ipsKey:     "0400",
 		ipsCertPEM: "0644",
-		ipsecDir + "/x509ca/ca_00000001-0000-4000-8000-000000000001.pem":   "0644",
-		ipsecDir + "/x509ca/" + ipsCrt + "-chain-0.pem":                   "0644",
+		ipsecDir + "/x509ca/ca_00000001-0000-4000-8000-000000000001.pem": "0644",
+		ipsecDir + "/x509ca/" + ipsCrt + "-chain-0.pem":                  "0644",
 	} {
 		if !allowed(path) || modeFor(path) != mode {
 			t.Errorf("%s: allowed %v mode %s", path, allowed(path), modeFor(path))
@@ -295,13 +295,8 @@ func TestReadIPsecStatus(t *testing.T) {
 
 func TestControlIPsec(t *testing.T) {
 	var ran []string
-	var sasOut string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
-		cmd := filepath.Base(name) + " " + strings.Join(args, " ")
-		ran = append(ran, cmd)
-		if cmd == "swanctl --list-sas --pretty" {
-			return []byte(sasOut), nil
-		}
+		ran = append(ran, filepath.Base(name)+" "+strings.Join(args, " "))
 		return nil, nil
 	}
 	if err := ControlIPsec(t.Context(), run, "initiate", ipsA); err != nil {
@@ -310,25 +305,8 @@ func TestControlIPsec(t *testing.T) {
 	if err := ControlIPsec(t.Context(), run, "terminate", ipsA); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(ran, []string{
-		"swanctl --initiate --child " + ipsA + " --timeout 15",
-		"swanctl --list-sas --pretty",
-		"swanctl --terminate --ike " + ipsA + " --timeout 15",
-	}) {
+	if !slices.Equal(ran, []string{"swanctl --initiate --child " + ipsA + " --timeout 15", "swanctl --terminate --ike " + ipsA + " --timeout 15"}) {
 		t.Fatalf("%q", ran)
-	}
-	// Multi-user EAP sub-connections ("<id>-eap-0", "<id>-eap-1") are all terminated by owning ID.
-	ran = nil
-	sasOut = sasOf(ipsA+"-eap-0", ipsA+"-eap-1", ipsB)
-	if err := ControlIPsec(t.Context(), run, "terminate", ipsA); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(ran, []string{
-		"swanctl --list-sas --pretty",
-		"swanctl --terminate --ike " + ipsA + "-eap-0 --timeout 15",
-		"swanctl --terminate --ike " + ipsA + "-eap-1 --timeout 15",
-	}) {
-		t.Fatalf("eap terminate: %q", ran)
 	}
 	for _, c := range [][2]string{{"initiate", "ips_1"}, {"initiate", "--all"}, {"reload", ipsA}, {"terminate", ipsA + " x"}} {
 		if err := ControlIPsec(t.Context(), run, c[0], c[1]); err == nil {
@@ -493,7 +471,7 @@ func TestIPsecChangedConnectionTerminatesAndReinitiates(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id2); err != nil {
 		t.Fatal(err)
 	}
-	if b.net.ran("swanctl --terminate --ike "+ipsA+" --timeout 5") != 1 {
+	if b.net.ran("swanctl --terminate --ike "+ipsA+" --force --timeout 5") != 1 {
 		t.Fatalf("changed connection SA not terminated: %q", b.net.argv)
 	}
 	if b.net.ran("swanctl --initiate --child "+ipsA+" --timeout 5") != 1 {

@@ -20,10 +20,10 @@ import (
 
 const (
 	// WebCertificate and WebKey are the managed certificate andaru-web serves instead of its bootstrap one.
-	WebCertificate     = "/run/andaru-web/tls.crt"
-	WebKey             = "/run/andaru-web/tls.key"
-	webReloadPending   = "/run/andaru-web/.reload-pending"
-	webUnit            = "andaru-web.service"
+	WebCertificate   = "/run/andaru-web/tls.crt"
+	WebKey           = "/run/andaru-web/tls.key"
+	webReloadPending = "/run/andaru-web/.reload-pending"
+	webUnit          = "andaru-web.service"
 	// MaxCertSyncBytes is the shared size bound for staged cert-sync payloads (covers up to 64 add-ons with max PEM chains).
 	MaxCertSyncBytes = 16 << 20
 )

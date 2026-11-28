@@ -543,8 +543,19 @@ func TestIPsecSecurityValidation(t *testing.T) {
 	rw2.Auth.LocalID = "gw2.example.com"
 	rw2.Auth.PSKRef = &secretReference{Secret: "P_B"}
 	rw2.Auth.EAPUsers = []ipsecEAPUser{{Username: "alice", PasswordRef: secretReference{Secret: "E2"}}}
+	rw2.Enabled = false // usernames stay unique even across a disabled connection
 	dEAP.VPN.IPsec = append(dEAP.VPN.IPsec, rw2)
 	if errs := validateIPsec(dEAP); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/1/auth/eapUsers/0/username" {
 		t.Errorf("cross-connection EAP username collision accepted: %+v", errs)
+	}
+	// A second enabled EAP connection would admit the first's users, so it is refused.
+	dEAP.VPN.IPsec[1].Enabled = true
+	dEAP.VPN.IPsec[1].Auth.EAPUsers = []ipsecEAPUser{{Username: "bob", PasswordRef: secretReference{Secret: "E2"}}}
+	if errs := validateIPsec(dEAP); len(errs) != 1 || errs[0].Path != "/vpn/ipsec/1/auth/remoteType" {
+		t.Errorf("second enabled EAP connection accepted: %+v", errs)
+	}
+	// DNs that differ only in case or spacing are one strongSwan identity.
+	if normalizeSwanIdentity("C=US, CN=gw") != normalizeSwanIdentity("asn1dn:c=US,cn=gw") {
+		t.Error("DN identities not normalized like strongSwan")
 	}
 }

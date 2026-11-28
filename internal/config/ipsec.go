@@ -183,6 +183,7 @@ func overlapsReservedPool(p netip.Prefix) bool {
 	}
 	return false
 }
+
 // normalizeSwanIdentity maps equivalent strongSwan identity spellings (such as "gw.example.com", "@gw.example.com",
 // "fqdn:gw.example.com", "ipv4:...", "@@user", "email:...", "rfc822:...", "userfqdn:...", "dn:...", "asn1dn:...")
 // onto one canonical key so PSK identity-pair collision detection matches strongSwan's parser.
@@ -207,9 +208,9 @@ func normalizeSwanIdentity(s string) string {
 	case strings.HasPrefix(lower, "userfqdn:"):
 		return "rfc822:" + strings.ToLower(s[9:])
 	case strings.HasPrefix(lower, "asn1dn:"):
-		return "dn:" + s[7:]
+		return normalizeDN(s[7:])
 	case strings.HasPrefix(lower, "dn:"):
-		return "dn:" + s[3:]
+		return normalizeDN(s[3:])
 	case strings.HasPrefix(lower, "keyid:"):
 		return "keyid:" + strings.ToLower(s[6:])
 	case strings.HasPrefix(s, "@@"):
@@ -221,12 +222,24 @@ func normalizeSwanIdentity(s string) string {
 		return "ip:" + a.String()
 	}
 	if strings.ContainsRune(s, '=') {
-		return "dn:" + s
+		return normalizeDN(s)
 	}
 	if strings.ContainsRune(s, '@') {
 		return "rfc822:" + lower
 	}
 	return "fqdn:" + lower
+}
+
+// normalizeDN drops spaces around separators and folds case, as strongSwan's ASN.1 DN parse and comparison do;
+// folding value case too errs toward reporting a collision.
+// shortcut: escaped commas or equals signs inside values are not parsed; use pkix if such IDs appear.
+func normalizeDN(s string) string {
+	parts := strings.Split(s, ",")
+	for i, part := range parts {
+		k, v, _ := strings.Cut(part, "=")
+		parts[i] = strings.TrimSpace(k) + "=" + strings.TrimSpace(v)
+	}
+	return "dn:" + strings.ToLower(strings.Join(parts, ","))
 }
 
 func validateIPsec(d *declaration) []FieldError {
@@ -251,6 +264,7 @@ func validateIPsec(d *declaration) []FieldError {
 	certs := certificateIndex(d)
 	seen := map[string]bool{}
 	seenEAP := map[string]bool{}
+	eapConn := false
 	pskPairs := map[string]string{}
 	for i := range d.VPN.IPsec {
 		c := &d.VPN.IPsec[i]
@@ -426,6 +440,11 @@ func validateIPsec(d *declaration) []FieldError {
 			if len(a.EAPUsers) == 0 {
 				bad(ap+"/eapUsers", "EAP-MSCHAPv2 authentication needs at least one user.")
 			}
+			// strongSwan's local EAP secrets cannot be scoped to one connection: a second one would admit the first's users.
+			if c.Enabled && eapConn {
+				bad(ap+"/remoteType", "Only one enabled connection may use EAP-MSCHAPv2 authentication.")
+			}
+			eapConn = eapConn || c.Enabled
 		} else if len(a.EAPUsers) > 0 {
 			bad(ap+"/eapUsers", "EAP users are used only with eap-mschapv2 authentication.")
 		}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -35,22 +36,8 @@ const uuidPattern = `[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 // ipsecConnName is a connection ID, which names its connection, child and IKE SAs in swanctl.conf.
 var ipsecConnName = regexp.MustCompile(`^ips_` + uuidPattern + `$`)
 
-// ipsecSubConnName also matches per-EAP-user connection sections ("<ips_uuid>-eap-<n>").
-var ipsecSubConnName = regexp.MustCompile(`^ips_` + uuidPattern + `(?:-eap-[0-9]+)?$`)
-
 // ValidIPsecConnection says whether name is a connection swanctl.conf may hold.
 func ValidIPsecConnection(name string) bool { return ipsecConnName.MatchString(name) }
-
-// ipsecConnOwner maps either "<ips_uuid>" or "<ips_uuid>-eap-<n>" back to its owning connection ID.
-func ipsecConnOwner(name string) string {
-	if ipsecConnName.MatchString(name) {
-		return name
-	}
-	if i := strings.Index(name, "-eap-"); i > 0 && ipsecSubConnName.MatchString(name) {
-		return name[:i]
-	}
-	return ""
-}
 
 func isIPsecFile(path string) bool { return path == ipsecConf || ipsecCredential.MatchString(path) }
 
@@ -148,7 +135,9 @@ func ipsecConnectionFingerprints(files []placed) (digests map[string]string, sta
 func ipsecBlockOwner(section, name string) string {
 	switch section {
 	case "connections":
-		return ipsecConnOwner(name)
+		if ipsecConnName.MatchString(name) {
+			return name
+		}
 	case "pools":
 		if i := strings.LastIndexByte(name, '-'); i > 0 && ipsecConnName.MatchString(name[:i]) {
 			return name[:i]
@@ -194,17 +183,8 @@ func (r Realizer) ipsecCredentialDirs(ctx context.Context) error {
 
 // removeIPsecRuntimeFiles wipes swanctl.conf, pending markers, and credential directories under ipsecDir.
 func (r Realizer) removeIPsecRuntimeFiles() error {
-	for _, path := range []string{ipsecConf, ipsecReloadPending, ipsecTerminatePending} {
-		if err := os.Remove(r.Root + path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-	}
-	for _, dir := range []string{"x509", "x509ca", "private"} {
-		if err := os.RemoveAll(r.Root + ipsecDir + "/" + dir); err != nil {
-			return err
-		}
-	}
-	return nil
+	// The directory goes too, so later applies without IPsec see a host where it never ran.
+	return os.RemoveAll(r.Root + ipsecDir)
 }
 
 // cleanupIPsecOnTeardownIfPresent stops strongSwan (including queued or activating starts) and wipes /run/andaru-ipsec
@@ -291,7 +271,7 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 		}
 	}
 	if len(pendingSet) > 0 {
-		if err := r.writePendingTerminations(slices.Sorted(keysOf(pendingSet))); err != nil {
+		if err := r.writePendingTerminations(slices.Sorted(maps.Keys(pendingSet))); err != nil {
 			return err
 		}
 	}
@@ -308,28 +288,23 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 	failedOwners := map[string]bool{}
 	var termErr error
 	for _, sa := range sas {
-		owner := sa.Name
-		connName := sa.ConnName
-		if connName == "" {
-			connName = sa.Name
-		}
-		_, kept := newFP[owner]
-		needsEnd := !kept || pendingSet[owner]
-		if needsEnd && !slices.Contains(ended, connName) {
-			ended = append(ended, connName)
-			if _, err := r.Run(ctx, swanctl, "--terminate", "--ike", connName, "--timeout", "5"); err != nil {
-				failedOwners[owner] = true
+		_, kept := newFP[sa.Name]
+		if (!kept || pendingSet[sa.Name]) && !slices.Contains(ended, sa.Name) {
+			ended = append(ended, sa.Name)
+			// --force deletes the SA locally without waiting on the peer, so a dead peer cannot fail the apply.
+			if _, err := r.Run(ctx, swanctl, "--terminate", "--ike", sa.Name, "--force", "--timeout", "5"); err != nil {
+				failedOwners[sa.Name] = true
 				if termErr == nil {
-					termErr = fmt.Errorf("end the SAs of IPsec connection %s: %w", connName, err)
+					termErr = fmt.Errorf("end the SAs of IPsec connection %s: %w", sa.Name, err)
 				}
 				continue
 			}
-			if kept && newStart[owner] == "start" && !slices.Contains(reinit, owner) {
-				reinit = append(reinit, owner)
+			if kept && newStart[sa.Name] == "start" {
+				reinit = append(reinit, sa.Name)
 			}
 		}
 	}
-	if err := r.writePendingTerminations(slices.Sorted(keysOf(failedOwners))); err != nil && termErr == nil {
+	if err := r.writePendingTerminations(slices.Sorted(maps.Keys(failedOwners))); err != nil && termErr == nil {
 		termErr = err
 	}
 	if termErr != nil {
@@ -342,16 +317,6 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 		}
 	}
 	return nil
-}
-
-func keysOf(m map[string]bool) func(func(string) bool) {
-	return func(yield func(string) bool) {
-		for k := range m {
-			if !yield(k) {
-				return
-			}
-		}
-	}
 }
 
 // bootIPsec starts strongSwan behind the boot that placed its files: strongswan.service is ordered after
@@ -374,10 +339,9 @@ type IPsecStatus struct {
 	SAs           []IPsecSA `json:"sas"`
 }
 
-// IPsecSA is one IKE SA; Name is its owning connection ID and ConnName is the raw swanctl section name.
+// IPsecSA is one IKE SA; Name is its connection's.
 type IPsecSA struct {
 	Name           string         `json:"name"`
-	ConnName       string         `json:"-"`
 	UniqueID       string         `json:"uniqueId"`
 	State          string         `json:"state"`
 	LocalHost      string         `json:"localHost"`
@@ -419,13 +383,7 @@ func ReadIPsecStatus(ctx context.Context, run func(ctx context.Context, name str
 			continue
 		}
 		for _, c := range event.kids {
-			owner := ipsecConnOwner(c.name)
-			if owner == "" {
-				owner = c.name
-			}
-			if !slices.Contains(status.Connections, owner) {
-				status.Connections = append(status.Connections, owner)
-			}
+			status.Connections = append(status.Connections, c.name)
 		}
 	}
 	if out, err = run(ctx, swanctl, "--list-sas", "--pretty"); err != nil {
@@ -515,11 +473,7 @@ func ParseSwanctlSAs(data []byte) ([]IPsecSA, error) {
 			continue
 		}
 		for _, ike := range event.kids {
-			owner := ipsecConnOwner(ike.name)
-			if owner == "" {
-				owner = ike.name
-			}
-			sa := IPsecSA{Name: owner, ConnName: ike.name, UniqueID: ike.values["uniqueid"], State: ike.values["state"], LocalHost: ike.values["local-host"],
+			sa := IPsecSA{Name: ike.name, UniqueID: ike.values["uniqueid"], State: ike.values["state"], LocalHost: ike.values["local-host"],
 				RemoteHost: ike.values["remote-host"], EstablishedSec: number(ike.values["established"]), ChildSAs: []IPsecChildSA{}}
 			for _, section := range ike.kids {
 				if section.name != "child-sas" {
@@ -544,8 +498,8 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// ControlIPsec initiates a connection's CHILD_SA, which brings its IKE SA up first, or terminates its IKE SA(s)
-// (including any per-EAP-user sub-connections) with their CHILD_SAs. It takes no lock: strongSwan's own state is all it changes.
+// ControlIPsec initiates a connection's CHILD_SA, which brings its IKE SA up first, or terminates its IKE SA with its
+// CHILD_SAs. It takes no lock: strongSwan's own state is all it changes.
 func ControlIPsec(ctx context.Context, run func(ctx context.Context, name string, args ...string) ([]byte, error), action, name string) error {
 	if !ValidIPsecConnection(name) {
 		return fmt.Errorf("invalid IPsec connection %q", name)
@@ -555,32 +509,8 @@ func ControlIPsec(ctx context.Context, run func(ctx context.Context, name string
 		_, err := run(ctx, swanctl, "--initiate", "--child", name, "--timeout", "15")
 		return err
 	case "terminate":
-		// Terminate any per-EAP-user sub-connection SAs owned by this connection ID as well as exact matches.
-		var targets []string
-		if out, err := run(ctx, swanctl, "--list-sas", "--pretty"); err == nil {
-			if sas, perr := ParseSwanctlSAs(out); perr == nil {
-				for _, sa := range sas {
-					if sa.Name == name {
-						cn := sa.ConnName
-						if cn == "" {
-							cn = sa.Name
-						}
-						if !slices.Contains(targets, cn) {
-							targets = append(targets, cn)
-						}
-					}
-				}
-			}
-		}
-		if len(targets) == 0 {
-			targets = []string{name}
-		}
-		for _, target := range targets {
-			if _, err := run(ctx, swanctl, "--terminate", "--ike", target, "--timeout", "15"); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := run(ctx, swanctl, "--terminate", "--ike", name, "--timeout", "15")
+		return err
 	}
 	return fmt.Errorf("unknown IPsec action %q", action)
 }

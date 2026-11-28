@@ -21,7 +21,7 @@ const IPsecConfig = IPsecDir + "swanctl.conf"
 // preventing strongSwan from falling back to its built-in default suite (which includes 3DES and SHA1).
 const (
 	defaultIPsecIKEProposals = "aes256gcm16-prfsha384-ecp384,aes256gcm16-prfsha256-curve25519,aes256-sha256-modp2048"
-	defaultIPsecESPProposals = "aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048"
+	defaultIPsecESPProposals = "aes256gcm16-ecp384,aes256gcm16-curve25519,aes256-sha256-modp2048,aes256gcm16,aes256-sha256"
 )
 
 type ipsecConnection struct {
@@ -174,12 +174,12 @@ func (r *renderer) ipsec() {
 		if c.Auth.LocalType == "cert" {
 			local = append(local, "certs = "+r.ipsecCertificate(c.Auth.LocalCertID, path, credentials))
 		}
-		remoteBase := []string{"auth = " + swanAuth(c.Auth.RemoteType)}
+		remote := []string{"auth = " + swanAuth(c.Auth.RemoteType)}
 		if c.Auth.RemoteID != "" {
-			remoteBase = append(remoteBase, "id = "+quote(c.Auth.RemoteID))
+			remote = append(remote, "id = "+quote(c.Auth.RemoteID))
 		}
 		if c.Auth.RemoteType == "cert" {
-			remoteBase = append(remoteBase, "cacerts = "+r.ipsecCA(c.Auth.CAID, path, credentials))
+			remote = append(remote, "cacerts = "+r.ipsecCA(c.Auth.CAID, path, credentials))
 		}
 		everything := "0.0.0.0/0,::/0"
 		localTS, remoteTS := everything, everything
@@ -209,24 +209,13 @@ func (r *renderer) ipsec() {
 			}
 		}
 		child = append(child, "start_action = "+startAction, "dpd_action = "+map[string]string{"trap": "trap", "start": "restart", "none": "clear"}[startAction])
-		localBlock := block("local", local...)
-		childrenBlock := block("children", block(c.ID, child...))
-		if c.Auth.RemoteType == "eap-mschapv2" && len(c.Auth.EAPUsers) > 0 {
-			// Bind each EAP user explicitly via eap_id so users listed on one connection can never authenticate
-			// into another connection's zone, virtual pool, or XFRM interface.
-			for j, u := range c.Auth.EAPUsers {
-				connName := c.ID
-				if len(c.Auth.EAPUsers) > 1 {
-					connName = fmt.Sprintf("%s-eap-%d", c.ID, j)
-				}
-				remote := append(slices.Clone(remoteBase), "eap_id = "+quote(u.Username))
-				entry := append(slices.Clone(conn), localBlock, block("remote", remote...), childrenBlock)
-				connections = append(connections, block(connName, entry...))
-			}
-		} else {
-			entry := append(slices.Clone(conn), localBlock, block("remote", remoteBase...), childrenBlock)
-			connections = append(connections, block(c.ID, entry...))
+		if c.Auth.RemoteType == "eap-mschapv2" {
+			// Local EAP secrets have no per-connection scope in strongSwan, and a fixed eap_id skips the
+			// EAP-Identity exchange; validation therefore allows a single eap-mschapv2 connection.
+			remote = append(remote, "eap_id = %any")
 		}
+		conn = append(conn, block("local", local...), block("remote", remote...), block("children", block(c.ID, child...)))
+		connections = append(connections, block(c.ID, conn...))
 
 		add := func(name, field string, ref secretRef, ids ...string) {
 			secret = true
