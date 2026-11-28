@@ -192,13 +192,13 @@ func providerAPI(t *testing.T, dns *fakeDNS) *httptest.Server {
 		// cloudflare
 		case r.Method == "GET" && p == "/cf/zones":
 			if r.URL.Query().Get("name") == "example.com" {
-				writeJSONTest(w, 200, map[string]any{"result": []any{map[string]string{"id": "z1"}}})
+				writeJSONTest(w, 200, map[string]any{"success": true, "result": []any{map[string]string{"id": "z1"}}})
 			} else {
-				writeJSONTest(w, 200, map[string]any{"result": []any{}})
+				writeJSONTest(w, 200, map[string]any{"success": true, "result": []any{}})
 			}
 		case r.Method == "POST" && p == "/cf/zones/z1/dns_records":
 			dns.add(str("name"), str("content"))
-			writeJSONTest(w, 200, map[string]any{"result": map[string]string{"id": "r1"}})
+			writeJSONTest(w, 200, map[string]any{"success": true, "result": map[string]string{"id": "r1"}})
 		case r.Method == "DELETE" && p == "/cf/zones/z1/dns_records/r1":
 			dns.deletes++
 		// hetzner
@@ -284,7 +284,7 @@ func TestIssueDNS01Providers(t *testing.T) {
 		{DNS01{Provider: "hetzner", APIToken: "hz"}, "Auth-Api-Token", "hz", 1},
 		{DNS01{Provider: "digitalocean", APIToken: "do"}, "Authorization", "Bearer do", 1},
 		{DNS01{Provider: "porkbun", APIKey: "pk", SecretKey: "sk"}, "", "", 1},
-		{DNS01{Provider: "acme-dns", Username: "user", Password: "pass", Subdomain: "sub"}, "X-Api-User", "user", 0},
+		{DNS01{Provider: "acme-dns", Username: "user", Password: "pass", Subdomain: "sub", AllowPrivateIP: true}, "X-Api-User", "user", 0},
 		{DNS01{Provider: "webhook", Authorization: "Bearer hook", AllowPrivateIP: true}, "Authorization", "Bearer hook", 1},
 	}
 	for _, c := range cases {
@@ -335,7 +335,7 @@ func TestWebhookRefusesPrivateAddresses(t *testing.T) {
 	api := providerAPI(t, dns)
 	ca := newMockCA(t, key)
 	ca.txt = dns.txt
-	p := DNS01{Provider: "webhook", URL: api.URL + "/hook", Authorization: "Bearer hook"}
+	p := DNS01{Provider: "webhook", URL: api.URL + "/hook", Authorization: "Bearer secret-webhook-token"}
 	job, _ := newJob(t, keyPEM, ca.url("/directory"), []string{"edge.example.com"}, Challenge{Type: "dns-01", DNS01: &p})
 	res := (&Issuer{LookupTXT: dns.lookup, Poll: 10 * time.Millisecond}).Issue(context.Background(), job)
 	if res.OK || !strings.Contains(res.Error, "not a public address") {
@@ -344,15 +344,54 @@ func TestWebhookRefusesPrivateAddresses(t *testing.T) {
 	if len(dns.headers) != 0 {
 		t.Fatal("the webhook was reached")
 	}
-	if strings.Contains(res.Error, "hook") && strings.Contains(res.Error, "Bearer") {
+	if strings.Contains(res.Error, "secret-webhook-token") || strings.Contains(res.Error, "Bearer") {
 		t.Fatal("error leaks the authorization")
+	}
+	// acme-dns also refuses private/loopback addresses.
+	p2 := DNS01{Provider: "acme-dns", ServerURL: api.URL + "/acmedns", Username: "user", Password: "secret-password", Subdomain: "sub"}
+	job2, _ := newJob(t, keyPEM, ca.url("/directory"), []string{"example.com"}, Challenge{Type: "dns-01", DNS01: &p2})
+	res2 := (&Issuer{LookupTXT: dns.lookup, Poll: 10 * time.Millisecond}).Issue(context.Background(), job2)
+	if res2.OK || !strings.Contains(res2.Error, "not a public address") || strings.Contains(res2.Error, "secret-password") {
+		t.Fatalf("acme-dns private IP: %+v", res2)
+	}
+}
+
+func TestRegisterExistingAccount(t *testing.T) {
+	key, keyPEM := accountKey(t)
+	ca := newMockCA(t, key)
+	ca.existingAccount = true
+	ca.http01 = freeAddr(t)
+	job, leaf := newJob(t, keyPEM, ca.url("/directory"), []string{"edge.example.com"}, Challenge{Type: "http-01"})
+	res := (&Issuer{HTTP01Addr: ca.http01}).Issue(context.Background(), job)
+	checkIssued(t, res, leaf, job.Domains)
+	if res.AccountURI != ca.url("/acct/1") {
+		t.Fatalf("account URI = %q", res.AccountURI)
+	}
+}
+
+func TestRejectsUnrequestedAuthzDomain(t *testing.T) {
+	key, keyPEM := accountKey(t)
+	ca := newMockCA(t, key)
+	ca.spoofAuthzDomain = "victim.example.org"
+	dns := &fakeDNS{}
+	api := providerAPI(t, dns)
+	ca.txt = dns.txt
+	p := DNS01{Provider: "cloudflare", APIToken: "cf"}
+	job, _ := newJob(t, keyPEM, ca.url("/directory"), []string{"edge.example.com"}, Challenge{Type: "dns-01", DNS01: &p})
+	res := (&Issuer{LookupTXT: dns.lookup, Poll: 10 * time.Millisecond, Endpoints: map[string]string{"cloudflare": api.URL + "/cf"}}).Issue(context.Background(), job)
+	if res.OK || !strings.Contains(res.Error, "unrequested domain") {
+		t.Fatalf("expected unrequested domain rejection, got %+v", res)
+	}
+	if len(dns.headers) != 0 {
+		t.Fatal("DNS provider was called for an unrequested domain")
 	}
 }
 
 func TestPublic(t *testing.T) {
 	for addr, want := range map[string]bool{"8.8.8.8": true, "2001:4860:4860::8888": true, "127.0.0.1": false, "::1": false, "10.1.2.3": false,
-		"172.16.0.1": false, "192.168.1.1": false, "169.254.169.254": false, "100.64.0.1": false, "fd00::1": false, "fe80::1": false,
-		"224.0.0.1": false, "ff02::1": false, "0.0.0.0": false, "::ffff:127.0.0.1": false, "::ffff:10.0.0.1": false} {
+		"172.16.0.1": false, "192.168.1.1": false, "169.254.169.254": false, "100.64.0.1": false, "0.0.0.1": false, "192.0.0.1": false,
+		"192.0.2.1": false, "198.18.0.1": false, "240.0.0.1": false, "fd00::1": false, "fe80::1": false, "64:ff9b::127.0.0.1": false,
+		"2001:db8::1": false, "2002::1": false, "224.0.0.1": false, "ff02::1": false, "0.0.0.0": false, "::ffff:127.0.0.1": false, "::ffff:10.0.0.1": false} {
 		if got := Public(netip.MustParseAddr(addr)); got != want {
 			t.Errorf("Public(%s) = %v", addr, got)
 		}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -86,16 +87,21 @@ func (is *Issuer) propagated(ctx context.Context, p DNS01, fqdn, value string) e
 	if poll <= 0 {
 		poll = 2 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, limit)
+	pctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
 	for {
-		if records, err := lookup(ctx, fqdn); err == nil && slices.Contains(records, value) {
+		if records, err := lookup(pctx, fqdn); err == nil && slices.Contains(records, value) {
 			return nil
 		}
 		select {
-		case <-ctx.Done():
+		case <-pctx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("the TXT record of %s was not visible within %s", fqdn, limit)
-		case <-time.After(poll):
+		case <-ticker.C:
 		}
 	}
 }
@@ -116,7 +122,7 @@ func (is *Issuer) providerClient(p DNS01) *http.Client {
 	} else {
 		t = http.DefaultTransport.(*http.Transport).Clone()
 	}
-	if p.Provider == "webhook" && !p.AllowPrivateIP {
+	if (p.Provider == "webhook" || p.Provider == "acme-dns") && !p.AllowPrivateIP {
 		t.Proxy = nil // a proxy would dial for us, past the check
 		t.DialContext = (&net.Dialer{Timeout: 10 * time.Second, Control: publicOnly}).DialContext
 	}
@@ -138,13 +144,37 @@ func publicOnly(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+var nonPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // "this" network (RFC 1122)
+	netip.MustParsePrefix("100.64.0.0/10"),   // shared address space / CGNAT (RFC 6598)
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments (RFC 6890)
+	netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1 (RFC 5737)
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking (RFC 2544)
+	netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2 (RFC 5737)
+	netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3 (RFC 5737)
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved (RFC 1112)
+	netip.MustParsePrefix("64:ff9b::/96"),    // NAT64 well-known (RFC 6052)
+	netip.MustParsePrefix("64:ff9b:1::/48"),  // NAT64 local-use (RFC 8215)
+	netip.MustParsePrefix("100::/64"),        // discard-only (RFC 6666)
+	netip.MustParsePrefix("2001::/32"),       // Teredo (RFC 4380)
+	netip.MustParsePrefix("2001:db8::/32"),   // documentation (RFC 3849)
+	netip.MustParsePrefix("2002::/16"),       // 6to4 (RFC 3056)
+	netip.MustParsePrefix("::/96"),           // deprecated IPv4-compatible (RFC 4291)
+}
 
-// Public reports whether a is a public unicast address: not loopback, link-local, private (RFC 1918 or ULA),
-// shared (CGNAT), multicast or unspecified.
+// Public reports whether a is a globally routable public unicast address: not loopback, link-local,
+// private (RFC 1918 or ULA), shared (CGNAT), NAT64, reserved, documentation, multicast, or unspecified.
 func Public(a netip.Addr) bool {
 	a = a.Unmap()
-	return a.IsGlobalUnicast() && !a.IsPrivate() && !a.IsLoopback() && !a.IsLinkLocalUnicast() && !a.IsMulticast() && !cgnat.Contains(a)
+	if !a.IsGlobalUnicast() || a.IsPrivate() {
+		return false
+	}
+	for _, p := range nonPublicPrefixes {
+		if p.Contains(a) {
+			return false
+		}
+	}
+	return true
 }
 
 // call sends one JSON request and decodes a JSON answer into out, when given; its errors hold no credential.
@@ -210,14 +240,15 @@ func (is *Issuer) cloudflare(ctx context.Context, client *http.Client, p DNS01, 
 	zoneID := ""
 	for _, z := range zones(fqdn) {
 		var out struct {
-			Result []struct {
+			Success bool `json:"success"`
+			Result  []struct {
 				ID string `json:"id"`
 			} `json:"result"`
 		}
 		if _, err := call(ctx, client, http.MethodGet, base+"/zones?name="+url.QueryEscape(z), auth, nil, &out); err != nil {
 			return nil, fmt.Errorf("cloudflare: find the zone: %w", err)
 		}
-		if len(out.Result) > 0 {
+		if out.Success && len(out.Result) > 0 && out.Result[0].ID != "" {
 			zoneID = out.Result[0].ID
 			break
 		}
@@ -226,13 +257,17 @@ func (is *Issuer) cloudflare(ctx context.Context, client *http.Client, p DNS01, 
 		return nil, fmt.Errorf("cloudflare: no zone holds %s", fqdn)
 	}
 	var created struct {
-		Result struct {
+		Success bool `json:"success"`
+		Result  struct {
 			ID string `json:"id"`
 		} `json:"result"`
 	}
 	if _, err := call(ctx, client, http.MethodPost, base+"/zones/"+url.PathEscape(zoneID)+"/dns_records", auth,
 		map[string]any{"type": "TXT", "name": fqdn, "content": value, "ttl": txtTTL}, &created); err != nil {
 		return nil, fmt.Errorf("cloudflare: create the TXT record: %w", err)
+	}
+	if !created.Success || created.Result.ID == "" {
+		return nil, errors.New("cloudflare: create the TXT record: missing record ID")
 	}
 	return func(ctx context.Context) error {
 		_, err := call(ctx, client, http.MethodDelete, base+"/zones/"+url.PathEscape(zoneID)+"/dns_records/"+url.PathEscape(created.Result.ID), auth, nil, nil)
@@ -246,8 +281,7 @@ func (is *Issuer) hetzner(ctx context.Context, client *http.Client, p DNS01, fqd
 	for _, z := range zones(fqdn) {
 		var out struct {
 			Zones []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
+				ID string `json:"id"`
 			} `json:"zones"`
 		}
 		status, err := call(ctx, client, http.MethodGet, base+"/zones?name="+url.QueryEscape(z), auth, nil, &out)
@@ -257,7 +291,7 @@ func (is *Issuer) hetzner(ctx context.Context, client *http.Client, p DNS01, fqd
 		if err != nil {
 			return nil, fmt.Errorf("hetzner: find the zone: %w", err)
 		}
-		if len(out.Zones) > 0 {
+		if len(out.Zones) > 0 && out.Zones[0].ID != "" {
 			zoneID, zoneName = out.Zones[0].ID, z
 			break
 		}
@@ -273,6 +307,9 @@ func (is *Issuer) hetzner(ctx context.Context, client *http.Client, p DNS01, fqd
 	if _, err := call(ctx, client, http.MethodPost, base+"/records", auth,
 		map[string]any{"zone_id": zoneID, "type": "TXT", "name": relative(fqdn, zoneName), "value": value, "ttl": txtTTL}, &created); err != nil {
 		return nil, fmt.Errorf("hetzner: create the TXT record: %w", err)
+	}
+	if created.Record.ID == "" {
+		return nil, errors.New("hetzner: create the TXT record: missing record ID")
 	}
 	return func(ctx context.Context) error {
 		_, err := call(ctx, client, http.MethodDelete, base+"/records/"+url.PathEscape(created.Record.ID), auth, nil, nil)
@@ -306,6 +343,9 @@ func (is *Issuer) digitalocean(ctx context.Context, client *http.Client, p DNS01
 		map[string]any{"type": "TXT", "name": relative(fqdn, domain), "data": value, "ttl": txtTTL}, &created); err != nil {
 		return nil, fmt.Errorf("digitalocean: create the TXT record: %w", err)
 	}
+	if created.Record.ID == 0 {
+		return nil, errors.New("digitalocean: create the TXT record: missing record ID")
+	}
 	return func(ctx context.Context) error {
 		_, err := call(ctx, client, http.MethodDelete, fmt.Sprintf("%s/domains/%s/records/%d", base, url.PathEscape(domain), created.Record.ID), auth, nil, nil)
 		return err
@@ -316,9 +356,7 @@ func (is *Issuer) porkbun(ctx context.Context, client *http.Client, p DNS01, fqd
 	base := is.endpoint("porkbun")
 	keys := func(extra map[string]any) map[string]any {
 		m := map[string]any{"apikey": p.APIKey, "secretapikey": p.SecretKey}
-		for k, v := range extra {
-			m[k] = v
-		}
+		maps.Copy(m, extra)
 		return m
 	}
 	type answer struct {
@@ -350,6 +388,9 @@ func (is *Issuer) porkbun(ctx context.Context, client *http.Client, p DNS01, fqd
 		return nil, fmt.Errorf("porkbun: create the TXT record: %w", err)
 	}
 	id := strings.Trim(string(created.ID), `"`)
+	if id == "" || id == "null" {
+		return nil, errors.New("porkbun: create the TXT record: missing record ID")
+	}
 	return func(ctx context.Context) error {
 		_, err := call(ctx, client, http.MethodPost, base+"/dns/delete/"+url.PathEscape(domain)+"/"+url.PathEscape(id), nil, keys(nil), nil)
 		return err

@@ -95,6 +95,18 @@ func TestACMEAccountKeyGeneratedAndKept(t *testing.T) {
 	if a.AccountKeyRef.Secret != ACMESecretName(id, "key") || a.EABHMACRef == nil || a.EABHMACRef.Secret != "acme_eab" || s.Secrets.Scopes["core"]["acme_eab"].Value != "aGVsbG8" {
 		t.Fatalf("account after replace %+v", a)
 	}
+	// Clearing EAB drops eabHmacRef and prunes the orphaned EAB secret from secrets.db.
+	s, err = acmeReplace(t, s, "acme.accounts", id, map[string]any{"name": "le-no-eab", "directoryUrl": "https://acme.example.com/dir", "email": "ops@example.com"}, "11")
+	if err != nil {
+		t.Fatalf("clear EAB: %s", faultText(err))
+	}
+	a = s.Config.ACME.Accounts[0]
+	if a.EABKeyID != "" || a.EABHMACRef != nil {
+		t.Fatalf("EAB not cleared: %+v", a)
+	}
+	if _, exists := s.Secrets.Scopes["core"]["acme_eab"]; exists {
+		t.Fatal("orphaned EAB secret was not pruned")
+	}
 	// A key ID without its HMAC key, or a plain-http directory, is refused.
 	if _, _, err := acmeCreate(t, &s, "acme.accounts", map[string]any{"name": "x", "directoryUrl": "https://ca.example/dir", "email": "a@b.c", "eabKeyId": "kid"}, "11"); !strings.Contains(faultText(err), "eabKeyId") {
 		t.Fatalf("EAB without HMAC: %s", faultText(err))
@@ -133,6 +145,14 @@ func TestACMEOrderSecretsAndWildcards(t *testing.T) {
 	hz["challenge"] = map[string]any{"type": "dns-01", "dns01": map[string]any{"provider": "hetzner", "hetzner": map[string]any{}}}
 	if _, err := acmeReplace(t, s, "acme.orders", orderID, hz, "11"); !strings.Contains(faultText(err), "required") {
 		t.Fatalf("provider without secret: %s", faultText(err))
+	}
+	// Switching DNS provider prunes the old provider's orphaned secret.
+	hzOK := dnsOrder(accountID, "example.com")
+	hzOK["challenge"] = map[string]any{"type": "dns-01", "dns01": map[string]any{"provider": "hetzner", "hetzner": map[string]any{"apiTokenRef": secretSet("acme_hz_ok", "hz-token")}}}
+	if s2, err := acmeReplace(t, s, "acme.orders", orderID, hzOK, "11"); err != nil {
+		t.Fatalf("switch provider: %s", faultText(err))
+	} else if _, exists := s2.Secrets.Scopes["core"]["acme_cf"]; exists {
+		t.Fatal("old provider secret was not pruned on switch")
 	}
 	// A wildcard cannot be proved over HTTP-01.
 	if _, _, err := acmeCreate(t, &s, "acme.orders", httpOrder(accountID, s.Config.Segments[0].ID, "*.example.com"), "11"); !strings.Contains(faultText(err), "wildcard") {

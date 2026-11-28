@@ -586,6 +586,13 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 		if op.Op == "order" {
 			continue
 		}
+		if op.Op == "replace" {
+			for _, s := range acmeSecrets(before[key]) {
+				if s.ref != nil {
+					droppedKeys = append(droppedKeys, s.ref.Secret)
+				}
+			}
+		}
 		value := values[i]
 		resolveReferences(value, op.Collection, labels)
 		scope := secretScopeForOp(op.Collection, key.ID)
@@ -643,7 +650,10 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 					value["password"] = old.Password
 				}
 			} else if ref := acmeRefAt(before[key], f.path); ref != nil && op.Op == "replace" {
-				f.parent[f.name] = ref // a replace that leaves an ACME secret out keeps it
+				// Keep omitted ACME secrets on replace, except eabHmacRef when EAB is cleared.
+				if f.path != "/eabHmacRef" || value["eabKeyId"] != nil && value["eabKeyId"] != "" {
+					f.parent[f.name] = ref
+				}
 			} else if ref := keyRefOf(before[key]); ref != nil && op.Op == "replace" {
 				value["keyRef"] = ref // a replace that leaves the key out keeps it: a CA never loses its key by a rename
 			} else if op.Op == "create" && (op.Collection == "pki.certificates" || op.Collection == "pki.tlsCryptKeys") {

@@ -143,7 +143,7 @@ func newACMEBench(t *testing.T, order config.ACMEOrder) *acmeBench {
 func dnsTestOrder() config.ACMEOrder {
 	return config.ACMEOrder{ID: testOrderID, Name: "edge", AccountID: "aca_1", Domains: []string{"edge.example.com", "www.example.com"}, KeyAlgorithm: "ecdsa-p256",
 		RenewBeforeDays: 30, Enabled: true, Challenge: "dns-01", DNS01: &acme.DNS01{Provider: "cloudflare", APIToken: "cf-secret"},
-		Account: config.ACMEAccount{ID: "aca_1", DirectoryURL: "https://ca.example/dir", Email: "a@example.com", Key: "ACCOUNT KEY"}}
+		Account: config.ACMEAccount{ID: "aca_1", DirectoryURL: "https://ca.example/dir", Email: "a@example.com", Key: "-----BEGIN PRIVATE KEY-----\nTEST-ACCOUNT-KEY\n-----END PRIVATE KEY-----\n"}}
 }
 
 func (b *acmeBench) state(t *testing.T) acmeStatusItem {
@@ -174,7 +174,8 @@ func TestACMEInitialIssuanceBindsCertificate(t *testing.T) {
 		t.Fatalf("saved certificate and key: %v", err)
 	}
 	job := b.jobs[0]
-	if job.DirectoryURL != "https://ca.example/dir" || job.StagingTest || job.Challenge.DNS01.APIToken != "cf-secret" || strings.Contains(string(mustJSON(t, job)), "PRIVATE KEY") {
+	rawJob := string(mustJSON(t, job))
+	if job.DirectoryURL != "https://ca.example/dir" || job.StagingTest || job.Challenge.DNS01.APIToken != "cf-secret" || strings.Contains(rawJob, saved.keyPEM) {
 		t.Fatalf("job %+v", job)
 	}
 	if !slices.Equal(b.renewed, []string{saved.certID + " acme"}) {

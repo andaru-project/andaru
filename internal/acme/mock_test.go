@@ -43,6 +43,10 @@ type mockCA struct {
 	authz    map[string]*mockAuthz
 	order    *mockOrder
 	sawEAB   bool
+	// existingAccount makes /account return HTTP 200 (RFC 8555 existing account) instead of 201.
+	existingAccount bool
+	// spoofAuthzDomain, when set, replaces the first order authorization's domain with a hostile value.
+	spoofAuthzDomain string
 }
 
 type mockAuthz struct {
@@ -108,10 +112,16 @@ func (m *mockCA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/account":
 		var req struct {
-			EAB *struct{ Protected, Payload, Signature string } `json:"externalAccountBinding"`
+			OnlyReturnExisting bool                                           `json:"onlyReturnExisting"`
+			EAB                *struct{ Protected, Payload, Signature string } `json:"externalAccountBinding"`
 		}
 		_ = json.Unmarshal(payload, &req)
-		if m.eabKID != "" {
+		if req.OnlyReturnExisting && m.existingAccount {
+			w.Header().Set("Location", m.url("/acct/1"))
+			writeJSONTest(w, 200, map[string]any{"status": "valid", "orders": m.url("/acct/1/orders")})
+			return
+		}
+		if m.eabKID != "" && !m.existingAccount {
 			if req.EAB == nil {
 				problem(w, "externalAccountRequired", "EAB required")
 				return
@@ -129,9 +139,14 @@ func (m *mockCA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			m.sawEAB = true
 		}
-		m.accounts++
+		status := 201
+		if m.existingAccount {
+			status = 200
+		} else {
+			m.accounts++
+		}
 		w.Header().Set("Location", m.url("/acct/1"))
-		writeJSONTest(w, 201, map[string]any{"status": "valid", "orders": m.url("/acct/1/orders")})
+		writeJSONTest(w, status, map[string]any{"status": "valid", "orders": m.url("/acct/1/orders")})
 	case r.URL.Path == "/order":
 		var req struct {
 			Identifiers []struct{ Type, Value string } `json:"identifiers"`
@@ -141,8 +156,12 @@ func (m *mockCA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for i, id := range req.Identifiers {
 			tok := b64([]byte(fmt.Sprintf("token-for-authorization-%d", i)))
 			name := fmt.Sprintf("/authz/%d", i)
-			wild := strings.HasPrefix(id.Value, "*.")
-			m.authz[name] = &mockAuthz{domain: strings.TrimPrefix(id.Value, "*."), token: tok, status: "pending", wildcard: wild}
+			val := id.Value
+			if i == 0 && m.spoofAuthzDomain != "" {
+				val = m.spoofAuthzDomain
+			}
+			wild := strings.HasPrefix(val, "*.")
+			m.authz[name] = &mockAuthz{domain: strings.TrimPrefix(val, "*."), token: tok, status: "pending", wildcard: wild}
 			o.authz = append(o.authz, m.url(name))
 		}
 		m.order = o

@@ -2,13 +2,11 @@ package config
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -158,13 +156,7 @@ func acmeSecretFields(collection string, value map[string]any) []secretField {
 	challenge, _ := value["challenge"].(map[string]any)
 	dns01, _ := challenge["dns01"].(map[string]any)
 	var out []secretField
-	for _, provider := range slices.Sorted(func(yield func(string) bool) {
-		for k := range acmeDNSFields {
-			if !yield(k) {
-				return
-			}
-		}
-	}) {
+	for _, provider := range slices.Sorted(maps.Keys(acmeDNSFields)) {
 		f := acmeDNSFields[provider]
 		if obj, ok := dns01[f.object].(map[string]any); ok {
 			for _, ref := range f.refs {
@@ -193,7 +185,7 @@ func ACMESecretName(id, field string) string {
 
 // newACMEAccountKey is a new ECDSA P-256 account key, PKCS #8 PEM.
 func newACMEAccountKey() (string, error) {
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	k, err := pki.GenerateKey("ecdsa-p256")
 	if err != nil {
 		return "", err
 	}
@@ -208,7 +200,7 @@ var acmeDomain = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?
 
 func httpsURL(s string) bool {
 	u, err := url.Parse(s)
-	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Fragment == ""
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.Hostname() != "" && u.User == nil && u.Fragment == ""
 }
 
 // validateACME checks the accounts and orders and what they name: an order's account, its certificate, which no
@@ -329,7 +321,7 @@ func validateDNS01(p string, d *acmeDNS01, bad func(path, msg string)) {
 		if !httpsURL(d.ACMEDNS.ServerURL) {
 			bad(p+"/acmeDns/serverUrl", "Expected an https URL with a host.")
 		}
-		if f := d.ACMEDNS.FullDomain; f != "" && !acmeDomain.MatchString(f) {
+		if f := d.ACMEDNS.FullDomain; f != "" && (strings.HasPrefix(f, "*.") || !acmeDomain.MatchString(f)) {
 			bad(p+"/acmeDns/fullDomain", "Expected a lowercase DNS name.")
 		}
 	case "webhook":

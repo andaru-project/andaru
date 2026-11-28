@@ -3,12 +3,14 @@ package outbound
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
+	"time"
 
 	"github.com/andaru-project/andaru/internal/acme"
 	"github.com/andaru-project/andaru/internal/bus"
 )
+
+const acmeIssueTimeout = 14 * time.Minute
 
 // handleACME runs one ACME order from the bus and publishes its result, non-durable as the order was. It waits for
 // slot, so orders run one at a time.
@@ -33,7 +35,9 @@ func (s *Service) handleACME(ctx context.Context, c *bus.Client, slot chan struc
 		issuer = &acme.Issuer{}
 	}
 	s.Log.Info("ACME order started", "order", orderID, "job", e.Data.JobID, "challenge", e.Data.Challenge.Type, "staging", e.Data.StagingTest)
-	res := issuer.Issue(ctx, e.Data)
+	issueCtx, cancel := context.WithTimeout(ctx, acmeIssueTimeout)
+	res := issuer.Issue(issueCtx, e.Data)
+	cancel()
 	if ctx.Err() != nil {
 		return // the engine times the order out and may ask again
 	}
@@ -47,6 +51,13 @@ func (s *Service) handleACME(ctx context.Context, c *bus.Client, slot chan struc
 		err = c.Publish(ctx, acme.ResultTopic(orderID), payload, false)
 	}
 	if err != nil {
-		s.Log.Warn("ACME result not published", "order", orderID, "error", fmt.Sprint(err))
+		s.Log.Warn("ACME result not published", "order", orderID, "error", err)
+		if res.OK {
+			// Fall back to a compact error result so the engine does not wait the full job timeout.
+			fallback := acme.Result{JobID: res.JobID, OrderID: res.OrderID, AccountID: res.AccountID, StagingTest: res.StagingTest, Error: "the issued certificate result could not be published"}
+			if fp, ferr := bus.NewEvent(acme.ResultType, User, fallback); ferr == nil {
+				_ = c.Publish(ctx, acme.ResultTopic(orderID), fp, false)
+			}
+		}
 	}
 }

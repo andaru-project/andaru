@@ -751,6 +751,10 @@ export interface Snapshot {
       certificates?: PKICertificate[];
       tlsCryptKeys?: TlsCryptKey[];
     };
+    acme?: {
+      accounts?: AcmeAccount[];
+      orders?: AcmeOrder[];
+    };
     aliases?: {
       addresses: Array<Partial<AddressAlias> & { id: string; name: string }>;
       ports: Array<Partial<PortAlias> & { id: string; name: string }>;

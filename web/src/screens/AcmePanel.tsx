@@ -19,7 +19,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
-import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
 import { formatTimestamp, useTimeZone } from '../timezone';
 import type {
@@ -160,15 +160,15 @@ export function AcmePanel({
 
   const load = useCallback(async (): Promise<LoadedAcme> => {
     const [accountsRes, ordersRes, segmentsRes, statusRes] = await Promise.all([
-      canReadConfig ? api.acmeAccounts() : Promise.resolve({ state: 'saved' as const, savedVersion: '0', items: [] }),
-      canReadConfig ? api.acmeOrders() : Promise.resolve({ state: 'saved' as const, savedVersion: '0', items: [] }),
-      canReadConfig ? api.segments() : Promise.resolve({ state: 'saved' as const, savedVersion: '0', items: [] }),
-      canReadCerts ? api.acmeStatus() : Promise.resolve(undefined),
+      canReadConfig ? api.acmeAccounts() : undefined,
+      canReadConfig ? api.acmeOrders() : undefined,
+      canReadConfig ? api.segments() : undefined,
+      canReadCerts ? api.acmeStatus() : undefined,
     ]);
     return {
-      accounts: accountsRes.items,
-      orders: ordersRes.items,
-      segments: segmentsRes.items.map((item) => item.value),
+      accounts: accountsRes?.items ?? [],
+      orders: ordersRes?.items ?? [],
+      segments: (segmentsRes?.items ?? []).map((item) => item.value),
       status: statusRes,
     };
   }, [api, canReadConfig, canReadCerts]);
@@ -181,6 +181,25 @@ export function AcmePanel({
 
   const anyRunning = Boolean(status?.items.some((s) => s.state === 'running'));
   useVisiblePoll(resource.refresh, 3_000, canReadCerts && anyRunning);
+
+  // Refresh the parent Certificates list when an in-flight ACME order completes successfully.
+  const prevRunningRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const items = status?.items ?? [];
+    const nextRunning = new Set<string>();
+    let completed = false;
+    for (const item of items) {
+      if (item.state === 'running') {
+        nextRunning.add(item.orderId);
+      } else if (item.state === 'succeeded' && prevRunningRef.current.has(item.orderId)) {
+        completed = true;
+      }
+    }
+    prevRunningRef.current = nextRunning;
+    if (completed) {
+      onSaved();
+    }
+  }, [status, onSaved]);
 
   const accountsById = useMemo(() => new Map(accounts.map((a) => [a.value.id, a.value])), [accounts]);
   const certsById = useMemo(() => new Map(certificates.map((c) => [c.id, c])), [certificates]);
@@ -457,7 +476,8 @@ export function AcmePanel({
                                   <Button
                                     size="xs"
                                     variant="subtle"
-                                    disabled={isRunning}
+                                    disabled={isRunning || (!order.enabled && order.challenge.type === 'http-01')}
+                                    title={!order.enabled && order.challenge.type === 'http-01' ? 'Enable and apply this HTTP-01 order before running a staging test' : undefined}
                                     onClick={() => void triggerOrder(order.id, true)}
                                   >
                                     Test staging
@@ -737,13 +757,14 @@ function AcmeOrderModal({ api, existing, accounts, segments, onClose, onSaved, o
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
 
-  const parsedDomains = parseDomains(domainsInput);
-  const hasWildcard = parsedDomains.some((d) => d.startsWith('*.'));
+  const sameProvider = initDns?.provider === provider;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (submitting.current) return;
 
+    const parsedDomains = parseDomains(domainsInput);
+    const hasWildcard = parsedDomains.some((d) => d.startsWith('*.'));
     const nextErrors = new Map<string, string>();
     if (!name.trim()) nextErrors.set('name', 'Enter an order name.');
     if (!accountId) nextErrors.set('accountId', 'Select an ACME account.');
@@ -767,7 +788,6 @@ function AcmeOrderModal({ api, existing, accounts, segments, onClose, onSaved, o
       return;
     }
 
-    const sameProvider = initDns?.provider === provider;
     let challenge: AcmeOrderWrite['challenge'];
     if (challengeType === 'http-01') {
       challenge = {
@@ -779,15 +799,10 @@ function AcmeOrderModal({ api, existing, accounts, segments, onClose, onSaved, o
         provider,
         propagationTimeoutSeconds: propSecs,
       };
-      if (provider === 'cloudflare') {
-        const ref = secretWriteIfSet(apiToken, sameProvider ? initDns?.cloudflare?.apiTokenRef : undefined, 'acme_cf_token');
-        dns01.cloudflare = ref ? { apiTokenRef: ref } : {};
-      } else if (provider === 'hetzner') {
-        const ref = secretWriteIfSet(apiToken, sameProvider ? initDns?.hetzner?.apiTokenRef : undefined, 'acme_hetzner_token');
-        dns01.hetzner = ref ? { apiTokenRef: ref } : {};
-      } else if (provider === 'digitalocean') {
-        const ref = secretWriteIfSet(apiToken, sameProvider ? initDns?.digitalocean?.apiTokenRef : undefined, 'acme_do_token');
-        dns01.digitalocean = ref ? { apiTokenRef: ref } : {};
+      if (provider === 'cloudflare' || provider === 'hetzner' || provider === 'digitalocean') {
+        const prefix = provider === 'cloudflare' ? 'acme_cf_token' : provider === 'hetzner' ? 'acme_hetzner_token' : 'acme_do_token';
+        const ref = secretWriteIfSet(apiToken, sameProvider ? initDns?.[provider]?.apiTokenRef : undefined, prefix);
+        dns01[provider] = ref ? { apiTokenRef: ref } : {};
       } else if (provider === 'porkbun') {
         const kRef = secretWriteIfSet(porkbunApiKey, sameProvider ? initDns?.porkbun?.apiKeyRef : undefined, 'acme_porkbun_key');
         const sRef = secretWriteIfSet(porkbunSecretKey, sameProvider ? initDns?.porkbun?.secretKeyRef : undefined, 'acme_porkbun_secret');
@@ -979,8 +994,8 @@ function AcmeOrderModal({ api, existing, accounts, segments, onClose, onSaved, o
               {(provider === 'cloudflare' || provider === 'hetzner' || provider === 'digitalocean') && (
                 <PasswordInput
                   label="API Token"
-                  required={!(initDns?.provider === provider)}
-                  placeholder={initDns?.provider === provider ? 'Leave blank to keep stored API token' : 'Enter write-only API token'}
+                  required={!sameProvider}
+                  placeholder={sameProvider ? 'Leave blank to keep stored API token' : 'Enter write-only API token'}
                   autoComplete="new-password"
                   disabled={busy}
                   value={apiToken}
@@ -992,8 +1007,8 @@ function AcmeOrderModal({ api, existing, accounts, segments, onClose, onSaved, o
                 <>
                   <PasswordInput
                     label="Porkbun API Key"
-                    required={!(initDns?.provider === 'porkbun')}
-                    placeholder={initDns?.provider === 'porkbun' ? 'Leave blank to keep stored API key' : 'Enter write-only API key'}
+                    required={!sameProvider}
+                    placeholder={sameProvider ? 'Leave blank to keep stored API key' : 'Enter write-only API key'}
                     autoComplete="new-password"
                     disabled={busy}
                     value={porkbunApiKey}
@@ -1001,8 +1016,8 @@ function AcmeOrderModal({ api, existing, accounts, segments, onClose, onSaved, o
                   />
                   <PasswordInput
                     label="Porkbun Secret API Key"
-                    required={!(initDns?.provider === 'porkbun')}
-                    placeholder={initDns?.provider === 'porkbun' ? 'Leave blank to keep stored secret key' : 'Enter write-only secret key'}
+                    required={!sameProvider}
+                    placeholder={sameProvider ? 'Leave blank to keep stored secret key' : 'Enter write-only secret key'}
                     autoComplete="new-password"
                     disabled={busy}
                     value={porkbunSecretKey}
@@ -1038,8 +1053,8 @@ function AcmeOrderModal({ api, existing, accounts, segments, onClose, onSaved, o
                   </Group>
                   <PasswordInput
                     label="Password / API Key"
-                    required={!(initDns?.provider === 'acme-dns')}
-                    placeholder={initDns?.provider === 'acme-dns' ? 'Leave blank to keep stored password' : 'Enter write-only password'}
+                    required={!sameProvider}
+                    placeholder={sameProvider ? 'Leave blank to keep stored password' : 'Enter write-only password'}
                     autoComplete="new-password"
                     disabled={busy}
                     value={acmeDnsPassword}

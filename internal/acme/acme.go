@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -158,10 +159,27 @@ func (is *Issuer) issue(ctx context.Context, job Job) (certPEM, chainPEM, accoun
 		}
 	}()
 	var responder *responder
+	if len(order.AuthzURLs) > len(job.Domains) || len(order.AuthzURLs) > 100 {
+		return "", "", accountURI, errors.New("the CA returned more authorizations than requested domains")
+	}
+	allowed := make(map[string]bool, len(job.Domains))
+	for _, d := range job.Domains {
+		allowed[strings.ToLower(d)] = true
+	}
 	for _, u := range order.AuthzURLs {
 		z, err := client.GetAuthorization(ctx, u)
 		if err != nil {
 			return "", "", accountURI, fmt.Errorf("read an authorization: %w", acmeError(err))
+		}
+		if z.Identifier.Type != "dns" {
+			return "", "", accountURI, fmt.Errorf("the CA requested a non-DNS authorization %q", z.Identifier.Type)
+		}
+		ident := strings.ToLower(z.Identifier.Value)
+		if z.Wildcard && !strings.HasPrefix(ident, "*.") {
+			ident = "*." + ident
+		}
+		if !allowed[ident] {
+			return "", "", accountURI, fmt.Errorf("the CA requested an authorization for an unrequested domain %s", z.Identifier.Value)
 		}
 		if z.Status == xacme.StatusValid {
 			continue
@@ -226,7 +244,14 @@ func (is *Issuer) issue(ctx context.Context, job Job) (certPEM, chainPEM, accoun
 	if len(der) == 0 {
 		return "", "", accountURI, errors.New("the CA returned no certificate")
 	}
-	return string(encodeDER(der[:1])), string(encodeDER(der[1:])), accountURI, nil
+	if len(der) > 10 {
+		return "", "", accountURI, errors.New("the CA returned too many certificates in the chain")
+	}
+	certOut, chainOut := string(encodeDER(der[:1])), string(encodeDER(der[1:]))
+	if len(certOut) > 65536 || len(chainOut) > 65536 {
+		return "", "", accountURI, errors.New("the issued certificate or chain exceeds the size limit")
+	}
+	return certOut, chainOut, accountURI, nil
 }
 
 // register creates the account, or finds the one the key already has.
@@ -246,6 +271,13 @@ func register(ctx context.Context, client *xacme.Client, job Job) error {
 	if err != nil && !errors.Is(err, xacme.ErrAccountAlreadyExists) {
 		return fmt.Errorf("register the account: %w", acmeError(err))
 	}
+	if errors.Is(err, xacme.ErrAccountAlreadyExists) || client.KID == "" {
+		existing, regErr := client.GetReg(ctx, "")
+		if regErr != nil {
+			return fmt.Errorf("look up existing account: %w", acmeError(regErr))
+		}
+		client.KID = xacme.KeyID(existing.URI)
+	}
 	if client.KID == "" {
 		return errors.New("the CA returned no account URL")
 	}
@@ -262,21 +294,29 @@ func decodeEAB(s string) ([]byte, error) {
 	return b, nil
 }
 
-// acmeError keeps a CA's problem document's type and detail, never a request.
+// acmeError keeps a CA's problem document's type and detail, never a request URL or oversized body.
 func acmeError(err error) error {
+	var msg string
 	var e *xacme.Error
-	if errors.As(err, &e) {
-		return fmt.Errorf("%s: %s", e.ProblemType, e.Detail)
-	}
 	var oe *xacme.OrderError
-	if errors.As(err, &oe) {
-		return fmt.Errorf("order %s", oe.Status)
-	}
 	var ae *xacme.AuthorizationError
-	if errors.As(err, &ae) {
-		return fmt.Errorf("authorization of %s failed", ae.Identifier)
+	var ue *url.Error
+	switch {
+	case errors.As(err, &e):
+		msg = fmt.Sprintf("%s: %s", e.ProblemType, e.Detail)
+	case errors.As(err, &oe):
+		msg = fmt.Sprintf("order %s", oe.Status)
+	case errors.As(err, &ae):
+		msg = fmt.Sprintf("authorization of %s failed", ae.Identifier)
+	case errors.As(err, &ue) && ue.Err != nil:
+		msg = ue.Err.Error()
+	default:
+		msg = err.Error()
 	}
-	return err
+	if len(msg) > 512 {
+		msg = msg[:512]
+	}
+	return errors.New(msg)
 }
 
 func encodeDER(der [][]byte) []byte {

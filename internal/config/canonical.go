@@ -177,6 +177,9 @@ func normalizeDeclaration(d *declaration) {
 		if o.RenewBeforeDays == 0 {
 			o.RenewBeforeDays = defaultRenewBeforeDays
 		}
+		if o.Challenge.HTTP01 != nil {
+			slices.Sort(o.Challenge.HTTP01.ListenSegments)
+		}
 		if o.Challenge.DNS01 != nil && o.Challenge.DNS01.PropagationTimeoutSeconds == 0 {
 			o.Challenge.DNS01.PropagationTimeoutSeconds = defaultPropagation
 		}

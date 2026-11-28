@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -35,7 +36,6 @@ import (
 const (
 	acmeStatusPath    = "/api/v1/status/acme"
 	acmeOrdersPrefix  = "/api/v1/acme/orders/"
-	acmeConfigPrefix  = "/api/v1/config/acme/"
 	acmeNoticeSource  = "acme"
 	acmeJobTimeout    = 15 * time.Minute
 	acmeFirstCheck    = 2 * time.Minute
@@ -112,6 +112,7 @@ type acmeCoordinator struct {
 	timeout time.Duration
 
 	mu       sync.Mutex
+	http01Mu sync.Mutex
 	state    acmeState
 	runs     map[string]*acmeRun
 	lifetime context.Context
@@ -175,7 +176,9 @@ func (c *acmeCoordinator) run(ctx context.Context) {
 	c.mu.Lock()
 	c.lifetime = ctx
 	c.mu.Unlock()
+	c.http01Mu.Lock()
 	c.closeHTTP01()
+	c.http01Mu.Unlock()
 	timer := time.NewTimer(acmeFirstCheck)
 	defer timer.Stop()
 	for {
@@ -224,7 +227,7 @@ func (c *acmeCoordinator) check(ctx context.Context) {
 		if !o.CertificateNotAfter.IsZero() && now.Before(renewAt(o)) {
 			continue
 		}
-		if err := c.start(ctx, o, false); err != nil && !errors.Is(err, errACMERunning) {
+		if err := c.start(o, false); err != nil && !errors.Is(err, errACMERunning) {
 			slog.Warn("acme: renewal not started", "order", o.ID, "error", err)
 		}
 	}
@@ -236,6 +239,9 @@ func renewAt(o config.ACMEOrder) time.Time {
 
 // trigger starts an order now, as a user asks.
 func (c *acmeCoordinator) trigger(ctx context.Context, orderID string, staging bool) error {
+	if !staging && generation.ReadSafeMode(c.systemRoot, c.stateDir).Active {
+		return &acmeNotReady{"Safe mode is active; renewals wait until the system returns to normal mode."}
+	}
 	settings, err := c.store.ACME(ctx)
 	if err != nil {
 		return err
@@ -247,21 +253,36 @@ func (c *acmeCoordinator) trigger(ctx context.Context, orderID string, staging b
 	if !settings.Orders[i].Enabled && !staging {
 		return errACMEDisabled
 	}
-	return c.start(ctx, settings.Orders[i], staging)
+	return c.start(settings.Orders[i], staging)
 }
 
 // start prepares the order's key, CSR and job, and runs it in the background. A failure to prepare is the order's.
-func (c *acmeCoordinator) start(ctx context.Context, o config.ACMEOrder, staging bool) error {
+func (c *acmeCoordinator) start(o config.ACMEOrder, staging bool) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.runs[o.ID] != nil {
+		c.mu.Unlock()
 		return errACMERunning
 	}
-	job, run, ifaces, err := c.prepare(o, staging)
+	// Reserve the slot before releasing c.mu so key generation and disk reads never block onResult or status.
+	c.runs[o.ID] = &acmeRun{}
+	var cached *acmeAccountState
+	if a := c.state.Accounts[o.AccountID]; a != nil {
+		cp := *a
+		cached = &cp
+	}
+	c.mu.Unlock()
+
+	job, run, ifaces, err := c.prepare(o, staging, cached)
 	if err != nil {
-		c.recordLocked(o, staging, acme.Result{Error: err.Error()})
+		res := acme.Result{Error: err.Error()}
+		c.mu.Lock()
+		delete(c.runs, o.ID)
+		c.recordLocked(o, staging, res)
+		c.mu.Unlock()
+		c.notifyRun(o, staging, res)
 		return err
 	}
+	c.mu.Lock()
 	c.runs[o.ID] = run
 	now := c.now()
 	st := c.orderStateLocked(o.ID)
@@ -269,6 +290,7 @@ func (c *acmeCoordinator) start(ctx context.Context, o config.ACMEOrder, staging
 	c.saveLocked()
 	life := c.lifetime
 	c.wg.Add(1)
+	c.mu.Unlock()
 	go func() {
 		defer c.wg.Done()
 		c.finish(life, run, c.execute(life, run, job, ifaces))
@@ -285,7 +307,7 @@ func (c *acmeCoordinator) orderStateLocked(id string) *acmeOrderState {
 	return st
 }
 
-func (c *acmeCoordinator) prepare(o config.ACMEOrder, staging bool) (acme.Job, *acmeRun, []string, error) {
+func (c *acmeCoordinator) prepare(o config.ACMEOrder, staging bool, cached *acmeAccountState) (acme.Job, *acmeRun, []string, error) {
 	if len(o.Unresolved) > 0 {
 		return acme.Job{}, nil, nil, &acmeNotReady{"The order's secrets were not restored; set them again: " + strings.Join(o.Unresolved, ", ") + "."}
 	}
@@ -323,8 +345,8 @@ func (c *acmeCoordinator) prepare(o config.ACMEOrder, staging bool) (acme.Job, *
 	if staging {
 		// A staging test registers its own account at Let's Encrypt's staging directory, which knows no EAB.
 		job.DirectoryURL, job.EABKeyID, job.EABHMAC, binding = acme.StagingDirectory, "", "", ""
-	} else if a := c.state.Accounts[o.AccountID]; a != nil && a.Binding == binding {
-		job.AccountURI = a.RegisteredURI
+	} else if cached != nil && cached.Binding == binding {
+		job.AccountURI = cached.RegisteredURI
 	}
 	run := &acmeRun{jobID: job.JobID, keyPEM: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})), order: o, staging: staging,
 		binding: binding, results: make(chan acme.Result, 1)}
@@ -373,6 +395,9 @@ func (c *acmeCoordinator) execute(ctx context.Context, run *acmeRun, job acme.Jo
 		if c.realize == nil {
 			return failed(errors.New("no realizer"))
 		}
+		// Serialize HTTP-01 runs so concurrent orders never flush each other's active nftables redirect set.
+		c.http01Mu.Lock()
+		defer c.http01Mu.Unlock()
 		rctx, cancel := context.WithTimeout(ctx, acmeRealizeLimit)
 		err := c.realize(rctx, "acme-http01-open", ifaces...)
 		cancel()
@@ -417,7 +442,7 @@ func (c *acmeCoordinator) onResult(topic string, payload []byte) {
 	c.mu.Lock()
 	run := c.runs[orderID]
 	c.mu.Unlock()
-	if run == nil || run.jobID != e.Data.JobID || e.Data.OrderID != orderID {
+	if run == nil || run.jobID == "" || run.jobID != e.Data.JobID || e.Data.OrderID != orderID {
 		return // a late or foreign result
 	}
 	select {
@@ -449,17 +474,25 @@ func (c *acmeCoordinator) finish(life context.Context, run *acmeRun, res acme.Re
 	}
 	c.mu.Lock()
 	delete(c.runs, o.ID)
-	c.recordLocked(o, run.staging, res)
-	if res.OK && !run.staging {
+	if res.OK && !run.staging && validACMEAccountURI(res.AccountURI) {
 		c.state.Accounts[o.AccountID] = &acmeAccountState{RegisteredURI: res.AccountURI, Binding: run.binding}
-		c.saveLocked()
 	}
+	c.recordLocked(o, run.staging, res)
 	c.mu.Unlock()
+	c.notifyRun(o, run.staging, res)
 	if res.OK {
 		slog.Info("acme: order done", "order", o.ID, "certificate", certID, "staging", run.staging)
 	} else {
 		slog.Warn("acme: order failed", "order", o.ID, "staging", run.staging, "error", res.Error)
 	}
+}
+
+func validACMEAccountURI(raw string) bool {
+	if raw == "" || len(raw) > 2048 {
+		return false
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Hostname() != ""
 }
 
 // save stores the certificate and key, audited as certificate.renewed, then places it and publishes
@@ -476,9 +509,10 @@ func (c *acmeCoordinator) save(ctx context.Context, o config.ACMEOrder, certID *
 	if err != nil {
 		return errors.New("security audit storage is unavailable")
 	}
+	var saved config.SaveResult
 	var fault *config.Fault
 	for attempt := 0; ; attempt++ {
-		_, err = c.store.SaveACMECertificate(ctx, o.ID, *certID, string(imported.CertPEM), string(imported.ChainPEM), string(imported.KeyPEM))
+		saved, err = c.store.SaveACMECertificate(ctx, o.ID, *certID, string(imported.CertPEM), string(imported.ChainPEM), string(imported.KeyPEM))
 		// A save that moved the head in between is read again: the batch is guarded by the head it was built on.
 		if err == nil || attempt == 2 || !errors.As(err, &fault) || fault.Code != "PRECONDITION_FAILED" {
 			break
@@ -492,7 +526,19 @@ func (c *acmeCoordinator) save(ctx context.Context, o config.ACMEOrder, certID *
 		return err
 	}
 	finish(audit.ResultSuccess)
-	renewed := renewal{name: o.Name, info: imported.Info, source: "acme"}
+	certName := o.Name
+	for _, item := range saved.Items {
+		if item.Collection == "pki.certificates" && item.ID == *certID && len(item.Value) > 0 {
+			var meta struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(item.Value, &meta) == nil && meta.Name != "" {
+				certName = meta.Name
+			}
+			break
+		}
+	}
+	renewed := renewal{name: certName, info: imported.Info, source: "acme"}
 	if c.certs == nil {
 		publishCertificateRenewed(c.events, *certID, renewed)
 		return nil
@@ -505,7 +551,7 @@ func (c *acmeCoordinator) save(ctx context.Context, o config.ACMEOrder, certID *
 	return nil
 }
 
-// recordLocked records a run's end in state.json and in the order's notification. A staging test notifies nothing.
+// recordLocked records a run's end in state.json.
 func (c *acmeCoordinator) recordLocked(o config.ACMEOrder, staging bool, res acme.Result) {
 	now := c.now()
 	st := c.orderStateLocked(o.ID)
@@ -519,6 +565,10 @@ func (c *acmeCoordinator) recordLocked(o config.ACMEOrder, staging bool, res acm
 		st.State, st.LastError = "failed", notify.Detail(res.Error)
 	}
 	c.saveLocked()
+}
+
+// notifyRun raises or clears the order's notification outside c.mu. A staging test notifies nothing.
+func (c *acmeCoordinator) notifyRun(o config.ACMEOrder, staging bool, res acme.Result) {
 	switch {
 	case staging:
 	case res.OK:
@@ -650,9 +700,7 @@ func (a *acmeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	staging := verb == "test-staging"
 	err = a.acme.trigger(r.Context(), id, staging)
-	var notReady *acmeNotReady
-	switch {
-	case err == nil:
+	if err == nil {
 		finish(audit.ResultSuccess)
 		if staging {
 			writeJSON(w, r, http.StatusAccepted, map[string]any{"orderId": id, "stagingTest": true})
@@ -660,20 +708,19 @@ func (a *acmeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, r, http.StatusAccepted, map[string]any{"orderId": id, "started": true})
 		}
 		return
+	}
+	finish(audit.ResultFailure)
+	var notReady *acmeNotReady
+	switch {
 	case errors.Is(err, errACMENotFound):
-		finish(audit.ResultFailure)
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "The ACME order does not exist.")
 	case errors.Is(err, errACMEDisabled):
-		finish(audit.ResultFailure)
 		writeError(w, r, http.StatusConflict, "ACME_ORDER_DISABLED", "The ACME order is disabled; enable it, or run a staging test.")
 	case errors.Is(err, errACMERunning):
-		finish(audit.ResultFailure)
 		writeError(w, r, http.StatusConflict, "ACME_ORDER_RUNNING", "The ACME order is already running.")
 	case errors.As(err, &notReady):
-		finish(audit.ResultFailure)
 		writeError(w, r, http.StatusConflict, "ACME_ORDER_NOT_READY", notReady.reason)
 	default:
-		finish(audit.ResultFailure)
 		writeConfigurationError(w, r, err)
 	}
 }
