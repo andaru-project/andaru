@@ -227,7 +227,12 @@ func (r Realizer) live(p Pointers) ([]placed, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Only the paths matter for what is being replaced, so a corrupt live generation is no obstacle.
+	return r.replaced(g), nil
+}
+
+// replaced is what a generation placed, as the set being replaced: paths and hashes, plus swanctl.conf's content so
+// IPsec can tell which connections changed. Only the paths matter otherwise, so a corrupt generation is no obstacle.
+func (r Realizer) replaced(g Generation) []placed {
 	out := make([]placed, 0, len(g.Files))
 	for _, f := range g.Files {
 		if allowed(f.Path) && f.Path != filterEntry {
@@ -240,7 +245,7 @@ func (r Realizer) live(p Pointers) ([]placed, error) {
 			out = append(out, p)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func has(set []placed, path string) bool {
@@ -939,12 +944,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 		return fmt.Errorf("roll back %d: the confirmation deadline has not passed", id)
 	}
 	// from is this generation whatever the live pointer says: a kill may have left the pointer behind the files.
-	from := make([]placed, 0, len(g.Files))
-	for _, f := range g.Files {
-		if allowed(f.Path) && f.Path != filterEntry {
-			from = append(from, placed{path: f.Path, sha256: f.SHA256})
-		}
-	}
+	from := r.replaced(g)
 	target, live, what, loaded, err := r.fallback(ctx, p, g.Previous)
 	if err != nil {
 		if errors.Is(err, errFilterLoad) {

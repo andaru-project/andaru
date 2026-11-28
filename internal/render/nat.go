@@ -343,12 +343,18 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 			}
 		}
 		// Decrypted policy-based IPsec traffic carries the inbound-policy mark and must not pass as zone traffic.
-		ingress := "iifname @" + setName(o.Zone)
+		// A policy-based connection in the zone matches by its reqid instead.
+		ingresses := []string{"iifname @" + setName(o.Zone)}
 		if len(f.policies) > 0 {
-			ingress = "meta mark & " + ipsecPolicyInMark + " == 0 " + ingress
+			ingresses[0] = "meta mark & " + ipsecPolicyInMark + " == 0 " + ingresses[0]
+			for _, reqid := range f.policies[o.Zone] {
+				ingresses = append(ingresses, fmt.Sprintf("meta ipsec exists ipsec in reqid %d", reqid))
+			}
 		}
-		for _, s := range sources {
-			prerouting = append(prerouting, join(ingress, s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
+		for _, ingress := range ingresses {
+			for _, s := range sources {
+				prerouting = append(prerouting, join(ingress, s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
+			}
 		}
 		if o.Reflection {
 			f.reflection = true

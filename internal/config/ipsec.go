@@ -228,6 +228,13 @@ func normalizeSwanIdentity(s string) string {
 	return "fqdn:" + lower
 }
 
+// pskPairKey is a PSK's owner set: strongSwan records no direction, so (a, b) and (b, a) are one pair.
+func pskPairKey(local, remote string) string {
+	ids := []string{normalizeSwanIdentity(local), normalizeSwanIdentity(remote)}
+	slices.Sort(ids)
+	return ids[0] + "\x00" + ids[1]
+}
+
 // wildcardSwanIdentity reports identities strongSwan matches against others (ID_ANY, "*" wildcards, ^...$ regexes,
 // subnets and ranges):
 // as an EAP secret's owner one would hand its password to every user name.
@@ -429,7 +436,7 @@ func validateIPsec(d *declaration) []FieldError {
 		} else if !psk && a.PSKRef != nil {
 			bad(ap+"/pskRef", "A pre-shared key is used only with psk authentication.")
 		} else if psk && a.LocalID != "" && a.PSKRef != nil {
-			pairKey := normalizeSwanIdentity(a.LocalID) + "\x00" + normalizeSwanIdentity(a.RemoteID)
+			pairKey := pskPairKey(a.LocalID, a.RemoteID)
 			if prev, exists := pskPairs[pairKey]; exists && prev != a.PSKRef.Secret {
 				field := "/remoteId"
 				if a.RemoteID == "" {

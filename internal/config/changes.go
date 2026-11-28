@@ -1294,11 +1294,16 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 							path = input.path(op, tail, true)
 						}
 					case (tail == "/auth/localId" || tail == "/auth/remoteId") &&
-						normalizeSwanIdentity(c.Auth.LocalID) == normalizeSwanIdentity(existing.Auth.LocalID) &&
-						normalizeSwanIdentity(c.Auth.RemoteID) == normalizeSwanIdentity(existing.Auth.RemoteID):
+						pskPairKey(c.Auth.LocalID, c.Auth.RemoteID) == pskPairKey(existing.Auth.LocalID, existing.Auth.RemoteID):
 						if i < 0 || op < i {
 							i = op
 							path = input.path(op, tail, true)
+						}
+					case tail == "/auth/remoteType" && c.Enabled && c.Auth.RemoteType == "eap-mschapv2":
+						// The submitted connection is the second enabled EAP one.
+						if i < 0 || op < i {
+							i = op
+							path = input.path(op, "/enabled", true)
 						}
 					case strings.HasPrefix(tail, "/auth/eapUsers/") && strings.HasSuffix(tail, "/username"):
 						idxStr := strings.TrimSuffix(strings.TrimPrefix(tail, "/auth/eapUsers/"), "/username")

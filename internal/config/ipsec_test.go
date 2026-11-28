@@ -530,6 +530,11 @@ func TestIPsecSecurityValidation(t *testing.T) {
 	if errs := validateIPsec(dPSK); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/1/auth/remoteId" {
 		t.Errorf("equivalent PSK identity collision accepted: %+v", errs)
 	}
+	// strongSwan's PSK owners have no direction: a reversed pair with another secret is the same pair.
+	dPSK.VPN.IPsec[1].Auth.LocalID, dPSK.VPN.IPsec[1].Auth.RemoteID = dPSK.VPN.IPsec[0].Auth.RemoteID, dPSK.VPN.IPsec[0].Auth.LocalID
+	if errs := validateIPsec(dPSK); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/1/auth/remoteId" {
+		t.Errorf("reversed PSK identity pair accepted: %+v", errs)
+	}
 	// Cross-connection EAP username collision rejected.
 	dEAP := base()
 	dEAP.VPN.IPsec[0].Mode = "road-warrior"

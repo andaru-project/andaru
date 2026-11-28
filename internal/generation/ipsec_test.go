@@ -536,3 +536,30 @@ func TestIPsecMalformedPendingTerminationsFailApply(t *testing.T) {
 		t.Fatal("malformed .terminate-pending removed")
 	}
 }
+
+func TestIPsecRollbackTerminatesRejectedGenerationSA(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	conf1 := "connections {\n\t" + ipsA + " {\n\t\tif_id_in = 42\n\t\tchildren {\n\t\t\t" + ipsA + " {\n\t\t\t}\n\t\t}\n\t}\n}\n"
+	conf2 := "connections {\n\t" + ipsA + " {\n\t\tif_id_in = 43\n\t\tchildren {\n\t\t\t" + ipsA + " {\n\t\t\t}\n\t\t}\n\t}\n}\n"
+	id1 := b.gen(withIPsec(conf1))
+	if err := b.r.Activate(t.Context(), id1); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id1); err != nil {
+		t.Fatal(err)
+	}
+	id2 := b.gen(withIPsec(conf2))
+	if err := b.r.Activate(t.Context(), id2); err != nil {
+		t.Fatal(err)
+	}
+	// An SA negotiated under the rejected generation must not outlive its rollback.
+	b.net.sas = sasOf(ipsA)
+	b.net.argv = nil
+	if err := b.r.Rollback(t.Context(), id2, "requested"); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("swanctl --terminate --ike "+ipsA+" --force --timeout 5") != 1 {
+		t.Fatalf("rejected generation's SA not terminated on rollback: %q", b.net.argv)
+	}
+}

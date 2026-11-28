@@ -197,3 +197,23 @@ func TestIPsecPolicyPortForwardIsolation(t *testing.T) {
 		}
 	}
 }
+
+func TestIPsecPolicyOneToOne(t *testing.T) {
+	req := strconv.Itoa(ipsecReqid("ips_00000002-0000-4000-8000-000000000002", map[int]bool{}))
+	r := render(t, change(t, fixture(t, "ipsec"), func(d map[string]any) {
+		d["nat"].(map[string]any)["oneToOne"] = []any{map[string]any{
+			"id": "oto_00000001-0000-4000-8000-000000000001", "name": "branch", "enabled": true,
+			"zone": "zon_00000004-0000-4000-8000-000000000004", "internal": "192.0.2.40", "external": "198.51.100.40", "destination": []any{},
+		}}
+	}))
+	script := fileEnding(t, r, nftPath).Content
+	// Policy-based tunnel traffic translates by its reqid; interface matches skip packets carrying the policy mark.
+	for _, want := range []string{
+		"meta mark & " + ipsecPolicyInMark + " == 0 iifname @zon_00000004_0000_4000_8000_000000000004 dnat",
+		"meta ipsec exists ipsec in reqid " + req + " dnat",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("missing %q in:\n%s", want, script)
+		}
+	}
+}

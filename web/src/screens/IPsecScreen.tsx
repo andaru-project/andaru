@@ -385,7 +385,7 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
             Refresh
           </Button>
           {canWrite && canReadConfig && (
-            <Button size="sm" disabled={configResource.data === undefined} onClick={() => setEditor('new')}>
+            <Button size="sm" disabled={configResource.data === undefined || configResource.loading} onClick={() => setEditor('new')}>
               Add connection
             </Button>
           )}
