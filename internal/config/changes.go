@@ -191,7 +191,7 @@ func initialState() savedState {
 var (
 	orderedCollections = []string{"rules", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders", "routes", "vpn.wireguard"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders", "routes", "vpn.wireguard", "vpn.ipsec"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -208,7 +208,7 @@ func versionOf(s *savedState, key objectKey) objectVersion {
 }
 
 // idPrefixes are the prefixes of the IDs the engine assigns, by collection.
-var idPrefixes = map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto", "pki.cas": "ca", "pki.certificates": "crt", "pki.tlsCryptKeys": "tck", "acme.accounts": "aca", "acme.orders": "aco", "routes": "rte", "vpn.wireguard": "wg", "vpn.wireguard.peers": "wgp"}
+var idPrefixes = map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto", "pki.cas": "ca", "pki.certificates": "crt", "pki.tlsCryptKeys": "tck", "acme.accounts": "aca", "acme.orders": "aco", "routes": "rte", "vpn.wireguard": "wg", "vpn.wireguard.peers": "wgp", "vpn.ipsec": "ips"}
 
 // NewID allocates an ID for a new object of collection, as a create does.
 func NewID(collection string) (string, error) { return newID(collection) }
@@ -311,6 +311,9 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	for i := range d.VPN.WireGuard {
 		m[objectKey{"vpn.wireguard", d.VPN.WireGuard[i].ID}] = &d.VPN.WireGuard[i]
+	}
+	for i := range d.VPN.IPsec {
+		m[objectKey{"vpn.ipsec", d.VPN.IPsec[i].ID}] = &d.VPN.IPsec[i]
 	}
 	return m
 }
@@ -617,6 +620,11 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 				return empty, fault("STORE_UNAVAILABLE", "", "Identity allocation failed.")
 			}
 		}
+		if op.Collection == "vpn.ipsec" {
+			if path, e := prepareIPsec(value, before[key]); path != "" {
+				return empty, fault("VALIDATION_FAILED", input.path(i, path, true), e.Error())
+			}
+		}
 		for _, f := range secretFields(op.Collection, value) {
 			if pw, ok := f.parent[f.name].(map[string]any); ok {
 				name, _ := pw["secret"].(string)
@@ -657,6 +665,9 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 					}
 					if op.Collection == "vpn.wireguard" && !heldUnresolved(before[key], f.path, name) {
 						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A WireGuard key must be set or exist.")
+					}
+					if op.Collection == "vpn.ipsec" && !heldUnresolved(before[key], f.path, name) {
+						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "An IPsec secret must be set or exist.")
 					}
 					reference["unresolved"] = true
 				}
@@ -732,6 +743,9 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 		return empty, e
 	}
 	if d.VPN.WireGuard, e = rewrite(d.VPN.WireGuard, "vpn.wireguard", writes, deleted, createKeys, func(x wireguardInterface) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.VPN.IPsec, e = rewrite(d.VPN.IPsec, "vpn.ipsec", writes, deleted, createKeys, func(x ipsecConnection) string { return x.ID }); e != nil {
 		return empty, e
 	}
 	// Prune optional add-on secrets dropped from settings so they do not linger in secrets.db or block re-adding.
@@ -883,7 +897,7 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 			return empty, rebaseValidation(validationError{{path, "Expected the secret to hold an http or https URL with a host."}}, &d, origins, input)
 		}
 	}
-	if keyErrs := slices.Concat(checkPKIKeys(&d, current.Secrets, writes, changedSecrets), remapWireGuardPeerPaths(checkWireGuardKeys(&d, current.Secrets, writes, changedSecrets, true), &d, writes)); len(keyErrs) > 0 {
+	if keyErrs := slices.Concat(checkPKIKeys(&d, current.Secrets, writes, changedSecrets), remapWireGuardPeerPaths(checkWireGuardKeys(&d, current.Secrets, writes, changedSecrets, true), &d, writes), checkIPsecSecrets(&d, current.Secrets, writes)); len(keyErrs) > 0 {
 		return empty, rebaseValidation(validationError(keyErrs), &d, origins, input)
 	}
 	if e = validateSecrets(current.Secrets, next); e != nil {
@@ -1083,6 +1097,9 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 	case "vpn.wireguard":
 		resolve(v, "zone")
 		resolveAll(v, "allowListenSegments")
+	case "vpn.ipsec":
+		resolve(v, "zone")
+		resolve(v, "localSegment")
 	}
 	if col == "segments" {
 		resolve(v, "link")
@@ -1172,6 +1189,8 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.Routes[n].ID
 	case col == "vpn.wireguard" && n < len(d.VPN.WireGuard):
 		id = d.VPN.WireGuard[n].ID
+	case col == "vpn.ipsec" && n < len(d.VPN.IPsec):
+		id = d.VPN.IPsec[n].ID
 	}
 	if id == "" {
 		return objectKey{}, ""
@@ -1203,6 +1222,8 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 		case *route:
 			return x.Name
 		case *wireguardInterface:
+			return x.Name
+		case *ipsecConnection:
 			return x.Name
 		}
 		return ""
@@ -1259,6 +1280,20 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 					}
 				}
 			}
+		} else if i < 0 && key.Collection == "vpn.ipsec" && (tail == "/ifname" || tail == "/xfrmIfId") {
+			if existing, ok := index[key].(*ipsecConnection); ok {
+				for candidate, op := range origins {
+					c, ok := index[candidate].(*ipsecConnection)
+					if !ok || candidate.Collection != "vpn.ipsec" {
+						continue
+					}
+					match := (tail == "/ifname" && c.Ifname == existing.Ifname) || (tail == "/xfrmIfId" && c.XFRMIfID == existing.XFRMIfID)
+					if match && (i < 0 || op < i) {
+						i = op
+						path = input.path(op, tail, true)
+					}
+				}
+			}
 		}
 		if i < 0 {
 			for j, op := range input.Operations {
@@ -1290,6 +1325,9 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 func heldUnresolved(old any, path, name string) bool {
 	if ref := keyRefOf(old); ref != nil && path == "/keyRef" {
 		return ref.Secret == name && ref.Unresolved
+	}
+	if c, ok := old.(*ipsecConnection); ok {
+		return slices.ContainsFunc(c.secrets(), func(s channelSecret) bool { return s.ref.Secret == name && s.ref.Unresolved })
 	}
 	if w, ok := old.(*wireguardInterface); ok {
 		// By name: a peer's path moves with the peers around it.

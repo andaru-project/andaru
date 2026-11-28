@@ -304,7 +304,7 @@ func (s *Store) PKICertificateAuthorities(ctx context.Context) (result []PKIObje
 // CertificateConsumer is one service's binding to a certificate: the management web server, or an add-on's
 // certificate-reference setting.
 type CertificateConsumer struct {
-	// Kind is "management" or "addon".
+	// Kind is "management", "addon" or "ipsec" (an enabled connection's local certificate).
 	Kind string
 	// AddonID is the add-on's catalog ID, and Setting the name of its certificate-reference setting.
 	AddonID, Setting string
@@ -335,6 +335,11 @@ func (s *Store) CertificateBindings(ctx context.Context, live Version) (consumer
 					if v, ok := a.Settings[k].(string); ok && certificateIDPattern.MatchString(v) {
 						consumers = append(consumers, CertificateConsumer{Kind: "addon", AddonID: a.ID, Setting: k, CertificateID: v})
 					}
+				}
+			}
+			for _, c := range state.Config.VPN.IPsec {
+				if c.Enabled && c.Auth.LocalCertID != "" {
+					consumers = append(consumers, CertificateConsumer{Kind: "ipsec", CertificateID: c.Auth.LocalCertID})
 				}
 			}
 			return nil

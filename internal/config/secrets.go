@@ -144,6 +144,7 @@ func checkResolvedReferences(d *declaration) error {
 		}
 	}
 	details = append(details, unresolvedWireGuard(d)...)
+	details = append(details, unresolvedIPsec(d)...)
 	if len(details) != 0 {
 		return &Fault{Code: "VALIDATION_FAILED", Details: details}
 	}
@@ -216,6 +217,12 @@ func heldSecrets(d *declaration) []heldSecret {
 			out = append(out, heldSecret{key: objectKey{"vpn.wireguard", w.ID}, scope: "core", path: fmt.Sprintf("/vpn/wireguard/%d%s", i, s.path), ref: s.ref})
 		}
 	}
+	for i := range d.VPN.IPsec {
+		c := &d.VPN.IPsec[i]
+		for _, s := range c.secrets() {
+			out = append(out, heldSecret{key: objectKey{"vpn.ipsec", c.ID}, scope: "core", path: fmt.Sprintf("/vpn/ipsec/%d%s", i, s.path), ref: s.ref})
+		}
+	}
 	for i := range d.Addons {
 		a := &d.Addons[i]
 		scope := addonSecretScope(a.ID)
@@ -260,6 +267,8 @@ func secretKind(collection string) string {
 		return "acme"
 	case "vpn.wireguard":
 		return "wireguard"
+	case "vpn.ipsec":
+		return "ipsec"
 	default:
 		return "password"
 	}
@@ -282,6 +291,8 @@ func secretFields(collection string, value map[string]any) []secretField {
 		return acmeSecretFields(collection, value)
 	case "vpn.wireguard":
 		return wireguardSecretFields(value)
+	case "vpn.ipsec":
+		return ipsecSecretFields(value)
 	case "notifications.channels":
 		var out []secretField
 		for _, kind := range []struct {

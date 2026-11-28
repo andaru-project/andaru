@@ -31,6 +31,10 @@ var routeTargets = map[string]func(d *declaration, id string) bool{
 	"wireguard": func(d *declaration, id string) bool {
 		return slices.ContainsFunc(d.VPN.WireGuard, func(w wireguardInterface) bool { return w.ID == id })
 	},
+	// A policy-based connection has no interface, so only its kernel policies decide what it carries.
+	"ipsec": func(d *declaration, id string) bool {
+		return slices.ContainsFunc(d.VPN.IPsec, func(c ipsecConnection) bool { return c.ID == id && c.xfrm() })
+	},
 }
 
 // pointToPoint target kinds have no next hop on their link, so a route through one names no gateway.

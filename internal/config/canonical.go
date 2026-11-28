@@ -181,6 +181,13 @@ func normalizeDeclaration(d *declaration) {
 	for i := range d.VPN.WireGuard {
 		canonicalizeWireGuard(&d.VPN.WireGuard[i])
 	}
+	if len(d.VPN.IPsec) == 0 {
+		d.VPN.IPsec = nil
+	}
+	slices.SortFunc(d.VPN.IPsec, func(a, b ipsecConnection) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.VPN.IPsec {
+		canonicalizeIPsec(&d.VPN.IPsec[i])
+	}
 	slices.SortFunc(d.PKI.CAs, func(a, b pkiCA) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.PKI.Certificates, func(a, b pkiCertificate) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.PKI.TLSCryptKeys, func(a, b tlsCryptKey) int { return strings.Compare(a.ID, b.ID) })

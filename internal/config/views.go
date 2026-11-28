@@ -199,7 +199,7 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 			return ObjectView{}, e
 		}
 		v = view
-	case *acmeAccount, *acmeOrder, *wireguardInterface:
+	case *acmeAccount, *acmeOrder, *wireguardInterface, *ipsecConnection:
 		if v, e = acmeView(x, secrets); e != nil {
 			return ObjectView{}, e
 		}
@@ -282,6 +282,10 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 	if err != nil {
 		return SnapshotView{}, err
 	}
+	ipsec, err := viewSlice(s.Config.VPN.IPsec, "vpn.ipsec", func(c *ipsecConnection) string { return c.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
 	used := map[string]bool{}
 	for _, h := range heldSecrets(&s.Config) {
 		if h.scope == "core" && !h.ref.Unresolved {
@@ -332,8 +336,14 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 			return SnapshotView{}, e
 		}
 	}
-	if len(wireguard) > 0 {
-		if d["vpn"], e = json.Marshal(map[string]any{"wireguard": wireguard}); e != nil {
+	if vpn := map[string]any{}; len(wireguard)+len(ipsec) > 0 {
+		if len(wireguard) > 0 {
+			vpn["wireguard"] = wireguard
+		}
+		if len(ipsec) > 0 {
+			vpn["ipsec"] = ipsec
+		}
+		if d["vpn"], e = json.Marshal(vpn); e != nil {
 			return SnapshotView{}, e
 		}
 	}

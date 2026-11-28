@@ -18,6 +18,7 @@ import (
 // vpnSettings are the native VPN interfaces Andaru renders for systemd-networkd.
 type vpnSettings struct {
 	WireGuard []wireguardInterface `json:"wireguard,omitempty"`
+	IPsec     []ipsecConnection    `json:"ipsec,omitempty"`
 }
 
 // wireguardInterface is one WireGuard interface. PublicKey is derived from the private key whenever a write sets
