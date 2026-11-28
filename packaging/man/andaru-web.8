@@ -6,17 +6,21 @@ andaru\-web \- serve the Andaru web interface
 .SH SYNOPSIS
 .nf
 andaru\-web \-\-listen ADDR \-\-tls\-cert FILE \-\-tls\-key FILE
+           [\-\-tls\-cert\-override FILE \-\-tls\-key\-override FILE]
            \-\-origin HTTPS_ORIGIN [\-\-origin HTTPS_ORIGIN ...]
            \-\-backend\-socket PATH \-\-assets\-dir DIR
 .fi
 .SH DESCRIPTION
-Serve the Andaru web interface over HTTPS: the static assets, and /api/ requests passed to the engine\(aqs dedicated web socket. Every option is required.
+Serve the Andaru web interface over HTTPS: the static assets, and /api/ requests passed to the engine\(aqs dedicated web socket. Every option is required but the overrides. SIGHUP reloads the TLS certificate; open connections keep theirs.
 .SH OPTIONS
 .nf
 .in 0
   \-\-listen ADDR            explicit non\-wildcard IP address and port
   \-\-tls\-cert FILE          absolute TLS certificate path
   \-\-tls\-key FILE           absolute TLS private key path
+  \-\-tls\-cert\-override FILE absolute managed certificate path, served instead
+                           of \-\-tls\-cert while it and its key exist
+  \-\-tls\-key\-override FILE  absolute managed private key path
   \-\-origin HTTPS_ORIGIN    exact HTTPS management origin; repeat for each
                            origin
   \-\-backend\-socket PATH    absolute dedicated engine web socket path
