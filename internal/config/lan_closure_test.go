@@ -275,3 +275,30 @@ func TestKeptLANPreservesLiteralAllowedSources(t *testing.T) {
 		t.Fatalf("literal source missing from kept declaration: %s", docs.Configuration)
 	}
 }
+
+// A kept copy holds no private keys, so it restores without the PKI section and the certificate management named.
+func TestKeptCopiesDropCertificates(t *testing.T) {
+	body := []byte(`{"declaration":{"schemaVersion":4,"links":[],"segments":[],"zones":[],"roles":[],"pki":{"tlsCryptKeys":[{"id":"tck_6c1f5d0e-2b3a-4c5d-8e9f-0a1b2c3d4e5f","name":"tc","keyRef":{"secret":"pki_tc","isSet":true,"updatedAt":"2026-11-28T00:00:00Z","version":"3"}}]}},"secrets":{}}`)
+	docs, err := KeptDeclaration(body)
+	if err != nil {
+		t.Fatal(faultText(err), string(docs.Configuration))
+	}
+	if strings.Contains(string(docs.Configuration), "pki") {
+		t.Fatalf("configuration = %s", docs.Configuration)
+	}
+	if err = ValidateBackupDocuments(docs); err != nil {
+		t.Fatal(err)
+	}
+	var lan map[string]any
+	if err := json.Unmarshal(keptLAN(t), &lan); err != nil {
+		t.Fatal(err)
+	}
+	lan["management"].(map[string]any)["certificate"] = "crt_6c1f5d0e-2b3a-4c5d-8e9f-0a1b2c3d4e5f"
+	raw, _ := json.Marshal(lan)
+	if docs, err = KeptDeclaration(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err = ValidateBackupDocuments(docs); err != nil || strings.Contains(string(docs.Configuration), "crt_") {
+		t.Fatalf("%v: %s", err, docs.Configuration)
+	}
+}

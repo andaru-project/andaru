@@ -260,9 +260,9 @@ type Input struct {
 	// CertificateKeys are the private keys of the certificates enabled add-ons name, by certificate ID.
 	CertificateKeys map[string]string
 	Catalog         *addon.Catalog
-	StateDir     string
-	Links        []host.LinkStatus
-	Facts        host.RealizerFacts
+	StateDir        string
+	Links           []host.LinkStatus
+	Facts           host.RealizerFacts
 }
 
 // File is one rendered file. Content is safe to show; Real is not.

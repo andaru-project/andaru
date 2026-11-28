@@ -282,6 +282,12 @@ var actionRules = map[Action]actionRule{
 	ActionOpenVPNProfileExported: {category: CategoryProtected},
 }
 
+// CategoryOf is the category an action is recorded in.
+func CategoryOf(action Action) Category { return actionRules[action].category }
+
+// ValidTarget reports whether target is one action may name.
+func ValidTarget(action Action, target string) bool { return validTarget(action, target) }
+
 func validateIntent(intent Intent) error {
 	if !validOperationID(intent.OperationID) || !validRequestHash(intent.RequestHash) {
 		return ErrInvalid

@@ -216,6 +216,14 @@ func TestSetClientValidation(t *testing.T) {
 		{"pub config", "addon.ok", "tok", Grants{Publish: []string{"config/head"}}},
 		{"pub apply", "addon.ok", "tok", Grants{Publish: []string{"apply/1"}}},
 		{"pub notifications changed", "addon.ok", "tok", Grants{Publish: []string{"notifications/changed"}}},
+		{"pub certificate renewed", "addon.ok", "tok", Grants{Publish: []string{"certificate/renewed"}}},
+		{"pub acme order", "addon.ok", "tok", Grants{Publish: []string{"acme-order/aco_1"}}},
+		{"pub acme result", "addon.ok", "tok", Grants{Publish: []string{"acme-result/aco_1"}}},
+		{"sub acme order", "addon.ok", "tok", Grants{Subscribe: []string{"acme-order/#"}}},
+		{"sub acme result", "addon.ok", "tok", Grants{Subscribe: []string{"acme-result/+"}}},
+	}
+	if err := b.SetClient("addon.ok", "tok", Grants{Subscribe: []string{"certificate/renewed", "certificate/+"}}); err != nil {
+		t.Fatalf("subscribing to certificate events refused: %v", err)
 	}
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {

@@ -161,6 +161,9 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 				doc.Segments[i].Addressing.IPv6 = ipv6{Mode: "none"}
 			}
 		}
+		if doc.Management != nil {
+			doc.Management.Certificate = "" // the copy holds no certificate: the web interface serves its bootstrap one
+		}
 		d := declaration{
 			SchemaVersion: schemaVersion, Management: doc.Management,
 			Links: nonNil(doc.Links), Segments: nonNil(doc.Segments), Zones: nonNil(doc.Zones),

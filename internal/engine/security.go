@@ -92,6 +92,18 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.NotificationsManage, "/api/v1/config/notifications/channels", http.MethodPost)
 	add(authz.ConfigurationRead, "/api/v1/config/notifications/channels/{id}", read...)
 	add(authz.NotificationsManage, "/api/v1/config/notifications/channels/{id}", http.MethodPut, http.MethodDelete)
+	for _, kind := range []string{"cas", "certificates", "tls-crypt-keys"} {
+		add(authz.ConfigurationRead, "/api/v1/config/pki/"+kind, read...)
+		add(authz.ConfigurationWrite, "/api/v1/config/pki/"+kind, http.MethodPost)
+		add(authz.ConfigurationRead, "/api/v1/config/pki/"+kind+"/{id}", read...)
+		add(authz.ConfigurationWrite, "/api/v1/config/pki/"+kind+"/{id}", http.MethodPut, http.MethodDelete)
+	}
+	add(authz.CertificatesManage, "/api/v1/pki/cas/generate", http.MethodPost)
+	add(authz.CertificatesManage, "/api/v1/pki/certificates/generate", http.MethodPost)
+	add(authz.CertificatesManage, "/api/v1/pki/certificates/import", http.MethodPost)
+	add(authz.CertificatesManage, "/api/v1/pki/tls-crypt-keys/generate", http.MethodPost)
+	add(authz.CertificatesRead, "/api/v1/pki/cas/{id}/pem", read...)
+	add(authz.CertificatesRead, "/api/v1/pki/certificates/{id}/pem", read...)
 	add(authz.ConfigurationRead, "/api/v1/config/management", read...)
 	add(authz.ConfigurationWrite, "/api/v1/config/management", http.MethodPut, http.MethodDelete)
 	add(authz.ConfigurationRead, "/api/v1/config/nat/outbound", read...)

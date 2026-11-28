@@ -221,3 +221,19 @@ func TestPKINeedsNoApply(t *testing.T) {
 		t.Fatal("binding management's certificate needs no apply")
 	}
 }
+
+// A batch creates PKI objects like any collection.
+func TestPKIBatch(t *testing.T) {
+	s := seededState(t)
+	key, _ := pki.TLSCryptKey()
+	op, _ := json.Marshal(map[string]any{"operations": []any{map[string]any{"op": "create", "collection": "pki.tlsCryptKeys", "localId": "tc",
+		"value": map[string]any{"name": "tc", "keyRef": keyWrite("pki_batch", key)}}}})
+	c, err := DecodeChanges(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := prepareChanges(&s, c, "8", fixedTime)
+	if err != nil || !strings.HasPrefix(p.Created["tc"], "tck_") || len(p.State.Config.PKI.TLSCryptKeys) != 1 {
+		t.Fatalf("batch: %s %+v", faultText(err), p.Created)
+	}
+}

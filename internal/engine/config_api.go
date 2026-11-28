@@ -100,6 +100,15 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				route, id = "object", parts[3]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
+		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "pki" && pkiKinds[parts[2]] != "":
+			collection = pkiKinds[parts[2]]
+			if len(parts) == 3 {
+				route = "collection"
+				allowed = []string{"GET", "HEAD", "POST"}
+			} else if len(parts) == 4 && parts[3] != "" {
+				route, id = "object", parts[3]
+				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
+			}
 		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "roles", "dhcp", "dhcp6", "virtualAddresses", "addons"}, parts[1]):
 			collection = parts[1]
 			if len(parts) == 2 {

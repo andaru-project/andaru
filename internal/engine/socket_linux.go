@@ -144,7 +144,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		return upgradePending(ctx)
 	}, func(ctx context.Context) error { return runner.Realize(ctx, "addons-release-hold", 0) })
 	addonBus.onReady = hold.nudge
-	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge(); hold.nudge() })
+	// The live generation's certificates, as the head holds them: a save may renew or replace one.
+	certs := newCertSync(stateDir, filepath.Dir(busSocket), catalog, store.CertificateBindings, func(ctx context.Context, file string) error {
+		return runner.Realize(ctx, "cert-sync", 0, file)
+	})
+	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge(); hold.nudge(); certs.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
 	// A link in a notification is a path in the web UI: sent as a full URL from the first management origin.
@@ -207,7 +211,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	// A load the consumer waits on stops before the consumer is waited for.
 	defer cancel(context.Canceled)
 	// The engine states its notifications once the head is in the current schema, and again as applies and saves go.
-	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.apply(); addonBus.nudge() })
+	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.apply(); addonBus.nudge(); certs.nudge() })
 	if err != nil {
 		return fmt.Errorf("follow applies for notifications: %w", err)
 	}
@@ -224,6 +228,15 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	busSynced := make(chan struct{})
 	go func() { defer close(busSynced); addonBus.runWithInitial(lifetime, initialBusRetry) }()
 	defer func() { cancel(context.Canceled); <-busSynced }()
+	// The certificates too, so andaru-web and the add-ons the hold releases start on the current ones after a reboot
+	// or a rollback that happened while the engine was down.
+	initialCertErr := certs.sync(lifetime)
+	if initialCertErr != nil {
+		slog.Warn("cert-sync at startup; retrying", "error", initialCertErr)
+	}
+	certSynced := make(chan struct{})
+	go func() { defer close(certSynced); certs.run(lifetime, initialCertErr != nil) }()
+	defer func() { cancel(context.Canceled); <-certSynced }()
 	// Evaluate and release the boot add-on hold synchronously before serving API requests so an early
 	// Activate never mistakes boot startup for a pending settings hold.
 	initialHoldRetry := hold.check(lifetime)
@@ -260,9 +273,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		webOrigins = web.Origins
 	}
 	addonsHandler := newAddonsAPI(catalog, store, stateDir, systemRoot, webOrigins, runner, coordinator)
+	configuration := newSavedHandler(store, host.ReadLinks, readFacts, applies, backups)
+	pkiHandler := &pkiAPI{store: store, coordinator: coordinator, events: events, certs: certs, configuration: configuration}
 	rootAPI := newHandlerWithDeps(handlerDeps{
 		readLinks:        host.ReadLinks,
-		configuration:    newSavedHandler(store, host.ReadLinks, readFacts, applies, backups),
+		configuration:    configuration,
 		identityAPI:      identityAPI,
 		auditAPI:         auditAPI,
 		fleetAPI:         fleetAPI,
@@ -272,6 +287,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		notificationsAPI: notificationsHandler,
 		aliasesAPI:       aliasesAPI{feeds: feeds},
 		addonsAPI:        addonsHandler,
+		pkiAPI:           pkiHandler,
 		stateDir:         stateDir,
 	})
 	if web == nil {

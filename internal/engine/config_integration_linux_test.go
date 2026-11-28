@@ -162,6 +162,12 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/addons/{slug}/stop": {"post"}, "/api/v1/addons/{slug}/restart": {"post"},
 		"/api/v1/addons/{slug}/logs/{name}": {"get", "head"},
 		"/api/v1/setup/code": {"get", "head", "post"}, "/api/v1/setup/bootstrap": {"post"},
+		"/api/v1/config/pki/cas": {"get", "head", "post"}, "/api/v1/config/pki/cas/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/pki/certificates": {"get", "head", "post"}, "/api/v1/config/pki/certificates/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/pki/tls-crypt-keys": {"get", "head", "post"}, "/api/v1/config/pki/tls-crypt-keys/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/pki/cas/generate": {"post"}, "/api/v1/pki/certificates/generate": {"post"},
+		"/api/v1/pki/certificates/import": {"post"}, "/api/v1/pki/tls-crypt-keys/generate": {"post"},
+		"/api/v1/pki/cas/{id}/pem": {"get", "head"}, "/api/v1/pki/certificates/{id}/pem": {"get", "head"},
 	}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
