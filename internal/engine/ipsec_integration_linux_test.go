@@ -115,11 +115,15 @@ func TestIPsecRoutes(t *testing.T) {
 	for _, it := range sv.Items {
 		switch it.ID {
 		case site:
-			if !it.Active || it.Mode != "route-based" || len(it.IKESAs) != 1 || it.IKESAs[0].ChildSAs[0].BytesOut != 6 || it.IKESAs[0].ChildSAs[0].RemoteTS[0] != "10.40.0.0/16" {
+			if !it.Applied || !it.Active || it.Mode != "route-based" || len(it.IKESAs) != 1 || it.IKESAs[0].ChildSAs[0].BytesOut != 6 || it.IKESAs[0].ChildSAs[0].RemoteTS[0] != "10.40.0.0/16" {
 				t.Fatalf("site %+v", it)
 			}
+		case road:
+			if !it.Applied || it.Active || len(it.IKESAs) != 0 || it.IKESAs == nil {
+				t.Fatalf("road %+v", it)
+			}
 		default:
-			if it.Active || len(it.IKESAs) != 0 || it.IKESAs == nil {
+			if it.Applied || it.Active || len(it.IKESAs) != 0 || it.IKESAs == nil {
 				t.Fatalf("%s %+v", it.ID, it)
 			}
 		}

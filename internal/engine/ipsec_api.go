@@ -78,11 +78,12 @@ type ipsecSAStatus struct {
 }
 
 type ipsecStatus struct {
-	ID     string          `json:"id"`
-	Name   string          `json:"name"`
-	Mode   string          `json:"mode"`
-	Active bool            `json:"active"`
-	IKESAs []ipsecSAStatus `json:"ikeSAs"`
+	ID      string          `json:"id"`
+	Name    string          `json:"name"`
+	Mode    string          `json:"mode"`
+	Applied bool            `json:"applied"`
+	Active  bool            `json:"active"`
+	IKESAs  []ipsecSAStatus `json:"ikeSAs"`
 }
 
 // statusView joins strongSwan's SAs with the saved connections: each saved one with the SAs of its name, active
@@ -101,7 +102,13 @@ func (a *ipsecAPI) statusView(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []ipsecStatus{}
 	for _, c := range conns {
-		item := ipsecStatus{ID: c.ID, Name: c.Name, Mode: c.Mode, IKESAs: []ipsecSAStatus{}}
+		item := ipsecStatus{
+			ID:      c.ID,
+			Name:    c.Name,
+			Mode:    c.Mode,
+			Applied: slices.Contains(runtime.Connections, c.ID),
+			IKESAs:  []ipsecSAStatus{},
+		}
 		for _, sa := range runtime.SAs {
 			if sa.Name != c.ID {
 				continue

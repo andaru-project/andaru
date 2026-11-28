@@ -954,7 +954,9 @@ export interface IPsecIkeSAStatus {
 export interface IPsecStatusItem {
   id: string;
   name: string;
+  mode?: IPsecMode;
   applied?: boolean;
+  active?: boolean;
   ikeSAs?: IPsecIkeSAStatus[];
 }
 

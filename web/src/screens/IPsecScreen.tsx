@@ -629,6 +629,11 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
                         <Group justify="space-between" align="center" wrap="wrap">
                           <Group gap="xs">
                             <Text fw={600} size="md">{item.name || item.id}</Text>
+                            {item.mode && (
+                              <Badge size="xs" color={modeColors[item.mode]} variant="light">
+                                {modeLabels[item.mode]}
+                              </Badge>
+                            )}
                             {item.applied === false ? (
                               <Badge size="xs" color="yellow" variant="light">Not applied</Badge>
                             ) : establishedCount > 0 ? (
@@ -641,16 +646,18 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
                           </Group>
                           {canControl && (
                             <Group gap="xs">
-                              <Button
-                                size="xs"
-                                variant="light"
-                                disabled={!status.serviceActive || item.applied === false || actionBusy !== null}
-                                loading={actionBusy === `initiate:${item.id}`}
-                                aria-label={`Initiate ${item.name || item.id}`}
-                                onClick={() => void runControl(item.id, item.name || item.id, 'initiate')}
-                              >
-                                Initiate
-                              </Button>
+                              {item.mode !== 'road-warrior' && (
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  disabled={!status.serviceActive || item.applied === false || actionBusy !== null}
+                                  loading={actionBusy === `initiate:${item.id}`}
+                                  aria-label={`Initiate ${item.name || item.id}`}
+                                  onClick={() => void runControl(item.id, item.name || item.id, 'initiate')}
+                                >
+                                  Initiate
+                                </Button>
+                              )}
                               <Button
                                 size="xs"
                                 variant="default"
@@ -838,8 +845,8 @@ function IPsecModal({
     if (nextMode === 'road-warrior') {
       if (!existing) {
         setRemoteAddress('%any');
-        setStartAction('none');
       }
+      setStartAction('none');
       if (!ifname.trim()) setIfname(nextIfname(allConnections));
       if (xfrmIfId === '') setXfrmIfId(nextXfrmIfId(allConnections));
     } else if (nextMode === 'route-based') {
@@ -921,7 +928,8 @@ function IPsecModal({
             break;
           }
           seenUsers.add(uname);
-          if (!u.password.trim() && !u.existing?.passwordRef?.isSet) {
+          const canKeepExisting = u.existing?.username === uname && u.existing.passwordRef?.isSet;
+          if (!u.password.trim() && !canKeepExisting) {
             nextErrors.set('auth/eapUsers', `Enter a password for EAP user "${uname}".`);
             break;
           }
@@ -945,10 +953,14 @@ function IPsecModal({
     const parsedProposals = parseList(proposals);
     const parsedEspProposals = parseList(espProposals);
 
-    const eapPayload: IPsecEapUserWrite[] = eapUsers.map((u) => ({
-      username: u.username.trim(),
-      passwordRef: buildSecretWrite(u.password, u.existing?.passwordRef, 'ipsec_eap'),
-    }));
+    const eapPayload: IPsecEapUserWrite[] = eapUsers.map((u) => {
+      const uname = u.username.trim();
+      const keptRef = u.existing?.username === uname ? u.existing.passwordRef : undefined;
+      return {
+        username: uname,
+        passwordRef: buildSecretWrite(u.password, keptRef, 'ipsec_eap'),
+      };
+    });
 
     const payload: IPsecConnectionWrite = {
       name: trimmedName,
@@ -980,7 +992,7 @@ function IPsecModal({
       ...(mode === 'policy-based' ? { remoteSubnets: parsedRemoteSubnets } : {}),
       ...(mode === 'road-warrior' ? { virtualPool: parsedVirtualPool } : {}),
       dpdDelaySeconds: parsedDpd,
-      startAction,
+      startAction: mode === 'road-warrior' ? 'none' : startAction,
       natTraversal,
     };
 
@@ -1335,7 +1347,11 @@ function IPsecModal({
                       <PasswordInput
                         label={idx === 0 ? 'Password' : undefined}
                         aria-label={`EAP password ${idx + 1}`}
-                        placeholder={user.existing?.passwordRef?.isSet ? 'Leave blank to keep' : 'Password'}
+                        placeholder={
+                          user.existing?.username === user.username.trim() && user.existing?.passwordRef?.isSet
+                            ? 'Leave blank to keep'
+                            : 'Password'
+                        }
                         style={{ flex: 1 }}
                         value={user.password}
                         onChange={(e) => {
@@ -1398,12 +1414,13 @@ function IPsecModal({
                 <Select
                   label="Start action"
                   allowDeselect={false}
+                  disabled={mode === 'road-warrior'}
                   data={[
                     { value: 'trap', label: 'On demand (trap)' },
                     { value: 'start', label: 'Initiate on start' },
                     { value: 'none', label: 'Responder only (none)' },
                   ]}
-                  value={startAction}
+                  value={mode === 'road-warrior' ? 'none' : startAction}
                   error={errors.get('startAction')}
                   onChange={(val) => {
                     if (val === 'trap' || val === 'start' || val === 'none') setStartAction(val);

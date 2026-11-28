@@ -110,7 +110,9 @@ const sampleStatus = {
     {
       id: 'ips_hq',
       name: 'HQ Tunnel',
+      mode: 'route-based',
       applied: true,
+      active: true,
       ikeSAs: [
         {
           uniqueId: '1',
