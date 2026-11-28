@@ -580,3 +580,22 @@ func TestIPsecUnreadableReplacedConfigEndsEverySA(t *testing.T) {
 		t.Fatalf("SA of a connection whose old config is unknown kept: %q", b.net.argv)
 	}
 }
+
+func TestIPsecUnreadableMarkerSurvivesFailedEnumeration(t *testing.T) {
+	b := newBench(t)
+	b.net.strongswan = true
+	b.net.sasErr = errors.New("vici unavailable")
+	conf := "connections {\n\t" + ipsA + " {\n\t\tif_id_in = 42\n\t}\n}\n"
+	changed := "connections {\n\t" + ipsA + " {\n\t\tif_id_in = 43\n\t}\n}\n"
+	writeFile(t, b.net.root+ipsecConf, changed)
+	writeFile(t, b.net.root+ipsecTerminatePending, "{not json\n")
+	from := []placed{{path: ipsecConf, data: []byte(conf)}}
+	to := []placed{{path: ipsecConf, data: []byte(changed)}}
+	if err := b.r.ipsec(t.Context(), from, to); err == nil {
+		t.Fatal("failed enumeration accepted")
+	}
+	// The retry must still end every SA, so the unreadable marker is not replaced by a partial record.
+	if data, _ := os.ReadFile(b.net.root + ipsecTerminatePending); string(data) != "{not json\n" {
+		t.Fatalf("unreadable marker replaced before the SAs were known: %q", data)
+	}
+}

@@ -70,6 +70,7 @@ type fakeNetworkd struct {
 	// strongswan says strongswan.service runs; sas is what swanctl --list-sas --pretty prints.
 	strongswan bool
 	sas        string
+	sasErr     error // fails swanctl --list-sas
 }
 
 func (f *fakeNetworkd) netFiles() map[string]string {
@@ -205,7 +206,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 	case command == "systemctl stop strongswan.service":
 		f.strongswan, f.sas = false, ""
 	case command == "swanctl --list-sas --pretty":
-		return []byte(f.sas), nil
+		return []byte(f.sas), f.sasErr
 	case command == "systemctl is-active --quiet systemd-networkd.service":
 		if f.stopped {
 			return nil, errors.New("inactive")

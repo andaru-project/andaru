@@ -294,7 +294,8 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 			pendingSet[id] = true
 		}
 	}
-	if len(pendingSet) > 0 {
+	// Under endAll a partial record would replace the unreadable marker and lose the intent before the SAs are known.
+	if len(pendingSet) > 0 && !endAll {
 		if err := r.writePendingTerminations(slices.Sorted(maps.Keys(pendingSet))); err != nil {
 			return err
 		}
@@ -306,6 +307,14 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 	sas, err := ParseSwanctlSAs(out)
 	if err != nil {
 		return fmt.Errorf("read the IPsec SAs: %w", err)
+	}
+	if endAll {
+		for _, sa := range sas {
+			pendingSet[sa.Name] = true
+		}
+		if err := r.writePendingTerminations(slices.Sorted(maps.Keys(pendingSet))); err != nil {
+			return err
+		}
 	}
 	var ended []string
 	var reinit []string
