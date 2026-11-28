@@ -564,7 +564,7 @@ func TestIPsecSecurityValidation(t *testing.T) {
 		t.Error("typed identities not normalized like strongSwan")
 	}
 	// Wildcard or pattern EAP user names would match every user.
-	for _, name := range []string{"%any", "%any6", "*", "*@example.com", "^a.*$", "0.0.0.0", "::", "192.0.2.0/24", "2001:db8::/64", "192.0.2.1-192.0.2.9", "ipv4net:192.0.2.0/24", "IPv6Range:2001:db8::1-2001:db8::9"} {
+	for _, name := range []string{"%any", "%any6", "*", "*@example.com", "^a.*$", "0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0", "192.0.2.0/24", "2001:db8::/64", "192.0.2.1-192.0.2.9", "ipv4net:192.0.2.0/24", "IPv6Range:2001:db8::1-2001:db8::9"} {
 		dW := base()
 		dW.VPN.IPsec[0].Mode = "road-warrior"
 		dW.VPN.IPsec[0].RemoteAddress = "%any"
@@ -578,7 +578,7 @@ func TestIPsecSecurityValidation(t *testing.T) {
 		}
 	}
 	// DNs that differ only in case or spacing are one strongSwan identity.
-	if normalizeSwanIdentity("C=US, CN=gw") != normalizeSwanIdentity("asn1dn:c=US,cn=gw") {
+	if normalizeSwanIdentity("C=US, CN=gw") != normalizeSwanIdentity("c=US,cn=gw") || normalizeSwanIdentity("asn1dn:c=US,cn=gw") == normalizeSwanIdentity("C=US, CN=gw") || normalizeSwanIdentity("keyid:ABCD") == normalizeSwanIdentity("keyid:abcd") {
 		t.Error("DN identities not normalized like strongSwan")
 	}
 }

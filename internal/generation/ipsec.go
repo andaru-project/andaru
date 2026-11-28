@@ -267,6 +267,12 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 		_ = os.Remove(r.Root + ipsecTerminatePending)
 		return nil
 	}
+	// An unreadable marker may hide SAs that must end; ending every SA is safe, failing every apply is not.
+	pending, err := r.readPendingTerminations()
+	endAll := err != nil
+	if endAll {
+		slog.Warn("end every IPsec SA: the pending terminations are unreadable", "error", err)
+	}
 	if _, err := r.Run(ctx, swanctl, "--load-all", "--clear", "--file", ipsecConf, "--noprompt"); err != nil {
 		return fmt.Errorf("load the IPsec connections: %w", err)
 	}
@@ -274,10 +280,6 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 	// (including on stale xfrmIfId, shifted reqid, or rotated secrets) until they are ended.
 	oldFP, _ := ipsecConnectionFingerprints(from)
 	newFP, newStart := ipsecConnectionFingerprints(to)
-	pending, err := r.readPendingTerminations()
-	if err != nil {
-		return err
-	}
 	pendingSet := map[string]bool{}
 	for _, id := range pending {
 		pendingSet[id] = true
@@ -306,7 +308,7 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 	var termErr error
 	for _, sa := range sas {
 		_, kept := newFP[sa.Name]
-		if (!kept || pendingSet[sa.Name]) && !slices.Contains(ended, sa.Name) {
+		if (!kept || endAll || pendingSet[sa.Name]) && !slices.Contains(ended, sa.Name) {
 			ended = append(ended, sa.Name)
 			// --force deletes the SA locally without waiting on the peer, so a dead peer cannot fail the apply.
 			if _, err := r.Run(ctx, swanctl, "--terminate", "--ike", sa.Name, "--force", "--timeout", "5"); err != nil {

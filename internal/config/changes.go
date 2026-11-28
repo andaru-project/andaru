@@ -1293,13 +1293,15 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 							i = op
 							path = input.path(op, tail, true)
 						}
-					case (tail == "/auth/localId" || tail == "/auth/remoteId") &&
+					case (tail == "/auth/localId" || tail == "/auth/remoteId") && c.Auth.PSKRef != nil && existing.Auth.PSKRef != nil &&
+						c.Auth.PSKRef.Secret != existing.Auth.PSKRef.Secret &&
 						pskPairKey(c.Auth.LocalID, c.Auth.RemoteID) == pskPairKey(existing.Auth.LocalID, existing.Auth.RemoteID):
 						if i < 0 || op < i {
 							i = op
 							path = input.path(op, tail, true)
 						}
-					case tail == "/auth/remoteType" && c.Enabled && c.Auth.RemoteType == "eap-mschapv2":
+					case tail == "/auth/remoteType" && c.Enabled && c.Auth.RemoteType == "eap-mschapv2" &&
+						existing.Enabled && existing.Auth.RemoteType == "eap-mschapv2":
 						// The submitted connection is the second enabled EAP one.
 						if i < 0 || op < i {
 							i = op

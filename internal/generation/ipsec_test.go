@@ -513,7 +513,7 @@ func TestIPsecTeardownLeavesTmpfilesDirectoryAlone(t *testing.T) {
 	}
 }
 
-func TestIPsecMalformedPendingTerminationsFailApply(t *testing.T) {
+func TestIPsecMalformedPendingTerminationsEndEverySA(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
 	conf := "connections {\n\t" + ipsA + " {\n\t\tchildren {\n\t\t\t" + ipsA + " {\n\t\t\t}\n\t\t}\n\t}\n}\n"
@@ -524,16 +524,16 @@ func TestIPsecMalformedPendingTerminationsFailApply(t *testing.T) {
 	if err := b.r.Confirm(t.Context(), id1); err != nil {
 		t.Fatal(err)
 	}
-	// Unchanged fingerprints: only the marker says the SA must still end, so an unreadable one must not be dropped.
+	// Unchanged fingerprints: only the marker says the SA must end, so an unreadable one ends every SA rather than
+	// dropping the record or blocking every apply.
 	writeFile(t, b.net.root+ipsecTerminatePending, "{not json\n")
 	b.net.sas = sasOf(ipsA)
-	if err := b.r.Activate(t.Context(), b.gen(withIPsec(conf))); err == nil {
-		t.Fatal("malformed .terminate-pending accepted")
-	} else if !strings.Contains(err.Error(), "pending IPsec terminations") {
-		t.Fatalf("unexpected error: %v", err)
+	b.net.argv = nil
+	if err := b.r.Activate(t.Context(), b.gen(withIPsec(conf))); err != nil {
+		t.Fatal(err)
 	}
-	if !b.exists(ipsecTerminatePending[1:]) {
-		t.Fatal("malformed .terminate-pending removed")
+	if b.net.ran("swanctl --terminate --ike "+ipsA+" --force --timeout 5") != 1 || b.exists(ipsecTerminatePending[1:]) {
+		t.Fatalf("unreadable marker: SA not ended or marker kept: %q", b.net.argv)
 	}
 }
 

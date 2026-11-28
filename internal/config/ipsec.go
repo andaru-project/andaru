@@ -185,7 +185,7 @@ func overlapsReservedPool(p netip.Prefix) bool {
 }
 
 // normalizeSwanIdentity maps equivalent strongSwan identity spellings (such as "gw.example.com", "@gw.example.com",
-// "fqdn:gw.example.com", "ipv4:...", "@@user", "email:...", "rfc822:...", "userfqdn:...", "dn:...", "asn1dn:...")
+// "fqdn:gw.example.com", "ipv4:...", "@@user", "email:...", "rfc822:...", "userfqdn:...", DNs; typed asn1dn:/keyid: values stay literal)
 // onto one canonical key so PSK identity-pair collision detection matches strongSwan's parser.
 func normalizeSwanIdentity(s string) string {
 	if s == "" {
@@ -206,11 +206,9 @@ func normalizeSwanIdentity(s string) string {
 	case strings.HasPrefix(lower, "userfqdn:"):
 		return "rfc822:" + strings.ToLower(s[9:])
 	case strings.HasPrefix(lower, "asn1dn:"):
-		return normalizeDN(s[7:])
-	case strings.HasPrefix(lower, "dn:"):
-		return normalizeDN(s[3:])
+		return lower[:7] + s[7:] // literal bytes, like every typed non-string identity
 	case strings.HasPrefix(lower, "keyid:"):
-		return "keyid:" + strings.ToLower(s[6:])
+		return lower[:6] + s[6:]
 	case strings.HasPrefix(s, "@@"):
 		return "rfc822:" + strings.ToLower(s[2:])
 	case strings.HasPrefix(s, "@"):
@@ -239,7 +237,7 @@ func pskPairKey(local, remote string) string {
 // subnets and ranges):
 // as an EAP secret's owner one would hand its password to every user name.
 func wildcardSwanIdentity(s string) bool {
-	if s == "0.0.0.0" || s == "::" || strings.HasPrefix(s, "%") || strings.ContainsAny(s, "*^") {
+	if a, err := netip.ParseAddr(s); err == nil && a.IsUnspecified() || strings.HasPrefix(s, "%") || strings.ContainsAny(s, "*^") {
 		return true
 	}
 	// Subnets and address ranges match every address inside them.
