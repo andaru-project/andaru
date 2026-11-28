@@ -55,9 +55,11 @@ func TestActivateLoadsFilterFirst(t *testing.T) {
 	if b.net.table != "sha256:aa" || b.read(id).State.State != Awaiting {
 		t.Fatalf("table %q state %+v", b.net.table, b.read(id).State)
 	}
-	// networkd's per-interface IPv6Forwarding= does not route IPv6; only the global switch does.
-	if b.forwarding() != "1\n" {
-		t.Fatalf("IPv6 forwarding %q with the filter loaded", b.forwarding())
+	// Both global IPv4 and IPv6 forwarding switches must be enabled while table inet andaru is loaded
+	// so unmanaged add-on interfaces (e.g. tailscale0) forward without needing container sysctl writes.
+	v4, _ := os.ReadFile(filepath.Join(b.net.root, ipv4Forwarding))
+	if b.forwarding() != "1\n" || string(v4) != "1\n" {
+		t.Fatalf("forwarding v6=%q v4=%q with the filter loaded, want 1", b.forwarding(), v4)
 	}
 	if b.exists(netDir + "/andaru") {
 		t.Fatal("the filter entry was placed as a file")

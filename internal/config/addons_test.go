@@ -1,7 +1,10 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/addon"
 )
 
 func TestValidSecretScope(t *testing.T) {
@@ -95,5 +98,56 @@ func TestValidateBackupDocumentsRejectsSecretWriteInAddonSettings(t *testing.T) 
 	raw := []byte(`{"schemaVersion":4,"links":[],"segments":[],"zones":[],"addons":[{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":"auth_key","set":"plaintext"}}}]}`)
 	if err := ValidateBackupDocuments(RestoreDocuments{Configuration: raw}); err == nil {
 		t.Fatal("expected ValidateBackupDocuments to reject plaintext secret write in restored add-on settings")
+	}
+}
+
+func TestShippedTailscaleCatalogConfigValidation(t *testing.T) {
+	cat, err := addon.LoadCatalog(filepath.Join("..", "..", "image", "files", "usr", "share", "andaru", "addons"))
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	zoneID := "zon_01234567-89ab-4def-8123-456789abcdef"
+
+	// Enabled without required tailscale0 zone binding must be rejected.
+	dNoZone := &declaration{
+		Zones: []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{{
+			ID:      "org.andaru.tailscale",
+			Enabled: true,
+		}},
+	}
+	if errs := validateAddonsAgainstCatalog(cat, dNoZone, nil, nil); len(errs) == 0 {
+		t.Fatal("expected rejection when enabled Tailscale has no zone bound to tailscale0")
+	}
+
+	// Enabled with zone bound succeeds and materializes default routingMode with --netfilter-mode=off.
+	dValid := &declaration{
+		Zones: []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{{
+			ID:         "org.andaru.tailscale",
+			Enabled:    true,
+			Interfaces: []addonInterface{{Name: "tailscale0", Zone: zoneID}},
+		}},
+	}
+	if errs := validateAddonsAgainstCatalog(cat, dValid, nil, nil); len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %+v", errs)
+	}
+	rm, ok := addon.ToStringSlice(dValid.Addons[0].Settings["routingMode"])
+	if !ok || len(rm) != 1 || rm[0] != "--netfilter-mode=off" {
+		t.Fatalf("materialized routingMode = %#v, want [--netfilter-mode=off]", dValid.Addons[0].Settings["routingMode"])
+	}
+
+	// Invalid CIDR in advertiseRoutes must be rejected.
+	dBadCIDR := &declaration{
+		Zones: []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{{
+			ID:         "org.andaru.tailscale",
+			Enabled:    true,
+			Settings:   map[string]any{"advertiseRoutes": []string{"not-a-cidr"}},
+			Interfaces: []addonInterface{{Name: "tailscale0", Zone: zoneID}},
+		}},
+	}
+	if errs := validateAddonsAgainstCatalog(cat, dBadCIDR, nil, nil); len(errs) == 0 {
+		t.Fatal("expected rejection for invalid advertiseRoutes CIDR")
 	}
 }

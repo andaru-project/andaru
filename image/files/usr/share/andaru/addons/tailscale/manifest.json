@@ -1,0 +1,147 @@
+{
+  "manifestVersion": 1,
+  "requires": [
+    {
+      "name": "andaru.extension-api",
+      "version": ">=1.0.0 <2.0.0"
+    }
+  ],
+  "id": "org.andaru.tailscale",
+  "slug": "tailscale",
+  "name": "Tailscale",
+  "description": "Mesh VPN built on WireGuard. Creates a `tailscale0` tunnel interface managed by Andaru firewall zones without modifying host nftables rules.",
+  "version": "1.0.0",
+  "application": {
+    "name": "Tailscale",
+    "version": "1.104.7"
+  },
+  "permissions": [
+    {
+      "name": "logs",
+      "title": "View Tailscale logs"
+    }
+  ],
+  "runtime": {
+    "image": "ghcr.io/tailscale/tailscale@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4",
+    "network": "host",
+    "profile": "network-interface",
+    "capabilities": [
+      "NET_ADMIN"
+    ],
+    "devices": [
+      "/dev/net/tun"
+    ],
+    "env": {
+      "TS_USERSPACE": "false",
+      "TS_STATE_DIR": "/var/lib/tailscale",
+      "TS_ACCEPT_DNS": "false",
+      "TS_AUTH_ONCE": "true"
+    },
+    "settingsActivation": "recreate",
+    "stopTimeoutSeconds": 10
+  },
+  "interfaces": [
+    {
+      "name": "tailscale0",
+      "title": "Tailscale tunnel",
+      "zoneRequired": true
+    }
+  ],
+  "storage": [
+    {
+      "name": "state",
+      "purpose": "state",
+      "mountPath": "/var/lib/tailscale",
+      "backup": false
+    }
+  ],
+  "properties": [
+    {
+      "name": "authKey",
+      "type": "secret-reference",
+      "title": "Auth key",
+      "description": "Optional Tailscale auth key for unattended enrollment. Generate a key in the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). Leave blank to authenticate interactively via the login URL in Tailscale logs.",
+      "binding": {
+        "type": "file",
+        "name": "auth_key",
+        "format": "raw",
+        "env": "TS_AUTHKEY",
+        "prefix": "file:"
+      }
+    },
+    {
+      "name": "hostname",
+      "type": "string",
+      "format": "hostname",
+      "title": "Tailnet hostname",
+      "description": "Optional machine name announced to your tailnet. Defaults to the appliance hostname when unset.",
+      "binding": {
+        "type": "environment",
+        "name": "TS_HOSTNAME"
+      }
+    },
+    {
+      "name": "advertiseRoutes",
+      "type": "string-list",
+      "itemFormat": "cidr",
+      "title": "Advertised subnet routes",
+      "description": "Optional CIDR prefixes (one per line, e.g. `192.168.10.0/24`) to advertise to your tailnet as a subnet router. Approve advertised routes in the Tailscale admin console and allow traffic in **Firewall → Rules**.",
+      "binding": {
+        "type": "environment",
+        "name": "TS_ROUTES",
+        "encoding": {
+          "mode": "join",
+          "separator": ","
+        }
+      }
+    },
+    {
+      "name": "routingMode",
+      "type": "enum",
+      "minItems": 1,
+      "maxItems": 1,
+      "default": [
+        "--netfilter-mode=off"
+      ],
+      "title": "Tailnet routing mode",
+      "description": "Controls whether this appliance accepts subnet routes from other tailnet peers or advertises itself as an exit node. Tailscale's internal netfilter management stays disabled so Andaru remains the sole firewall owner.",
+      "options": [
+        {
+          "value": "--netfilter-mode=off",
+          "title": "Standard node",
+          "description": "Connect to your tailnet without accepting peer subnet routes or advertising an exit node."
+        },
+        {
+          "value": "--netfilter-mode=off --accept-routes",
+          "title": "Accept peer routes",
+          "description": "Install subnet routes advertised by other tailnet nodes into the appliance routing table."
+        },
+        {
+          "value": "--netfilter-mode=off --advertise-exit-node",
+          "title": "Advertise exit node",
+          "description": "Offer this appliance as a Tailscale exit node for other devices on your tailnet."
+        },
+        {
+          "value": "--netfilter-mode=off --accept-routes --advertise-exit-node",
+          "title": "Accept peer routes & advertise exit node",
+          "description": "Both accept advertised peer subnet routes and offer this appliance as an exit node."
+        }
+      ],
+      "binding": {
+        "type": "environment",
+        "name": "TS_EXTRA_ARGS"
+      }
+    }
+  ],
+  "logs": [
+    {
+      "name": "application",
+      "title": "Tailscale logs",
+      "permission": "logs",
+      "source": {
+        "type": "runtime"
+      },
+      "format": "text"
+    }
+  ]
+}

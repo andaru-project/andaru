@@ -89,7 +89,9 @@ func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 	}
 	for _, item := range listing.Nftables {
 		if item.Table != nil && item.Table.Comment == comment {
-			return r.sysctl(ipv6Forwarding, "1\n")
+			// Enable both global IPv4 and IPv6 forwarding while table inet andaru is loaded so
+			// unmanaged add-on tunnel interfaces (e.g. tailscale0) can forward without container sysctl writes.
+			return errors.Join(r.sysctl(ipv4Forwarding, "1\n"), r.sysctl(ipv6Forwarding, "1\n"))
 		}
 	}
 	return fmt.Errorf("the loaded packet filter is not this generation's")

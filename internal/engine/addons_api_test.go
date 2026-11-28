@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/andaru-project/andaru/internal/addon"
+	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
@@ -403,5 +404,49 @@ func TestManagementOriginsRejectsEmptyAndNoncanonicalHostnames(t *testing.T) {
 		if _, _, err := managementOrigins([]string{good}); err != nil {
 			t.Fatalf("expected %q to be accepted: %v", good, err)
 		}
+	}
+}
+
+func TestAddonsAPIBeginAndFinishAuditCommitsEvent(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("audit store requires root")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatalf("mkdir stateDir: %v", err)
+	}
+	audits, err := audit.Open(t.Context(), stateDir)
+	if err != nil {
+		t.Fatalf("audit.Open: %v", err)
+	}
+	defer audits.Close()
+
+	root := t.TempDir()
+	seedLiveGeneration(t, stateDir, 1, "1", "sample")
+
+	cat := testAPIAddonCatalog(t)
+	runner := &fakeAddonRunner{}
+	coord := &securityCoordinator{audits: audits}
+	api := newAddonsAPI(cat, fakeSnapshotStore{raw: []byte(`{"schemaVersion":4}`)}, stateDir, root, nil, runner, coord)
+
+	rec := httptest.NewRecorder()
+	req := withActor(httptest.NewRequest(http.MethodPost, "/api/v1/addons/sample/restart", nil), authz.AddonsManage)
+	api.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /restart = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	events, err := audits.ListEvents(t.Context(), 0, 10)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d audit events, want 2 (%+v)", len(events), events)
+	}
+	if events[0].Action != audit.ActionAddonRestarted || events[0].Target != "sample" || events[0].Result != audit.ResultPending {
+		t.Fatalf("unexpected begin audit event: %+v", events[0])
+	}
+	if events[1].Action != audit.ActionAddonRestarted || events[1].Target != "sample" || events[1].Result != audit.ResultSuccess || events[1].OperationID != events[0].OperationID {
+		t.Fatalf("unexpected finish audit event: %+v", events[1])
 	}
 }
