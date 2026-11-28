@@ -23,10 +23,13 @@ type routeTarget struct {
 }
 
 // routeTargets says, by target kind, whether a declaration holds a target. A kind without an entry has no
-// targets yet: the VPN kinds join it with their collections.
+// targets yet: the remaining VPN kinds join it with their collections.
 var routeTargets = map[string]func(d *declaration, id string) bool{
 	"segment": func(d *declaration, id string) bool {
 		return slices.ContainsFunc(d.Segments, func(s segment) bool { return s.ID == id })
+	},
+	"wireguard": func(d *declaration, id string) bool {
+		return slices.ContainsFunc(d.VPN.WireGuard, func(w wireguardInterface) bool { return w.ID == id })
 	},
 }
 

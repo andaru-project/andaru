@@ -1661,6 +1661,19 @@
           "items": {
             "$ref": "#/$defs/routeStored"
           }
+        },
+        "vpn": {
+          "type": "object",
+          "properties": {
+            "wireguard": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/wireguardStored"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1871,6 +1884,19 @@
           "items": {
             "$ref": "#/$defs/routeStored"
           }
+        },
+        "vpn": {
+          "type": "object",
+          "properties": {
+            "wireguard": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/wireguardView"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -3407,6 +3433,86 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "vpn.wireguard"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/wireguardWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "vpn.wireguard"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/wireguardWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "vpn.wireguard"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -3492,6 +3598,9 @@
         },
         {
           "$ref": "#/$defs/routeStored"
+        },
+        {
+          "$ref": "#/$defs/wireguardView"
         }
       ]
     },
@@ -6146,6 +6255,276 @@
       "allOf": [
         {
           "$ref": "#/$defs/routeFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "wireguardID": {
+      "type": "string",
+      "pattern": "^wg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "wireguardPeerID": {
+      "type": "string",
+      "pattern": "^wgp_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "wireguardKey": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$"
+    },
+    "wireguardPeerFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/wireguardPeerID"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "publicKey": {
+              "$ref": "#/$defs/wireguardKey"
+            },
+            "allowedIps": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 261
+            },
+            "persistentKeepalive": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "routeAllowedIps": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "publicKey"
+          ]
+        }
+      ]
+    },
+    "wireguardFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/wireguardID"
+            },
+            "ifname": {
+              "type": "string",
+              "pattern": "^wg([0-9]|[1-9][0-9])$"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "zone": {
+              "$ref": "#/$defs/zoneRef"
+            },
+            "listenPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "allowListenPort": {
+              "type": "boolean"
+            },
+            "allowListenSegments": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "$ref": "#/$defs/segmentRef"
+              }
+            },
+            "mtu": {
+              "type": "integer",
+              "minimum": 1280,
+              "maximum": 1500
+            },
+            "addresses": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "publicKey": {
+              "$ref": "#/$defs/wireguardKey"
+            }
+          },
+          "required": [
+            "ifname",
+            "enabled",
+            "listenPort"
+          ]
+        }
+      ]
+    },
+    "wireguardPeerStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/wireguardPeerFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "presharedKeyRef": {
+              "$ref": "#/$defs/secretRef"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "wireguardStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/wireguardFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "privateKeyRef": {
+              "$ref": "#/$defs/secretRef"
+            },
+            "peers": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/wireguardPeerStored"
+              }
+            }
+          },
+          "required": [
+            "id",
+            "privateKeyRef"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "wireguardPeerWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/wireguardPeerFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "presharedKeyRef": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/secretWrite"
+                },
+                {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "wireguardWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/wireguardFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "privateKeyRef": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/secretWrite"
+                },
+                {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              ]
+            },
+            "peers": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/wireguardPeerWrite"
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "wireguardPeerView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/wireguardPeerFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "presharedKeyRef": {
+              "$ref": "#/$defs/secretView"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "wireguardView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/wireguardFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "privateKeyRef": {
+              "$ref": "#/$defs/secretView"
+            },
+            "peers": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/wireguardPeerView"
+              }
+            }
+          },
+          "required": [
+            "id",
+            "privateKeyRef"
+          ]
         }
       ],
       "unevaluatedProperties": false

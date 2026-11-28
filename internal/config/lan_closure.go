@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -153,6 +154,7 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 		return RestoreDocuments{}, err
 	}
 	declarationBody := doc.Declaration
+	kinds := map[string]string{} // a kept secret's kind, when it is not a link's password
 	switch doc.Kind {
 	case "lan-closure":
 		for i := range doc.Segments {
@@ -255,6 +257,44 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 				return RestoreDocuments{}, err
 			}
 		}
+		// The copy keeps WireGuard up, for remote access to a recovered host: each key reference loses its view state,
+		// and one the copy does not hold (a disabled interface's or peer's) is left unresolved.
+		if raw, ok := d["vpn"]; ok {
+			var vpn struct {
+				WireGuard []map[string]any `json:"wireguard"`
+			}
+			if err := json.Unmarshal(raw, &vpn); err != nil {
+				return RestoreDocuments{}, err
+			}
+			reference := func(parent map[string]any, field string) {
+				view, ok := parent[field].(map[string]any)
+				if !ok {
+					return
+				}
+				name, _ := view["secret"].(string)
+				ref := map[string]any{"secret": name}
+				if _, held := doc.Secrets[name]; !held {
+					ref["unresolved"] = true
+				}
+				kinds[name] = "wireguard"
+				parent[field] = ref
+			}
+			for _, w := range vpn.WireGuard {
+				reference(w, "privateKeyRef")
+				peers, _ := w["peers"].([]any)
+				for _, p := range peers {
+					if peer, ok := p.(map[string]any); ok {
+						reference(peer, "presharedKeyRef")
+					}
+				}
+			}
+			if d["vpn"], err = json.Marshal(vpn); err != nil {
+				return RestoreDocuments{}, err
+			}
+			if declarationBody, err = json.Marshal(d); err != nil {
+				return RestoreDocuments{}, err
+			}
+		}
 		if raw, ok := d["roles"]; ok {
 			var roles []map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &roles); err != nil {
@@ -276,7 +316,7 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 	}
 	core := make(map[string]backupSecretEntry, len(doc.Secrets))
 	for name, value := range doc.Secrets {
-		core[name] = backupSecretEntry{Kind: "password", Value: value}
+		core[name] = backupSecretEntry{Kind: cmp.Or(kinds[name], "password"), Value: value}
 	}
 	secrets, err := canonical(backupSecretDocument{SchemaVersion: 1, Scopes: map[string]map[string]backupSecretEntry{"core": core}})
 	if err != nil {

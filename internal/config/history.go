@@ -590,6 +590,44 @@ func realized(value json.RawMessage) []byte {
 			return value
 		}
 	}
+	// A disabled WireGuard interface or peer renders nothing, names and descriptions are not rendered, and its keys
+	// are compared in SameRealization.
+	if raw, ok := d["vpn"]; ok {
+		var err error
+		var vpn struct {
+			WireGuard []map[string]json.RawMessage `json:"wireguard"`
+		}
+		if json.Unmarshal(raw, &vpn) != nil {
+			return value
+		}
+		vpn.WireGuard = slices.DeleteFunc(vpn.WireGuard, func(w map[string]json.RawMessage) bool { return string(w["enabled"]) != "true" })
+		for _, w := range vpn.WireGuard {
+			delete(w, "name")
+			delete(w, "description")
+			delete(w, "privateKeyRef")
+			var peers []map[string]json.RawMessage
+			if json.Unmarshal(w["peers"], &peers) != nil {
+				continue
+			}
+			peers = slices.DeleteFunc(peers, func(p map[string]json.RawMessage) bool { return string(p["enabled"]) != "true" })
+			for _, p := range peers {
+				delete(p, "name")
+				delete(p, "description")
+				if _, has := p["presharedKeyRef"]; has {
+					p["presharedKeyRef"] = json.RawMessage("true") // its value is in Secrets; that it has one is rendered
+				}
+			}
+			if w["peers"], err = json.Marshal(peers); err != nil {
+				return value
+			}
+		}
+		delete(d, "vpn")
+		if len(vpn.WireGuard) > 0 {
+			if d["vpn"], err = json.Marshal(vpn.WireGuard); err != nil {
+				return value
+			}
+		}
+	}
 	// A secret view says when its secret last changed; the secret itself is compared in SameRealization, so a
 	// secret changed and changed back realizes as before.
 	var links []map[string]json.RawMessage
@@ -683,6 +721,7 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 				result.Secrets[l.Password.Secret] = state.Secrets.Scopes["core"][l.Password.Secret].Value
 			}
 		}
+		realizedWireGuardSecrets(&state.Config, state.Secrets, result.Secrets)
 		certs := certificateIndex(&state.Config)
 		for i := range state.Config.Addons {
 			a := &state.Config.Addons[i]

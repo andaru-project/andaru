@@ -106,8 +106,8 @@ func validateSecrets(doc secretDocument, head Version) error {
 	return nil
 }
 
-// checkResolvedReferences gates an apply, so it covers links, enabled add-ons and the certificates management and
-// enabled add-ons serve: channels take effect without an apply, and a CA without its key still verifies peers. A
+// checkResolvedReferences gates an apply, so it covers links, enabled add-ons and WireGuard interfaces with their
+// enabled peers, and the certificates management and enabled add-ons serve: channels take effect without an apply, and a CA without its key still verifies peers. A
 // channel, disabled add-on or PKI object a restore left unresolved may be saved with that reference unchanged.
 func checkResolvedReferences(d *declaration) error {
 	var details []FieldError
@@ -143,6 +143,7 @@ func checkResolvedReferences(d *declaration) error {
 			}
 		}
 	}
+	details = append(details, unresolvedWireGuard(d)...)
 	if len(details) != 0 {
 		return &Fault{Code: "VALIDATION_FAILED", Details: details}
 	}
@@ -209,6 +210,12 @@ func heldSecrets(d *declaration) []heldSecret {
 			}
 		}
 	}
+	for i := range d.VPN.WireGuard {
+		w := &d.VPN.WireGuard[i]
+		for _, s := range w.secrets() {
+			out = append(out, heldSecret{key: objectKey{"vpn.wireguard", w.ID}, scope: "core", path: fmt.Sprintf("/vpn/wireguard/%d%s", i, s.path), ref: s.ref})
+		}
+	}
 	for i := range d.Addons {
 		a := &d.Addons[i]
 		scope := addonSecretScope(a.ID)
@@ -251,6 +258,8 @@ func secretKind(collection string) string {
 		return "pki"
 	case "acme.accounts", "acme.orders":
 		return "acme"
+	case "vpn.wireguard":
+		return "wireguard"
 	default:
 		return "password"
 	}
@@ -271,6 +280,8 @@ func secretFields(collection string, value map[string]any) []secretField {
 		return []secretField{{"/keyRef", value, "keyRef"}}
 	case "acme.accounts", "acme.orders":
 		return acmeSecretFields(collection, value)
+	case "vpn.wireguard":
+		return wireguardSecretFields(value)
 	case "notifications.channels":
 		var out []secretField
 		for _, kind := range []struct {

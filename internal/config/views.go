@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/andaru-project/andaru/internal/authz"
@@ -198,7 +199,7 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 			return ObjectView{}, e
 		}
 		v = view
-	case *acmeAccount, *acmeOrder:
+	case *acmeAccount, *acmeOrder, *wireguardInterface:
 		if v, e = acmeView(x, secrets); e != nil {
 			return ObjectView{}, e
 		}
@@ -277,6 +278,10 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 	if err != nil {
 		return SnapshotView{}, err
 	}
+	wireguard, err := viewSlice(s.Config.VPN.WireGuard, "vpn.wireguard", func(w *wireguardInterface) string { return w.ID }, s)
+	if err != nil {
+		return SnapshotView{}, err
+	}
 	used := map[string]bool{}
 	for _, h := range heldSecrets(&s.Config) {
 		if h.scope == "core" && !h.ref.Unresolved {
@@ -327,6 +332,11 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 			return SnapshotView{}, e
 		}
 	}
+	if len(wireguard) > 0 {
+		if d["vpn"], e = json.Marshal(map[string]any{"wireguard": wireguard}); e != nil {
+			return SnapshotView{}, e
+		}
+	}
 	roles := append(authz.BuiltIns(), s.Config.Roles...)
 	if d["roles"], e = json.Marshal(roles); e != nil {
 		return SnapshotView{}, e
@@ -369,7 +379,7 @@ func resultView(p preparedChange) (SaveResult, error) {
 	return result, nil
 }
 
-// acmeView is an ACME object with each secret reference shown as its view.
+// acmeView is an ACME object or WireGuard interface with each secret reference shown as its view.
 func acmeView(v any, secrets secretDocument) (map[string]any, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
@@ -388,11 +398,20 @@ func acmeView(v any, secrets secretDocument) (map[string]any, error) {
 			return nil, err
 		}
 		tokens := strings.Split(strings.TrimPrefix(s.path, "/"), "/")
-		parent := m
+		var node any = m
 		for _, t := range tokens[:len(tokens)-1] {
-			parent, _ = parent[t].(map[string]any)
+			switch x := node.(type) {
+			case map[string]any:
+				node = x[t]
+			case []any: // a WireGuard peer, by index
+				if n, err := strconv.Atoi(t); err == nil && n < len(x) {
+					node = x[n]
+				} else {
+					node = nil
+				}
+			}
 		}
-		if parent != nil {
+		if parent, ok := node.(map[string]any); ok {
 			parent[tokens[len(tokens)-1]] = view
 		}
 	}
