@@ -1,0 +1,285 @@
+{
+  "schemaVersion": 4,
+  "links": [
+    {
+      "id": "lnk_00000001-0000-4000-8000-000000000001",
+      "name": "wan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:01"
+    },
+    {
+      "id": "lnk_00000002-0000-4000-8000-000000000002",
+      "name": "lan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:02"
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_00000001-0000-4000-8000-000000000001",
+      "name": "wan",
+      "link": "lnk_00000001-0000-4000-8000-000000000001",
+      "zone": "zon_00000001-0000-4000-8000-000000000001",
+      "addressing": {
+        "ipv4": {
+          "mode": "dhcp"
+        },
+        "ipv6": {
+          "mode": "dhcp6",
+          "requestPrefixLength": 56
+        }
+      }
+    },
+    {
+      "id": "seg_00000002-0000-4000-8000-000000000002",
+      "name": "lan",
+      "link": "lnk_00000002-0000-4000-8000-000000000002",
+      "zone": "zon_00000002-0000-4000-8000-000000000002",
+      "addressing": {
+        "ipv4": {
+          "mode": "static",
+          "addresses": [
+            "192.0.2.1/24"
+          ]
+        },
+        "ipv6": {
+          "mode": "delegated",
+          "from": "seg_00000001-0000-4000-8000-000000000001",
+          "subnetId": "beef",
+          "ra": {
+            "enabled": true,
+            "managed": false,
+            "otherInfo": true
+          }
+        }
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "zon_00000001-0000-4000-8000-000000000001",
+      "name": "wan"
+    },
+    {
+      "id": "zon_00000002-0000-4000-8000-000000000002",
+      "name": "lan"
+    },
+    {
+      "id": "zon_00000003-0000-4000-8000-000000000003",
+      "name": "vpn"
+    }
+  ],
+  "aliases": {
+    "addresses": [],
+    "ports": [
+      {
+        "id": "svc_00000001-0000-4000-8000-000000000001",
+        "name": "ping",
+        "protocol": "icmp",
+        "types": [
+          "echo-request"
+        ]
+      },
+      {
+        "id": "svc_00000002-0000-4000-8000-000000000002",
+        "name": "dns-udp",
+        "protocol": "udp",
+        "ports": [
+          "53"
+        ]
+      },
+      {
+        "id": "svc_00000003-0000-4000-8000-000000000003",
+        "name": "dns-tcp",
+        "protocol": "tcp",
+        "ports": [
+          "53"
+        ]
+      },
+      {
+        "id": "svc_00000004-0000-4000-8000-000000000004",
+        "name": "dns",
+        "protocol": "group",
+        "members": [
+          "svc_00000002-0000-4000-8000-000000000002",
+          "svc_00000003-0000-4000-8000-000000000003"
+        ]
+      }
+    ]
+  },
+  "rules": [],
+  "nat": {
+    "outbound": {
+      "mode": "automatic"
+    }
+  },
+  "management": {
+    "segment": "seg_00000002-0000-4000-8000-000000000002"
+  },
+  "vpn": {
+    "wireguard": [
+      {
+        "id": "wg_00000001-0000-4000-8000-000000000001",
+        "name": "road",
+        "ifname": "wg0",
+        "enabled": true,
+        "zone": "zon_00000003-0000-4000-8000-000000000003",
+        "listenPort": 51820,
+        "allowListenPort": true,
+        "mtu": 1420,
+        "addresses": [
+          "10.200.0.1/24",
+          "fd00:200::1/64"
+        ],
+        "privateKeyRef": {
+          "secret": "WG0_KEY",
+          "isSet": true,
+          "version": "3"
+        },
+        "publicKey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "peers": [
+          {
+            "id": "wgp_00000001-0000-4000-8000-000000000001",
+            "name": "laptop",
+            "enabled": true,
+            "publicKey": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+            "presharedKeyRef": {
+              "secret": "WG0_LAPTOP_PSK",
+              "isSet": true,
+              "version": "3"
+            },
+            "allowedIps": [
+              "10.200.0.2/32",
+              "fd00:200::2/128"
+            ],
+            "endpoint": "[2001:db8::7]:51820",
+            "persistentKeepalive": 25,
+            "routeAllowedIps": true
+          },
+          {
+            "id": "wgp_00000002-0000-4000-8000-000000000002",
+            "name": "office",
+            "enabled": true,
+            "publicKey": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=",
+            "allowedIps": [
+              "10.50.0.0/16",
+              "10.200.0.3/32"
+            ],
+            "routeAllowedIps": true
+          },
+          {
+            "id": "wgp_00000003-0000-4000-8000-000000000003",
+            "name": "old",
+            "enabled": false,
+            "publicKey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+            "allowedIps": [
+              "10.60.0.0/16"
+            ],
+            "routeAllowedIps": true
+          },
+          {
+            "id": "wgp_00000004-0000-4000-8000-000000000004",
+            "name": "noroute",
+            "enabled": true,
+            "publicKey": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=",
+            "allowedIps": [
+              "10.70.0.0/16"
+            ],
+            "routeAllowedIps": false
+          }
+        ]
+      },
+      {
+        "id": "wg_00000002-0000-4000-8000-000000000002",
+        "name": "site",
+        "ifname": "wg1",
+        "enabled": true,
+        "zone": "zon_00000002-0000-4000-8000-000000000002",
+        "listenPort": 51821,
+        "allowListenPort": true,
+        "allowListenSegments": [
+          "seg_00000002-0000-4000-8000-000000000002"
+        ],
+        "mtu": 1380,
+        "addresses": [
+          "10.201.0.1/30"
+        ],
+        "privateKeyRef": {
+          "secret": "WG1_KEY",
+          "isSet": true,
+          "version": "3"
+        },
+        "publicKey": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="
+      },
+      {
+        "id": "wg_00000003-0000-4000-8000-000000000003",
+        "name": "closed",
+        "ifname": "wg2",
+        "enabled": true,
+        "zone": "zon_00000003-0000-4000-8000-000000000003",
+        "listenPort": 51822,
+        "allowListenPort": false,
+        "mtu": 1420,
+        "addresses": [
+          "10.202.0.1/24"
+        ],
+        "privateKeyRef": {
+          "secret": "WG2_KEY",
+          "isSet": true,
+          "version": "3"
+        },
+        "publicKey": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM="
+      },
+      {
+        "id": "wg_00000004-0000-4000-8000-000000000004",
+        "name": "off",
+        "ifname": "wg3",
+        "enabled": false,
+        "listenPort": 51823,
+        "mtu": 1420,
+        "privateKeyRef": {
+          "secret": "WG3_KEY",
+          "isSet": true,
+          "version": "3"
+        }
+      }
+    ]
+  },
+  "routes": [
+    {
+      "id": "rte_00000001-0000-4000-8000-000000000001",
+      "name": "static",
+      "destination": "10.50.0.0/16",
+      "target": {
+        "kind": "wireguard",
+        "id": "wg_00000001-0000-4000-8000-000000000001"
+      },
+      "metric": 50,
+      "enabled": true
+    },
+    {
+      "id": "rte_00000002-0000-4000-8000-000000000002",
+      "name": "extra",
+      "destination": "10.80.0.0/16",
+      "target": {
+        "kind": "wireguard",
+        "id": "wg_00000001-0000-4000-8000-000000000001"
+      },
+      "enabled": true
+    },
+    {
+      "id": "rte_00000003-0000-4000-8000-000000000003",
+      "name": "off",
+      "destination": "10.90.0.0/16",
+      "target": {
+        "kind": "wireguard",
+        "id": "wg_00000001-0000-4000-8000-000000000001"
+      },
+      "enabled": false
+    }
+  ]
+}

@@ -41,7 +41,7 @@ LABEL org.opencontainers.image.title="Andaru" \
 # stays too: its os-release carries the Fedora CoreOS build and stream (OSTREE_VERSION, RELEASE_TYPE) the ISO build reads.
 RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
     dnf -y versionlock add $(rpm -qa --qf '%{NAME}\n' | grep -E '^(systemd|grub2|shim|dracut|kernel|fedora-release)') && \
-    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent traceroute ethtool man-db && \
+    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn wireguard-tools qemu-guest-agent traceroute ethtool man-db && \
     dnf -y remove moby-engine containerd && \
     dnf clean all && \
     rm /etc/dnf/versionlock.toml && \

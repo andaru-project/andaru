@@ -45,6 +45,10 @@ func (r *renderer) filterChains() {
 		if len(d.Rules) > 0 || d.NAT.Outbound.Mode == "automatic" || len(d.NAT.PortForwards)+len(d.NAT.OneToOne) > 0 {
 			r.find("error", "MANAGEMENT_REQUIRED", "/management", "Rules and NAT take effect only with a management segment, which keeps SSH reachable whatever the rules say. Set management.segment.")
 		}
+		// A tunnel forwards, and only the packet filter keeps forwarding in its zone.
+		if slices.ContainsFunc(d.VPN.WireGuard, func(w wireguardInterface) bool { return w.Enabled }) {
+			r.find("error", "MANAGEMENT_REQUIRED", "/management", "WireGuard interfaces take effect only with a management segment, which switches the packet filter on. Set management.segment.")
+		}
 		return
 	}
 	if !r.in.Facts.NftTool {
@@ -101,6 +105,9 @@ func (r *renderer) filterChains() {
 			zones[ifc.Zone] = append(zones[ifc.Zone], ifc.Name)
 			hasAddonZones = true
 		}
+	}
+	for _, w := range r.wireguards() {
+		zones[w.Zone] = append(zones[w.Zone], w.Ifname)
 	}
 	for _, z := range d.Zones {
 		f.set(setName(z.ID), "ifname", "", quoted(zones[z.ID]), "")
@@ -161,6 +168,7 @@ func (r *renderer) filterChains() {
 			input = append(input, fmt.Sprintf("iifname %q %s saddr @%s tcp dport 22 accept", mgmt, ipKey(fam), set))
 		}
 	}
+	input = append(input, r.wireguardListeners()...)
 	// While an HTTP-01 challenge runs, the engine fills acme_http01_active with its segments' interfaces: port 80 to
 	// the firewall there goes to andaru-outbound's responder. Empty, it redirects nothing.
 	acmeLines, acmeHTTP01 := r.acmeHTTP01()
@@ -249,6 +257,9 @@ func (r *renderer) filterChains() {
 	}
 	if len(acmeLines) > 0 {
 		nftSources = append(nftSources, "/acme")
+	}
+	if len(r.wireguards()) > 0 {
+		nftSources = append(nftSources, "/vpn")
 	}
 	r.file(nftPath, "0644", script, nftSources)
 }

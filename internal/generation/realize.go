@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -60,6 +61,8 @@ type Realizer struct {
 	afterLeaseRead func()
 	// keaUID lets unprivileged tests name a Kea user other than their own; nil: the owner of /run/kea.
 	keaUID func() uint32
+	// networkGID lets tests name systemd-network's group; nil: the group of /run/systemd/netif.
+	networkGID func() (int, error)
 	// HealthGet lets tests intercept loopback HTTP health probes for add-ons; nil uses a loopback HTTP client.
 	HealthGet func(ctx context.Context, url string) (int, error)
 }
@@ -170,16 +173,40 @@ func (r Realizer) files(g Generation) ([]placed, error) {
 		if err != nil {
 			return nil, err
 		}
-		mode := fs.FileMode(0o644)
+		mode, uid, gid := fs.FileMode(0o644), -1, -1
 		switch f.Mode {
 		case "0600":
 			mode = 0o600
 		case "0400":
 			mode = 0o400
+		case "0640":
+			// A WireGuard key: networkd reads it as the systemd-network group.
+			if gid, err = r.networkGroup(); err != nil {
+				return nil, err
+			}
+			mode, uid = 0o640, 0
 		}
-		out = append(out, placed{path: f.Path, mode: mode, uid: -1, gid: -1, data: data})
+		out = append(out, placed{path: f.Path, mode: mode, uid: uid, gid: gid, data: data})
 	}
 	return out, nil
+}
+
+// networkGroup is systemd-networkd's group: the group of its runtime directory, which it owns, or the one the
+// group database names.
+func (r Realizer) networkGroup() (int, error) {
+	if r.networkGID != nil {
+		return r.networkGID()
+	}
+	if info, err := os.Stat(r.Root + "/run/systemd/netif"); err == nil {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			return int(st.Gid), nil
+		}
+	}
+	g, err := user.LookupGroup("systemd-network")
+	if err != nil {
+		return 0, fmt.Errorf("the systemd-network group, which reads WireGuard keys: %w", err)
+	}
+	return strconv.Atoi(g.Gid)
 }
 
 // live is what the pointers say is in /run now: a generation's files, or the catch-all once set up.
