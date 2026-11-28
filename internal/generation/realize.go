@@ -1,8 +1,9 @@
 package generation
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,6 +74,7 @@ type placed struct {
 	mode     fs.FileMode
 	uid, gid int // -1: leave as created
 	data     []byte
+	sha256   string
 }
 
 func (r Realizer) dir() string { return Dir(r.StateDir) }
@@ -186,7 +188,7 @@ func (r Realizer) files(g Generation) ([]placed, error) {
 			}
 			mode, uid = 0o640, 0
 		}
-		out = append(out, placed{path: f.Path, mode: mode, uid: uid, gid: gid, data: data})
+		out = append(out, placed{path: f.Path, mode: mode, uid: uid, gid: gid, data: data, sha256: f.SHA256})
 	}
 	return out, nil
 }
@@ -229,7 +231,7 @@ func (r Realizer) live(p Pointers) ([]placed, error) {
 	out := make([]placed, 0, len(g.Files))
 	for _, f := range g.Files {
 		if allowed(f.Path) && f.Path != filterEntry {
-			out = append(out, placed{path: f.Path})
+			out = append(out, placed{path: f.Path, sha256: f.SHA256})
 		}
 	}
 	return out, nil
@@ -324,12 +326,24 @@ func wireguardOwner(path string) (string, bool) {
 	return name, true
 }
 
-// changedWireGuard returns the sorted names of WireGuard devices present in both from and to whose on-disk
-// .netdev, .key, or .psk files differ from to. networkctl reload does not remove deleted peers or update
-// modified keys on an existing WireGuard netdev, so changed devices must be deleted before reload.
+// placedDigest returns the hex SHA-256 of a placed file from its manifest metadata or in-memory bytes.
+func placedDigest(f placed) string {
+	if f.sha256 != "" {
+		return f.sha256
+	}
+	if f.data != nil {
+		sum := sha256.Sum256(f.data)
+		return hex.EncodeToString(sum[:])
+	}
+	return ""
+}
+
+// changedWireGuard returns the sorted names of WireGuard devices present in both from and to whose generation
+// .netdev, .key, or .psk files differ. Comparing the source and target generations (rather than /run) preserves
+// recreation across interrupted rollbacks where place() already restored the files before settle() completed.
 func (r Realizer) changedWireGuard(from, to []placed) []string {
 	toNetdev := map[string]bool{}
-	toFiles := map[string]map[string][]byte{}
+	toFiles := map[string]map[string]string{}
 	for _, f := range to {
 		name, ok := wireguardOwner(f.path)
 		if !ok {
@@ -339,12 +353,12 @@ func (r Realizer) changedWireGuard(from, to []placed) []string {
 			toNetdev[name] = true
 		}
 		if toFiles[name] == nil {
-			toFiles[name] = map[string][]byte{}
+			toFiles[name] = map[string]string{}
 		}
-		toFiles[name][f.path] = f.data
+		toFiles[name][f.path] = placedDigest(f)
 	}
 	fromNetdev := map[string]bool{}
-	fromPaths := map[string][]string{}
+	fromFiles := map[string]map[string]string{}
 	for _, f := range from {
 		name, ok := wireguardOwner(f.path)
 		if !ok {
@@ -353,7 +367,10 @@ func (r Realizer) changedWireGuard(from, to []placed) []string {
 		if strings.HasSuffix(f.path, ".netdev") {
 			fromNetdev[name] = true
 		}
-		fromPaths[name] = append(fromPaths[name], f.path)
+		if fromFiles[name] == nil {
+			fromFiles[name] = map[string]string{}
+		}
+		fromFiles[name][f.path] = placedDigest(f)
 	}
 	var changed []string
 	for name := range toNetdev {
@@ -361,20 +378,15 @@ func (r Realizer) changedWireGuard(from, to []placed) []string {
 			continue
 		}
 		want := toFiles[name]
-		cur := fromPaths[name]
+		cur := fromFiles[name]
 		if len(cur) != len(want) {
 			changed = append(changed, name)
 			continue
 		}
 		diff := false
-		for _, p := range cur {
-			expected, ok := want[p]
-			if !ok {
-				diff = true
-				break
-			}
-			disk, err := os.ReadFile(r.Root + p)
-			if err != nil || !bytes.Equal(disk, expected) {
+		for p, curDigest := range cur {
+			wantDigest, ok := want[p]
+			if !ok || curDigest == "" || wantDigest == "" || curDigest != wantDigest {
 				diff = true
 				break
 			}
@@ -392,7 +404,12 @@ func (r Realizer) settle(ctx context.Context, from, to []placed, recreateWG []st
 	for _, name := range recreateWG {
 		// networkctl reload keeps an existing WireGuard netdev's stale peers/keys; delete it so reload recreates it.
 		if _, err := r.Run(ctx, "/usr/bin/networkctl", "delete", name); err != nil {
-			slog.Warn("recreate WireGuard device", "device", name, "error", err)
+			if r.Root == "" {
+				if _, statErr := os.Stat("/sys/class/net/" + name); errors.Is(statErr, fs.ErrNotExist) {
+					continue
+				}
+			}
+			return fmt.Errorf("recreate WireGuard device %s: %w", name, err)
 		}
 	}
 	if _, err := r.Run(ctx, "/usr/bin/networkctl", "reload"); err != nil {
@@ -910,7 +927,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	from := make([]placed, 0, len(g.Files))
 	for _, f := range g.Files {
 		if allowed(f.Path) && f.Path != filterEntry {
-			from = append(from, placed{path: f.Path})
+			from = append(from, placed{path: f.Path, sha256: f.SHA256})
 		}
 	}
 	target, live, what, loaded, err := r.fallback(ctx, p, g.Previous)

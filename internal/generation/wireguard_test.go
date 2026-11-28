@@ -1,6 +1,8 @@
 package generation
 
 import (
+	"context"
+	"errors"
 	"io/fs"
 	"maps"
 	"os"
@@ -184,5 +186,63 @@ func TestTeardownRemovesWireGuard(t *testing.T) {
 	}
 	if b.index("networkctl delete wg0") < 0 {
 		t.Fatalf("wg0 not deleted: %q", b.net.argv)
+	}
+}
+
+func TestWireGuardRecreateFailureAndInterruptedRollback(t *testing.T) {
+	// 1. If networkctl delete fails when recreating a modified WireGuard device, activation must fail rather than confirm stale peers/keys.
+	b := newBench(t)
+	b.r.networkGID = func() (int, error) { return 998, nil }
+	id1 := b.gen(maps.Clone(withWireGuard))
+	if err := b.r.Activate(t.Context(), id1); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id1); err != nil {
+		t.Fatal(err)
+	}
+	rotated := maps.Clone(withWireGuard)
+	rotated["50-andaru-wg0.key"] = "ROTATED\n"
+	id2 := b.gen(rotated)
+	origRun := b.r.Run
+	failOnce := true
+	b.r.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if failOnce && name == "/usr/bin/networkctl" && len(args) == 2 && args[0] == "delete" && args[1] == "wg0" {
+			failOnce = false
+			return nil, errors.New("busy")
+		}
+		return origRun(ctx, name, args...)
+	}
+	if err := b.r.Activate(t.Context(), id2); err == nil {
+		t.Fatal("expected activation to fail when required WireGuard device deletion fails")
+	}
+	b.wantDisk(withWireGuard)
+
+	// 2. If rollback is interrupted after place() restores files but before settle() completes, the retry must still delete wg0 before reload.
+	b.r.Run = origRun
+	id3 := b.gen(rotated)
+	if err := b.r.Activate(t.Context(), id3); err != nil {
+		t.Fatal(err)
+	}
+	failRollbackDelete := true
+	b.r.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if failRollbackDelete && name == "/usr/bin/networkctl" && len(args) == 2 && args[0] == "delete" && args[1] == "wg0" {
+			failRollbackDelete = false
+			return nil, errors.New("interrupted before delete")
+		}
+		return origRun(ctx, name, args...)
+	}
+	if err := b.timerFires(id3); err == nil {
+		t.Fatal("expected first rollback attempt to fail on interrupted delete")
+	}
+	// Files on disk already match the target generation, yet the rollback retry must still recreate wg0 from manifest diff.
+	b.wantDisk(withWireGuard)
+	b.net.argv = nil
+	if err := b.timerFires(id3); err != nil {
+		t.Fatalf("second rollback retry failed: %v", err)
+	}
+	delIdx := b.index("networkctl delete wg0")
+	reloadIdx := b.index("networkctl reload")
+	if delIdx < 0 || reloadIdx < 0 || delIdx > reloadIdx {
+		t.Fatalf("rollback retry did not delete wg0 before reload: argv = %q", b.net.argv)
 	}
 }
