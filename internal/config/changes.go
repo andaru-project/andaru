@@ -191,6 +191,7 @@ func versionOf(s *savedState, key objectKey) objectVersion {
 	}
 	return objectVersion{Version: "0"}
 }
+
 // idPrefixes are the prefixes of the IDs the engine assigns, by collection.
 var idPrefixes = map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto", "pki.cas": "ca", "pki.certificates": "crt", "pki.tlsCryptKeys": "tck"}
 

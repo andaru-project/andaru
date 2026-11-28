@@ -225,10 +225,10 @@ func checkPKIKeys(d *declaration, secrets secretDocument, written map[objectKey]
 // PKIObject is one saved CA, certificate or tls-crypt key with its PEM and private key, for signing, download and
 // deployment. Key is empty when the object has none or it is unresolved; it must never be logged or sent.
 type PKIObject struct {
-	ID, Name, CAID   string
+	ID, Name, CAID    string
 	CertPEM, ChainPEM string
-	Key              string
-	Unresolved       bool
+	Key               string
+	Unresolved        bool
 }
 
 // PKIObject returns one object of a PKI collection of the saved head.

@@ -501,10 +501,10 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 // RealizationInput carries secret values for rendering. It has no JSON form
 // and must never be serialised or logged.
 type RealizationInput struct {
-	SavedVersion  Version
-	Value         json.RawMessage
-	Secrets       map[string]string
-	AddonSecrets  map[string]map[string]string
+	SavedVersion Version
+	Value        json.RawMessage
+	Secrets      map[string]string
+	AddonSecrets map[string]map[string]string
 	// CertificateKeys are the private keys of the certificates enabled add-ons name, by certificate ID. They are not
 	// compared by SameRealization: andaru realize cert-sync deploys a renewed certificate without an apply.
 	CertificateKeys map[string]string
