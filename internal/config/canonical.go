@@ -167,6 +167,13 @@ func normalizeDeclaration(d *declaration) {
 			d.DNS.RegisterLeases = &register
 		}
 	}
+	if len(d.Routes) == 0 {
+		d.Routes = nil // absent, so a declaration without routes keeps its form
+	}
+	slices.SortFunc(d.Routes, func(a, b route) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.Routes {
+		canonicalizeRoute(&d.Routes[i])
+	}
 	slices.SortFunc(d.PKI.CAs, func(a, b pkiCA) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.PKI.Certificates, func(a, b pkiCertificate) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.PKI.TLSCryptKeys, func(a, b tlsCryptKey) int { return strings.Compare(a.ID, b.ID) })

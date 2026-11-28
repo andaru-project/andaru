@@ -902,6 +902,83 @@ func TestVirtualAddressRoutes(t *testing.T) {
 	}
 }
 
+func TestStaticRouteRoutes(t *testing.T) {
+	h, _ := configurationFixture(t)
+	batch := configCall(h, "POST", "/api/v1/config/changes", `{"operations":[{"op":"create","collection":"links","localId":"l","value":{"name":"lan0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01"}},{"op":"create","collection":"zones","localId":"z","value":{"name":"lan"}},{"op":"create","collection":"segments","localId":"seg","value":{"name":"lan","link":"@l","zone":"@z","addressing":{"ipv4":{"mode":"static","addresses":["192.0.2.7/24"]},"ipv6":{"mode":"none"}}}},{"op":"create","collection":"routes","localId":"r","value":{"name":"office","destination":"10.20.0.5/24","target":{"kind":"segment","id":"@seg"},"gateway":"192.0.2.254","enabled":true}}]}`, "")
+	if batch.Code != 200 {
+		t.Fatalf("batch %d %s", batch.Code, batch.Body)
+	}
+	var result config.SaveResult
+	if e := json.Unmarshal(batch.Body.Bytes(), &result); e != nil || !strings.HasPrefix(result.Created["r"], "rte_") {
+		t.Fatalf("batch %s %v", batch.Body, e)
+	}
+	routeID := result.Created["r"]
+	segID := result.Created["seg"]
+	route := configCall(h, "GET", "/api/v1/config/routes/"+routeID, "", "")
+	if route.Code != 200 || !strings.Contains(route.Body.String(), `"destination":"10.20.0.0/24"`) {
+		t.Fatalf("get %d %s", route.Code, route.Body)
+	}
+	created := configCall(h, "POST", "/api/v1/config/routes", `{"name":"v6","destination":"fd00:9::/64","target":{"kind":"segment","id":"`+segID+`"},"enabled":false}`, "")
+	if created.Code != 201 || !strings.HasPrefix(valueID(t, apiObject(t, created)), "rte_") {
+		t.Fatalf("create %d %s", created.Code, created.Body)
+	}
+	secondID := valueID(t, apiObject(t, created))
+	// Duplicate tuple via POST returns 422 on /destination.
+	dupPost := configCall(h, "POST", "/api/v1/config/routes", `{"name":"dup","destination":"10.20.0.99/24","target":{"kind":"segment","id":"`+segID+`"},"enabled":true}`, "")
+	if dupPost.Code != 422 || !strings.Contains(dupPost.Body.String(), `"/destination"`) || !strings.Contains(dupPost.Body.String(), "Another route") {
+		t.Fatalf("duplicate post %d %s", dupPost.Code, dupPost.Body)
+	}
+	// PUT without If-Match returns 428; stale If-Match returns 412; valid If-Match updates cleanly.
+	if w := configCall(h, "PUT", "/api/v1/config/routes/"+routeID, `{"name":"office","destination":"10.20.0.0/24","target":{"kind":"segment","id":"`+segID+`"},"enabled":true}`, ""); w.Code != 428 {
+		t.Fatalf("put without If-Match %d %s", w.Code, w.Body)
+	}
+	if w := configCall(h, "PUT", "/api/v1/config/routes/"+routeID, `{"name":"office","destination":"10.20.0.0/24","target":{"kind":"segment","id":"`+segID+`"},"enabled":true}`, `"`+routeID+`.999"`); w.Code != 412 {
+		t.Fatalf("put stale If-Match %d %s", w.Code, w.Body)
+	}
+	updated := configCall(h, "PUT", "/api/v1/config/routes/"+routeID, `{"name":"office-updated","destination":"10.20.0.7/24","target":{"kind":"segment","id":"`+segID+`"},"metric":50,"enabled":true}`, route.Header().Get("ETag"))
+	if updated.Code != 200 || !strings.Contains(updated.Body.String(), `"destination":"10.20.0.0/24"`) || !strings.Contains(updated.Body.String(), `"metric":50`) {
+		t.Fatalf("put %d %s", updated.Code, updated.Body)
+	}
+	// Saved version history includes route_changes.
+	var hv config.HistoryView
+	if hist := configCall(h, "GET", "/api/v1/versions?limit=1", "", ""); hist.Code != 200 || json.Unmarshal(hist.Body.Bytes(), &hv) != nil || len(hv.Items) == 0 {
+		t.Fatalf("versions list %d %s", hist.Code, hist.Body)
+	}
+	if ver := configCall(h, "GET", "/api/v1/versions/"+string(hv.Items[0].ID), "", ""); ver.Code != 200 || !strings.Contains(ver.Body.String(), routeID) {
+		t.Fatalf("version history %d %s", ver.Code, ver.Body)
+	}
+	segment := configCall(h, "GET", "/api/v1/config/segments/"+segID, "", "")
+	refused := configCall(h, "DELETE", "/api/v1/config/segments/"+segID, "", segment.Header().Get("ETag"))
+	if refused.Code != 422 || !strings.Contains(refused.Body.String(), "remains referenced") {
+		t.Fatalf("delete of a routed segment %d %s", refused.Code, refused.Body)
+	}
+	// DELETE with If-Match removes the second route.
+	second := configCall(h, "GET", "/api/v1/config/routes/"+secondID, "", "")
+	if del := configCall(h, "DELETE", "/api/v1/config/routes/"+secondID, "", second.Header().Get("ETag")); del.Code != 200 {
+		t.Fatalf("delete route %d %s", del.Code, del.Body)
+	}
+	rawSchema := configCall(h, "GET", "/api/v1/schema", "", "")
+	instance, e := jsonschema.UnmarshalJSON(bytes.NewReader(rawSchema.Body.Bytes()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
+	if e = compiler.AddResource("https://andaru.invalid/api/v1/schema", instance); e != nil {
+		t.Fatal(e)
+	}
+	for view, path := range map[string]string{"snapshotView": "/api/v1/config", "collectionView": "/api/v1/config/routes"} {
+		sch, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/" + view)
+		if e != nil {
+			t.Fatal(e)
+		}
+		served, _ := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", path, "", "").Body.Bytes()))
+		if e = sch.Validate(served); e != nil {
+			t.Fatalf("%s violates %s: %v", path, view, e)
+		}
+	}
+}
+
 func TestNotificationChannelRoutes(t *testing.T) {
 	h, _ := configurationFixture(t)
 	created := configCall(h, "POST", "/api/v1/config/notifications/channels", `{"name":"ops","kind":"webhook","webhook":{"url":{"secret":"OPS_URL","set":"https://hooks.example/x","expectedVersion":"0"}}}`, "")

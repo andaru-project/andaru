@@ -25,6 +25,7 @@ import { NatScreen } from './screens/NatScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
 import { PasswordDialog } from './screens/PasswordDialog';
 import { RolesScreen } from './screens/RolesScreen';
+import { RoutesScreen } from './screens/RoutesScreen';
 import { RulesScreen } from './screens/RulesScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { SetupWizardScreen } from './screens/SetupWizardScreen';
@@ -57,6 +58,7 @@ const pageTitles: Record<string, string> = {
   '/network/dhcp': 'DHCP',
   '/network/dns': 'DNS',
   '/network/virtual-ips': 'Virtual IPs',
+  '/network/routes': 'Routes',
   '/network/topology': 'Topology',
   '/network/vlans': 'VLANs & Segments',
   '/network/vlans/flow': 'VLAN Flow',
@@ -220,6 +222,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
         { to: '/network/dhcp', label: 'DHCP', visible: canReadChanges || canReadStatus },
         { to: '/network/dns', label: 'DNS', visible: canReadChanges },
         { to: '/network/virtual-ips', label: 'Virtual IPs', visible: canReadChanges },
+        { to: '/network/routes', label: 'Routes', visible: canReadChanges },
         { to: '/network/topology', label: 'Topology', visible: canReadStatus },
         { to: '/network/vlans', label: 'VLANs & Segments', visible: canReadStatus },
         { to: '/network/vlans/flow', label: 'VLAN Flow', visible: canReadStatus },
@@ -281,6 +284,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     ['/network/dhcp', <DhcpScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/network/dns', <DnsScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/network/virtual-ips', <VirtualIpsScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/network/routes', <RoutesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/rules', <RulesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/nat', <NatScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],

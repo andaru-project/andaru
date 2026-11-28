@@ -191,7 +191,7 @@ func initialState() savedState {
 var (
 	orderedCollections = []string{"rules", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels", "addons", "pki.cas", "pki.certificates", "pki.tlsCryptKeys", "acme.accounts", "acme.orders", "routes"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -208,7 +208,7 @@ func versionOf(s *savedState, key objectKey) objectVersion {
 }
 
 // idPrefixes are the prefixes of the IDs the engine assigns, by collection.
-var idPrefixes = map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto", "pki.cas": "ca", "pki.certificates": "crt", "pki.tlsCryptKeys": "tck", "acme.accounts": "aca", "acme.orders": "aco"}
+var idPrefixes = map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto", "pki.cas": "ca", "pki.certificates": "crt", "pki.tlsCryptKeys": "tck", "acme.accounts": "aca", "acme.orders": "aco", "routes": "rte"}
 
 // NewID allocates an ID for a new object of collection, as a create does.
 func NewID(collection string) (string, error) { return newID(collection) }
@@ -305,6 +305,9 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	for i := range d.ACME.Orders {
 		m[objectKey{"acme.orders", d.ACME.Orders[i].ID}] = &d.ACME.Orders[i]
+	}
+	for i := range d.Routes {
+		m[objectKey{"routes", d.Routes[i].ID}] = &d.Routes[i]
 	}
 	return m
 }
@@ -712,6 +715,9 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 	if d.ACME.Orders, e = rewrite(d.ACME.Orders, "acme.orders", writes, deleted, createKeys, func(x acmeOrder) string { return x.ID }); e != nil {
 		return empty, e
 	}
+	if d.Routes, e = rewrite(d.Routes, "routes", writes, deleted, createKeys, func(x route) string { return x.ID }); e != nil {
+		return empty, e
+	}
 	// Prune optional add-on secrets dropped from settings so they do not linger in secrets.db or block re-adding.
 	for i := range d.Addons {
 		a := d.Addons[i]
@@ -1054,6 +1060,10 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 	case "nat.oneToOne":
 		resolve(v, "zone")
 		resolveAll(v, "destination")
+	case "routes":
+		if target, ok := v["target"].(map[string]any); ok {
+			resolve(target, "id")
+		}
 	}
 	if col == "segments" {
 		resolve(v, "link")
@@ -1139,6 +1149,8 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.ACME.Accounts[n].ID
 	case col == "acme.orders" && n < len(d.ACME.Orders):
 		id = d.ACME.Orders[n].ID
+	case col == "routes" && n < len(d.Routes):
+		id = d.Routes[n].ID
 	}
 	if id == "" {
 		return objectKey{}, ""
@@ -1167,6 +1179,8 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 			return x.Name
 		case *acmeOrder:
 			return x.Name
+		case *route:
+			return x.Name
 		}
 		return ""
 	}
@@ -1190,6 +1204,18 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 				if candidate.Collection == key.Collection && name != "" && nameOf(index[candidate]) == name && (i < 0 || op < i) {
 					i = op
 					path = input.path(op, "/name", true)
+				}
+			}
+		} else if i < 0 && key.Collection == "routes" && tail == "/destination" {
+			if existing, ok := index[key].(*route); ok {
+				tuple := routeTupleKey(existing)
+				for candidate, op := range origins {
+					if candidate.Collection == "routes" && tuple != "" {
+						if r, ok := index[candidate].(*route); ok && routeTupleKey(r) == tuple && (i < 0 || op < i) {
+							i = op
+							path = input.path(op, "/destination", true)
+						}
+					}
 				}
 			}
 		}

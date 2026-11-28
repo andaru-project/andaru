@@ -162,6 +162,7 @@ type declaration struct {
 	ACME struct {
 		Orders []acmeOrder `json:"orders"`
 	} `json:"acme"`
+	Routes []route `json:"routes"`
 }
 
 // acmeOrder is what the packet filter needs of an ACME order: whether it answers HTTP-01, and on which segments.
@@ -174,6 +175,19 @@ type acmeOrder struct {
 			ListenSegments []string `json:"listenSegments"`
 		} `json:"http01"`
 	} `json:"challenge"`
+}
+
+// route is a static route; the target kind names the interface it leaves by.
+type route struct {
+	ID          string `json:"id"`
+	Destination string `json:"destination"`
+	Target      struct {
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+	} `json:"target"`
+	Gateway string `json:"gateway"`
+	Metric  uint32 `json:"metric"`
+	Enabled bool   `json:"enabled"`
 }
 
 // certificate is a managed certificate's public part; its key is in Input.CertificateKeys.

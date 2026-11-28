@@ -587,3 +587,20 @@ func TestConfigVirtualAddresses(t *testing.T) {
 		t.Fatal("a virtual address result was refused")
 	}
 }
+
+func TestConfigRoutes(t *testing.T) {
+	id := "rte_00000001-0000-4000-8000-000000000001"
+	for args, want := range map[string]ctlRequest{
+		"config list routes":      {method: "GET", path: "/api/v1/config/routes", kind: "collection"},
+		"config create routes":    {method: "POST", path: "/api/v1/config/routes", kind: "object"},
+		"config get routes " + id: {method: "GET", path: "/api/v1/config/routes/" + id, kind: "object"},
+	} {
+		req, err := ctlOperation(strings.Fields(args), io.Discard)
+		if err != nil || req.method != want.method || req.path != want.path || req.kind != want.kind {
+			t.Fatalf("%s: %+v %v", args, req, err)
+		}
+	}
+	if !validChanged(config.ChangedView{Collection: "routes", ID: id, Deleted: true}) {
+		t.Fatal("a route result was refused")
+	}
+}

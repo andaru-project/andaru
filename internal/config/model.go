@@ -371,6 +371,7 @@ type declaration struct {
 	Addons           []addonConfig    `json:"addons,omitempty"`
 	PKI              pkiSettings      `json:"pki,omitzero"`
 	ACME             acmeSettings     `json:"acme,omitzero"`
+	Routes           []route          `json:"routes,omitzero"`
 }
 
 type addonInterface struct {

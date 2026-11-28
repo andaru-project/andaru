@@ -574,6 +574,22 @@ func realized(value json.RawMessage) []byte {
 			d["acmeHttp01"] = b
 		}
 	}
+	// A disabled route renders nothing, and a route's name and description are not rendered.
+	var routes []map[string]json.RawMessage
+	if len(d["routes"]) > 0 && json.Unmarshal(d["routes"], &routes) == nil {
+		routes = slices.DeleteFunc(routes, func(r map[string]json.RawMessage) bool { return string(r["enabled"]) != "true" })
+		for _, r := range routes {
+			delete(r, "name")
+			delete(r, "description")
+		}
+		if len(routes) == 0 {
+			delete(d, "routes")
+		} else if raw, err := json.Marshal(routes); err == nil {
+			d["routes"] = raw
+		} else {
+			return value
+		}
+	}
 	// A secret view says when its secret last changed; the secret itself is compared in SameRealization, so a
 	// secret changed and changed back realizes as before.
 	var links []map[string]json.RawMessage

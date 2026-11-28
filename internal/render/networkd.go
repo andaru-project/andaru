@@ -228,7 +228,41 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 			sources = append(sources, "/dhcp6")
 		}
 	}
+	if routes := r.routes("segment", s.ID); len(routes) > 0 {
+		prefixes = append(prefixes, routes...)
+		sources = append(sources, "/routes")
+	}
 	return append(sections, prefixes...), sources
+}
+
+// routes renders the enabled static routes through one target as [Route] sections, in one order whatever the
+// declaration's. Every networkd-owned target kind renders its routes with it.
+func (r *renderer) routes(kind, id string) []section {
+	var through []route
+	for _, x := range r.d.Routes {
+		if x.Enabled && x.Target.Kind == kind && x.Target.ID == id {
+			through = append(through, x)
+		}
+	}
+	slices.SortFunc(through, func(a, b route) int {
+		px, _ := netip.ParsePrefix(a.Destination)
+		py, _ := netip.ParsePrefix(b.Destination)
+		gx, _ := netip.ParseAddr(a.Gateway)
+		gy, _ := netip.ParseAddr(b.Gateway)
+		return cmp.Or(px.Compare(py), cmp.Compare(a.Metric, b.Metric), gx.Compare(gy), strings.Compare(a.ID, b.ID))
+	})
+	out := make([]section, 0, len(through))
+	for _, x := range through {
+		lines := []string{"Destination=" + x.Destination}
+		if x.Gateway != "" {
+			lines = append(lines, "Gateway="+x.Gateway)
+		}
+		if x.Metric != 0 {
+			lines = append(lines, fmt.Sprintf("Metric=%d", x.Metric))
+		}
+		out = append(out, section{"Route", lines})
+	}
+	return out
 }
 
 func (r *renderer) segmentByID(id string) (segment, bool) {
