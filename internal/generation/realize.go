@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
-	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -191,8 +190,9 @@ func (r Realizer) files(g Generation) ([]placed, error) {
 	return out, nil
 }
 
-// networkGroup is systemd-networkd's group: the group of its runtime directory, which it owns, or the one the
-// group database names.
+// networkGroup is systemd-networkd's group: the group of its runtime directory, which it owns, or the one the group
+// files name. /usr/lib/group is read too: an image keeps its system groups there (nss-altfiles), which a binary built
+// without cgo does not see through os/user.
 func (r Realizer) networkGroup() (int, error) {
 	if r.networkGID != nil {
 		return r.networkGID()
@@ -202,11 +202,17 @@ func (r Realizer) networkGroup() (int, error) {
 			return int(st.Gid), nil
 		}
 	}
-	g, err := user.LookupGroup("systemd-network")
-	if err != nil {
-		return 0, fmt.Errorf("the systemd-network group, which reads WireGuard keys: %w", err)
+	for _, file := range []string{"/etc/group", "/usr/lib/group"} {
+		data, _ := os.ReadFile(r.Root + file)
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if f := strings.Split(line, ":"); len(f) >= 3 && f[0] == "systemd-network" {
+				if gid, err := strconv.Atoi(f[2]); err == nil {
+					return gid, nil
+				}
+			}
+		}
 	}
-	return strconv.Atoi(g.Gid)
+	return 0, errors.New("the systemd-network group, which reads WireGuard keys, is unknown")
 }
 
 // live is what the pointers say is in /run now: a generation's files, or the catch-all once set up.

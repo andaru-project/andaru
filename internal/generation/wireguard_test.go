@@ -82,6 +82,18 @@ func TestWireGuardGroupFromNetworkdRuntime(t *testing.T) {
 	if err != nil || uint32(gid) != info.Sys().(*syscall.Stat_t).Gid {
 		t.Fatalf("gid %d %v", gid, err)
 	}
+	// Before networkd ran, the group files say; an image's system groups are in /usr/lib/group.
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.net.root, "usr/lib/group"), "root:x:0:\nsystemd-network:x:192:\n")
+	if gid, err := b.r.networkGroup(); err != nil || gid != 192 {
+		t.Fatalf("gid %d %v", gid, err)
+	}
+	writeFile(t, filepath.Join(b.net.root, "etc/group"), "systemd-network:x:998:\n")
+	if gid, err := b.r.networkGroup(); err != nil || gid != 998 {
+		t.Fatalf("gid %d %v", gid, err)
+	}
 }
 
 // A factory reset's teardown removes the interface's files, keys included, and the interface.
