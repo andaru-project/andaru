@@ -228,10 +228,27 @@ func normalizeSwanIdentity(s string) string {
 	return "fqdn:" + lower
 }
 
-// wildcardSwanIdentity reports identities strongSwan matches against others (ID_ANY, "*" wildcards, ^...$ regexes):
+// wildcardSwanIdentity reports identities strongSwan matches against others (ID_ANY, "*" wildcards, ^...$ regexes,
+// subnets and ranges):
 // as an EAP secret's owner one would hand its password to every user name.
 func wildcardSwanIdentity(s string) bool {
-	return s == "0.0.0.0" || s == "::" || strings.HasPrefix(s, "%") || strings.ContainsAny(s, "*^")
+	if s == "0.0.0.0" || s == "::" || strings.HasPrefix(s, "%") || strings.ContainsAny(s, "*^") {
+		return true
+	}
+	// Subnets and address ranges match every address inside them.
+	lower := strings.ToLower(s)
+	for _, typ := range []string{"ipv4net:", "ipv6net:", "ipv4range:", "ipv6range:"} {
+		if strings.HasPrefix(lower, typ) {
+			return true
+		}
+	}
+	if _, err := netip.ParsePrefix(s); err == nil {
+		return true
+	}
+	from, to, isRange := strings.Cut(s, "-")
+	_, errFrom := netip.ParseAddr(from)
+	_, errTo := netip.ParseAddr(to)
+	return isRange && errFrom == nil && errTo == nil
 }
 
 // normalizeDN drops spaces around separators and folds case, as strongSwan's ASN.1 DN parse and comparison do;
