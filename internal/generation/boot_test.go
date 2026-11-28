@@ -224,7 +224,7 @@ func TestBootFallsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	corrupt := func(id int) {
-		writeFile(t, filepath.Join(b.dir, itoa(id), "files", "50-andaru-eth0.network"), "evil")
+		writeFile(t, filepath.Join(b.dir, itoa(id), "files", storedName(netDir+"50-andaru-eth0.network")), "evil")
 	}
 
 	corrupt(2)
@@ -275,7 +275,7 @@ func TestConfirmAfterFallbackKeepsTheUsableGeneration(t *testing.T) {
 	if err := b.r.Confirm(t.Context(), second); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(b.dir, itoa(second), "files", "50-andaru-eth0.network"), "evil")
+	writeFile(t, filepath.Join(b.dir, itoa(second), "files", storedName(netDir+"50-andaru-eth0.network")), "evil")
 	b.reboot()
 	if err := b.r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
@@ -307,7 +307,7 @@ func TestBootFallbackAdvancesAuthorizationWithoutIdentityDatabase(t *testing.T) 
 	if err := b.r.Confirm(t.Context(), second); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(b.dir, itoa(second), "files", "50-andaru-eth0.network"), "corrupt")
+	writeFile(t, filepath.Join(b.dir, itoa(second), "files", storedName(netDir+"50-andaru-eth0.network")), "corrupt")
 	b.reboot()
 	if err := b.r.Boot(t.Context()); err != nil {
 		t.Fatal(err)

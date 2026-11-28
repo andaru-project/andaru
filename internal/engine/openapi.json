@@ -9980,7 +9980,7 @@
         "type": "object",
         "required": ["items"],
         "properties": {
-          "items": {"type": "array", "items": {"type": "string", "enum": ["addons.manage", "addons.read", "audit.read", "backups.create", "backups.exportSecrets", "backups.restore", "configuration.apply", "configuration.confirm", "configuration.read", "configuration.write", "notifications.manage", "notifications.read", "status.read", "tokens.manageAll", "tokens.manageSelf", "users.manage", "users.read"]}},
+          "items": {"type": "array", "items": {"type": "string", "enum": ["addons.manage", "addons.read", "audit.read", "backups.create", "backups.exportSecrets", "backups.restore", "certificates.manage", "certificates.read", "configuration.apply", "configuration.confirm", "configuration.read", "configuration.write", "notifications.manage", "notifications.read", "status.read", "tokens.manageAll", "tokens.manageSelf", "users.manage", "users.read", "vpn.control", "vpn.read"]}},
           "nextCursor": {"type": "string"}
         }
       },

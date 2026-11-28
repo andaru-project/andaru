@@ -224,7 +224,7 @@ func (r Realizer) place(from, to []placed) error {
 	for _, f := range to {
 		target := r.Root + f.path
 		// Preserve inode, SELinux :Z MCS label, and :U container UID ownership on unchanged add-on secrets.
-		if isAddonSecret(f.path) && sameRegularFile(target, f.data, f.mode) {
+		if (isAddonSecret(f.path) || addonCert.MatchString(f.path)) && sameRegularFile(target, f.data, f.mode) {
 			continue
 		}
 		dirMode := fs.FileMode(0o755)

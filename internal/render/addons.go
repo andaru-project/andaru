@@ -125,7 +125,7 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest, emitted
 	for _, z := range r.d.Zones {
 		zones[z.ID] = true
 	}
-	settings, valErrs := addon.ValidateSettings(m, a.Settings, zones)
+	settings, valErrs := addon.ValidateSettings(m, a.Settings, zones, nil)
 	if len(valErrs) > 0 {
 		for _, fe := range valErrs {
 			r.find("error", "ADDON_SETTING_INVALID", basePath+"/settings"+fe.Path, fe.Message)

@@ -1188,6 +1188,8 @@
         "backups.create",
         "backups.exportSecrets",
         "backups.restore",
+        "certificates.manage",
+        "certificates.read",
         "configuration.apply",
         "configuration.confirm",
         "configuration.read",
@@ -1198,7 +1200,9 @@
         "tokens.manageAll",
         "tokens.manageSelf",
         "users.manage",
-        "users.read"
+        "users.read",
+        "vpn.control",
+        "vpn.read"
       ]
     },
     "roleFields": {

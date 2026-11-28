@@ -11,6 +11,8 @@ const (
 	BackupsCreate        Capability = "backups.create"
 	BackupsExportSecrets Capability = "backups.exportSecrets"
 	BackupsRestore       Capability = "backups.restore"
+	CertificatesManage   Capability = "certificates.manage"
+	CertificatesRead     Capability = "certificates.read"
 	ConfigurationApply   Capability = "configuration.apply"
 	ConfigurationConfirm Capability = "configuration.confirm"
 	ConfigurationRead    Capability = "configuration.read"
@@ -22,6 +24,8 @@ const (
 	TokensManageSelf     Capability = "tokens.manageSelf"
 	UsersManage          Capability = "users.manage"
 	UsersRead            Capability = "users.read"
+	VPNControl           Capability = "vpn.control"
+	VPNRead              Capability = "vpn.read"
 )
 
 var catalog = []Capability{
@@ -31,6 +35,8 @@ var catalog = []Capability{
 	BackupsCreate,
 	BackupsExportSecrets,
 	BackupsRestore,
+	CertificatesManage,
+	CertificatesRead,
 	ConfigurationApply,
 	ConfigurationConfirm,
 	ConfigurationRead,
@@ -42,6 +48,8 @@ var catalog = []Capability{
 	TokensManageSelf,
 	UsersManage,
 	UsersRead,
+	VPNControl,
+	VPNRead,
 }
 
 func Catalog() []Capability { return slices.Clone(catalog) }

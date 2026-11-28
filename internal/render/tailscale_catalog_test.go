@@ -41,7 +41,7 @@ func TestShippedTailscaleManifestLoadsAndRenders(t *testing.T) {
 	}
 
 	// Validate default materialization ensures TS_EXTRA_ARGS always includes --netfilter-mode=off and explicit =false flags.
-	materialized, errs := addon.ValidateSettings(m, nil, nil)
+	materialized, errs := addon.ValidateSettings(m, nil, nil, nil)
 	if len(errs) != 0 {
 		t.Fatalf("ValidateSettings(nil): %+v", errs)
 	}
@@ -54,7 +54,7 @@ func TestShippedTailscaleManifestLoadsAndRenders(t *testing.T) {
 		{"routingMode": []string{"--netfilter-mode=on"}},
 		{"routingMode": []string{defaultRouting, acceptRouting}},
 	} {
-		if _, badErrs := addon.ValidateSettings(m, bad, nil); len(badErrs) == 0 {
+		if _, badErrs := addon.ValidateSettings(m, bad, nil, nil); len(badErrs) == 0 {
 			t.Fatalf("ValidateSettings(%v) unexpectedly succeeded", bad)
 		}
 	}

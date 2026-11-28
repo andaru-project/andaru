@@ -133,7 +133,7 @@ func TestVerifyDetectsCorruption(t *testing.T) {
 	dir := Dir(t.TempDir())
 	create(t, dir, Manifest{}, map[string]string{"50-andaru-a.network": "good"})
 	g, _ := Read(dir, 1)
-	stored := filepath.Join(dir, "1", "files", "50-andaru-a.network")
+	stored := filepath.Join(dir, "1", "files", storedName(netDir+"50-andaru-a.network"))
 	writeFile(t, stored, "evil")
 	if g.verify(dir) == nil {
 		t.Fatal("changed content verified")
@@ -209,5 +209,44 @@ func TestReadReconcilesWithPointers(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "pointers.json"), `{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1}`)
 	if g, _ := Read(dir, 1); g.State.State != Confirmed {
 		t.Fatalf("confirmed pointer = %+v", g.State)
+	}
+}
+
+// Two files that share a basename in different directories are both kept, and a generation stored before
+// path-keyed storage, under basenames, still loads.
+func TestStoreKeysFilesByPath(t *testing.T) {
+	dir := t.TempDir()
+	a, b := "/run/andaru-addons/one/certs/web.crt", "/run/andaru-addons/two/certs/web.crt"
+	id, err := Create(dir, Manifest{Files: []FileEntry{{Path: a, Mode: "0400"}, {Path: b, Mode: "0400"}}}, map[string][]byte{a: []byte("one"), b: []byte("two")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := Read(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Contents(dir, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got[a]) != "one" || string(got[b]) != "two" {
+		t.Fatalf("contents = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, strconv.Itoa(id), "files", storedName(a))); err != nil {
+		t.Fatalf("not stored path-keyed: %v", err)
+	}
+
+	legacy := filepath.Join(dir, "7")
+	path := netDir + "50-andaru-lan.network"
+	body := []byte("[Match]\nName=lan\n")
+	writeFile(t, filepath.Join(legacy, "files", "50-andaru-lan.network"), string(body))
+	sum := sha256.Sum256(body)
+	writeFile(t, filepath.Join(legacy, "manifest.json"), `{"id":7,"savedVersion":"1","files":[{"path":"`+path+`","mode":"0644","sha256":"`+hex.EncodeToString(sum[:])+`"}]}`)
+	old, err := Read(dir, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Contents(dir, old); err != nil || string(got[path]) != string(body) {
+		t.Fatalf("legacy contents = %q, %v", got, err)
 	}
 }

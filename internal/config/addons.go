@@ -245,7 +245,7 @@ func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written ma
 				continue
 			}
 			// Validate settings and materialize defaults.
-			materialized, sErrs := addon.ValidateSettings(m, a.Settings, zones)
+			materialized, sErrs := addon.ValidateSettings(m, a.Settings, zones, nil)
 			for _, fe := range sErrs {
 				bad(p+"/settings"+fe.Path, fe.Message)
 			}

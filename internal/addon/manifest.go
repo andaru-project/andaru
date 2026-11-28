@@ -359,6 +359,10 @@ type Binding struct {
 	Env      string    `json:"env,omitempty"`
 	Prefix   string    `json:"prefix,omitempty"`
 	Encoding *Encoding `json:"encoding,omitempty"`
+	// CertEnv, KeyEnv and BundleEnv name extra variables a certificate binding sets to its files' container paths.
+	CertEnv   string `json:"certEnv,omitempty"`
+	KeyEnv    string `json:"keyEnv,omitempty"`
+	BundleEnv string `json:"bundleEnv,omitempty"`
 }
 
 type Encoding struct {
@@ -632,7 +636,7 @@ func checkUnknownFields(raw []byte) []FieldError {
 		checkArr(prop["options"], p+"/options", func(opt any, op string) {
 			checkObj(opt, op, "value", "title", "description")
 		})
-		if b := checkObj(prop["binding"], p+"/binding", "type", "name", "style", "format", "env", "prefix", "encoding"); b != nil {
+		if b := checkObj(prop["binding"], p+"/binding", "type", "name", "style", "format", "env", "prefix", "encoding", "certEnv", "keyEnv", "bundleEnv"); b != nil {
 			checkObj(b["encoding"], p+"/binding/encoding", "mode", "separator")
 		}
 	})
@@ -1087,7 +1091,7 @@ func validAddonInterfaceName(name string) bool {
 	if !ifNamePattern.MatchString(name) {
 		return false
 	}
-	for _, forbidden := range []string{"en", "eth", "andaru", "podman"} {
+	for _, forbidden := range []string{"en", "eth", "andaru", "podman", "wg", "ipsec", "ovpn"} {
 		if strings.HasPrefix(name, forbidden) {
 			return false
 		}
@@ -1111,9 +1115,12 @@ var (
 	forbiddenBusPublish = []string{
 		"notification/#", "delivery/#", "alias-fetch/#", "alias-result/#",
 		"config/#", "apply/#", "notifications/#",
+		"certificate/#", "acme-order/#", "acme-result/#",
 	}
+	// Add-ons may subscribe to certificate/renewed: it carries no secret.
 	forbiddenBusSubscribe = []string{
 		"notification/#", "delivery/#", "alias-fetch/#",
+		"acme-order/#", "acme-result/#",
 	}
 )
 
@@ -1261,14 +1268,21 @@ func validateProperty(prop *Property, p string, usedEnv, usedArg, usedSecretFile
 		if prop.Default != nil {
 			bad(p+"/default", "zone-reference properties may not declare a default value")
 		}
-	case "certificate-reference", "alias-reference":
+	case "certificate-reference":
+		if prop.Default != nil {
+			bad(p+"/default", "certificate-reference properties may not declare a default value")
+		}
+		if prop.Binding == nil || prop.Binding.Type != "certificate" {
+			bad(p+"/binding", `certificate-reference requires a "certificate" binding`)
+		}
+	case "alias-reference":
 		bad(p+"/type", fmt.Sprintf("property type %q is reserved and not yet supported", prop.Type))
 	default:
 		bad(p+"/type", fmt.Sprintf("unsupported property type %q", prop.Type))
 	}
 
 	if prop.Default != nil {
-		if defErrs := validateValue(prop, prop.Default, p+"/default", nil); len(defErrs) > 0 {
+		if defErrs := validateValue(prop, prop.Default, p+"/default", nil, nil); len(defErrs) > 0 {
 			for _, fe := range defErrs {
 				bad(fe.Path, fe.Message)
 			}
@@ -1385,8 +1399,45 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 		} else if b.Prefix != "" {
 			bad(p+"/prefix", "prefix requires env to be set")
 		}
+	case "certificate":
+		if prop.Type != "certificate-reference" {
+			bad(p+"/type", `certificate binding is only supported for certificate-reference properties`)
+			return
+		}
+		if b.Style != "" || b.Encoding != nil || b.Env != "" || b.Prefix != "" {
+			bad(p, "certificate binding does not support style, encoding, env, or prefix")
+		}
+		upper := strings.ToUpper(b.Name)
+		generated := map[string]string{"split": "CERT KEY", "bundle": "BUNDLE"}[b.Format]
+		if generated == "" {
+			bad(p+"/format", `certificate binding format must be "bundle" or "split"`)
+		}
+		if !propNamePattern.MatchString(b.Name) {
+			bad(p+"/name", "certificate binding name must match [a-zA-Z][a-zA-Z0-9_]{0,63}")
+		} else if prev, dup := usedSecretFile["cert:"+upper]; dup {
+			bad(p+"/name", fmt.Sprintf("certificate %q already bound at %s", b.Name, prev))
+		} else {
+			usedSecretFile["cert:"+upper] = p
+			for _, suffix := range strings.Fields(generated) {
+				envKey := "ANDARU_CERT_" + upper + "_" + suffix
+				if prev := usedEnv[envKey]; prev != "" {
+					bad(p+"/name", fmt.Sprintf("certificate %q collides with %s on generated variable %s", b.Name, prev, envKey))
+				}
+				usedEnv[envKey] = p
+			}
+		}
+		for _, extra := range []struct{ name, value, format string }{{"certEnv", b.CertEnv, "split"}, {"keyEnv", b.KeyEnv, "split"}, {"bundleEnv", b.BundleEnv, "bundle"}} {
+			if extra.value == "" {
+				continue
+			}
+			if b.Format != extra.format {
+				bad(p+"/"+extra.name, fmt.Sprintf("%s is only valid for %q certificate bindings", extra.name, extra.format))
+				continue
+			}
+			reserveEnv(extra.value, p+"/"+extra.name, usedEnv, bad)
+		}
 	default:
-		bad(p+"/type", `binding type must be "environment", "argument", or "file"`)
+		bad(p+"/type", `binding type must be "environment", "argument", "file", or "certificate"`)
 	}
 }
 

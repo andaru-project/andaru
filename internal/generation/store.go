@@ -82,7 +82,9 @@ var (
 	addonContainer = regexp.MustCompile(`^` + addonQuadletPrefix + `([a-z][a-z0-9-]{0,31})\.container$`)
 	addonEnv       = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z][a-z0-9-]{0,31})/andaru-addon-([a-z][a-z0-9-]{0,31})\.env$`)
 	addonSecret    = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z][a-z0-9-]{0,31})/secrets/andaru-addon-([a-z][a-z0-9-]{0,31})-[A-Za-z][A-Za-z0-9_]{0,63}\.secret$`)
-	idName         = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+	// An add-on's certificate-reference files: PEM certificate, key or bundle under its certs directory.
+	addonCert = regexp.MustCompile(`^` + addonRuntimeDir + `([a-z][a-z0-9-]{0,31})/certs/[A-Za-z][A-Za-z0-9_]{0,63}\.(crt|key|pem)$`)
+	idName    = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 )
 
 // Dir is where generations live under the engine's state directory.
@@ -100,20 +102,26 @@ func isAddonSecret(path string) bool {
 
 func allowed(path string) bool {
 	return ownPath.MatchString(path) || pppOptions.MatchString(path) || pppUnit.MatchString(path) ||
-		addonContainer.MatchString(path) || isAddonEnv(path) || isAddonSecret(path) ||
+		addonContainer.MatchString(path) || isAddonEnv(path) || isAddonSecret(path) || addonCert.MatchString(path) ||
 		path == catchAllPath || path == filterEntry || path == keaFile || path == kea6File || path == kea6Template || path == unboundFile || path == resolvedFile
 }
 
 // modeFor is the one mode a generation file may have: secrets are 0400; pppd options, Quadlets and add-on env files are 0600.
 func modeFor(path string) string {
 	switch {
-	case isAddonSecret(path):
+	case isAddonSecret(path), addonCert.MatchString(path):
 		return "0400"
 	case pppOptions.MatchString(path), addonContainer.MatchString(path), isAddonEnv(path):
 		return "0600"
 	default:
 		return "0644"
 	}
+}
+
+// storedName is where a generation keeps one file: keyed by its whole path, so two files that share a basename in
+// different directories never overwrite each other.
+func storedName(path string) string {
+	return sum([]byte(path))[:16] + "-" + filepath.Base(path)
 }
 
 func is(p *int, id int) bool { return p != nil && *p == id }
@@ -267,7 +275,7 @@ func fill(own string, m Manifest, contents map[string][]byte) error {
 		return err
 	}
 	for _, f := range m.Files {
-		if err := writeAtomic(filepath.Join(own, "files", filepath.Base(f.Path)), contents[f.Path], 0o600); err != nil {
+		if err := writeAtomic(filepath.Join(own, "files", storedName(f.Path)), contents[f.Path], 0o600); err != nil {
 			return err
 		}
 	}
@@ -350,7 +358,7 @@ func (g Generation) content(dir string, f FileEntry) ([]byte, error) {
 	if !allowed(f.Path) || f.Mode != modeFor(f.Path) {
 		return nil, fmt.Errorf("generation %d names %q, which Andaru may not write", g.ID, f.Path)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(g.ID), "files", filepath.Base(f.Path)))
+	data, err := os.ReadFile(g.stored(dir, f))
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +366,17 @@ func (g Generation) content(dir string, f FileEntry) ([]byte, error) {
 		return nil, fmt.Errorf("generation %d: %s does not match its manifest", g.ID, f.Path)
 	}
 	return data, nil
+}
+
+// stored is where the generation keeps f: under its path-keyed name, or under its basename in a generation created
+// before path-keyed storage.
+func (g Generation) stored(dir string, f FileEntry) string {
+	files := filepath.Join(dir, strconv.Itoa(g.ID), "files")
+	keyed := filepath.Join(files, storedName(f.Path))
+	if _, err := os.Lstat(keyed); errors.Is(err, fs.ErrNotExist) {
+		return filepath.Join(files, filepath.Base(f.Path))
+	}
+	return keyed
 }
 
 func (g Generation) verify(dir string) error {

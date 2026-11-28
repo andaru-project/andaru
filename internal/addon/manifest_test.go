@@ -176,9 +176,64 @@ func TestParseManifestRejections(t *testing.T) {
 			wantErr: "/interfaces/0/name",
 		},
 		{
-			name:    "reserved certificate-reference rejected",
+			name:    "certificate-reference without certificate binding rejected",
 			mutate:  func(s string) string { return strings.Replace(s, `"type": "secret-reference"`, `"type": "certificate-reference"`, 1) },
-			wantErr: "reserved",
+			wantErr: `requires a "certificate" binding`,
+		},
+		{
+			name: "certificate binding on a string property rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"binding": { "type": "environment", "name": "TS_HOSTNAME" }`, `"binding": { "type": "certificate", "name": "web", "format": "split" }`, 1)
+			},
+			wantErr: "only supported for certificate-reference",
+		},
+		{
+			name: "certificate binding with unknown format rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"type": "secret-reference",
+      "title": "Auth key",
+      "binding": { "type": "file", "name": "auth_key", "format": "raw", "env": "TS_AUTHKEY", "prefix": "file:" }`, `"type": "certificate-reference",
+      "title": "Certificate",
+      "binding": { "type": "certificate", "name": "web", "format": "pkcs12" }`, 1)
+			},
+			wantErr: "/properties/0/binding/format",
+		},
+		{
+			name: "certificate bundleEnv on split binding rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"type": "secret-reference",
+      "title": "Auth key",
+      "binding": { "type": "file", "name": "auth_key", "format": "raw", "env": "TS_AUTHKEY", "prefix": "file:" }`, `"type": "certificate-reference",
+      "title": "Certificate",
+      "binding": { "type": "certificate", "name": "web", "format": "split", "bundleEnv": "TLS_BUNDLE" }`, 1)
+			},
+			wantErr: "/properties/0/binding/bundleEnv",
+		},
+		{
+			name: "certificate keyEnv colliding with another binding rejected",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"type": "secret-reference",
+      "title": "Auth key",
+      "binding": { "type": "file", "name": "auth_key", "format": "raw", "env": "TS_AUTHKEY", "prefix": "file:" }`, `"type": "certificate-reference",
+      "title": "Certificate",
+      "binding": { "type": "certificate", "name": "web", "format": "split", "keyEnv": "TS_HOSTNAME" }`, 1)
+			},
+			wantErr: "already bound",
+		},
+		{
+			name:    "add-on cannot publish certificate events",
+			mutate:  func(s string) string { return strings.Replace(s, `"topic": "notification/addon.tailscale"`, `"topic": "certificate/renewed"`, 1) },
+			wantErr: "certificate/#",
+		},
+		{
+			name:    "add-on cannot subscribe to ACME orders",
+			mutate:  func(s string) string { return strings.Replace(s, `"topic": "config/head"`, `"topic": "acme-order/+"`, 1) },
+			wantErr: "acme-order/#",
+		},
+		{
+			name:    "add-on cannot claim a WireGuard interface name",
+			mutate:  func(s string) string { return strings.Replace(s, `"name": "tailscale0"`, `"name": "wg0"`, 1) },
+			wantErr: "/interfaces/0/name",
 		},
 		{
 			name:    "stopTimeoutSeconds above 10 rejected",
@@ -220,7 +275,7 @@ func TestValidateSettingsDefaultsNullAndConstraints(t *testing.T) {
 	}
 
 	// Empty input materializes defaults (acceptRoutes=false, logLevel=["INFO"]).
-	out, errs := ValidateSettings(m, map[string]any{}, nil)
+	out, errs := ValidateSettings(m, map[string]any{}, nil, nil)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -236,7 +291,7 @@ func TestValidateSettingsDefaultsNullAndConstraints(t *testing.T) {
 		"hostname":        nil,
 		"unknownKey":      "x",
 		"advertiseRoutes": []any{"192.168.10.0/24", "192.168.10.0/24", "not-a-cidr"},
-	}, nil)
+	}, nil, nil)
 	if len(errs) < 4 {
 		t.Fatalf("expected >=4 errors, got %+v", errs)
 	}
@@ -246,7 +301,7 @@ func TestValidateSettingsDefaultsNullAndConstraints(t *testing.T) {
 		"hostname":        "andaru-gw",
 		"advertiseRoutes": []any{"192.168.10.0/24", "fd00::/48"},
 		"authKey":         map[string]any{"secret": "auth_key"},
-	}, nil)
+	}, nil, nil)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -375,13 +430,13 @@ func TestManifestHardeningRegressions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse probe manifest: %v", err)
 	}
-	if _, errs := ValidateSettings(m, map[string]any{"note": "a\nB=1"}, nil); len(errs) == 0 {
+	if _, errs := ValidateSettings(m, map[string]any{"note": "a\nB=1"}, nil, nil); len(errs) == 0 {
 		t.Fatal("expected newline in env-bound string setting to be rejected")
 	}
-	if _, errs := ValidateSettings(m, map[string]any{"note": "a\x00b"}, nil); len(errs) == 0 {
+	if _, errs := ValidateSettings(m, map[string]any{"note": "a\x00b"}, nil, nil); len(errs) == 0 {
 		t.Fatal("expected NUL byte in string setting to be rejected")
 	}
-	if _, errs := ValidateSettings(m, map[string]any{"addr": "fe80::1%eth0"}, nil); len(errs) == 0 {
+	if _, errs := ValidateSettings(m, map[string]any{"addr": "fe80::1%eth0"}, nil, nil); len(errs) == 0 {
 		t.Fatal("expected IPv6 zone ID to be rejected")
 	}
 }
@@ -425,5 +480,32 @@ func TestReservedBusSocketSlugRejected(t *testing.T) {
 	raw := strings.Replace(validTailscaleManifest, `"slug": "tailscale"`, `"slug": "bus-socket"`, 1)
 	if _, err := ParseManifest([]byte(raw)); err == nil {
 		t.Fatal("ParseManifest accepted reserved slug bus-socket")
+	}
+}
+
+func TestCertificateReferenceManifestAndSettings(t *testing.T) {
+	raw := strings.Replace(validTailscaleManifest, `"type": "secret-reference",
+      "title": "Auth key",
+      "binding": { "type": "file", "name": "auth_key", "format": "raw", "env": "TS_AUTHKEY", "prefix": "file:" }`, `"type": "certificate-reference",
+      "title": "Certificate",
+      "binding": { "type": "certificate", "name": "web", "format": "split", "certEnv": "TLS_CERT", "keyEnv": "TLS_KEY" }`, 1)
+	raw = strings.Replace(raw, `"topic": "config/head"`, `"topic": "certificate/renewed"`, 1)
+	m, err := ParseManifest([]byte(raw))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	b := m.Properties[0].Binding
+	if b.Type != "certificate" || b.Format != "split" || b.CertEnv != "TLS_CERT" || b.KeyEnv != "TLS_KEY" {
+		t.Fatalf("binding = %+v", b)
+	}
+	const id = "crt_6c1f5d0e-2b3a-4c5d-8e9f-0a1b2c3d4e5f"
+	if _, errs := ValidateSettings(m, map[string]any{"authKey": id}, nil, map[string]bool{id: true}); len(errs) != 0 {
+		t.Fatalf("known certificate refused: %+v", errs)
+	}
+	if _, errs := ValidateSettings(m, map[string]any{"authKey": id}, nil, map[string]bool{}); len(errs) == 0 || !strings.Contains(errs[0].Message, "unknown certificate") {
+		t.Fatalf("dangling certificate accepted: %+v", errs)
+	}
+	if _, errs := ValidateSettings(m, map[string]any{"authKey": "ca_6c1f5d0e-2b3a-4c5d-8e9f-0a1b2c3d4e5f"}, nil, nil); len(errs) == 0 {
+		t.Fatal("non-certificate id accepted")
 	}
 }
