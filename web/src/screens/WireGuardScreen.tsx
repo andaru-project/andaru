@@ -1020,16 +1020,16 @@ function InterfaceModal({
               checked={enabled}
               onChange={(event) => setEnabled(event.currentTarget.checked)}
             />
-            <Group justify="flex-end" gap="xs" mt="xs">
-              <Button variant="default" disabled={busy || generatingKey} onClick={onClose}>
-                {stale ? 'Close' : 'Cancel'}
-              </Button>
-              <Button type="submit" loading={busy} disabled={generatingKey || stale}>
-                {existing ? 'Save interface' : 'Add interface'}
-              </Button>
-            </Group>
           </Stack>
         </Fieldset>
+        <Group justify="flex-end" gap="xs" mt="md">
+          <Button variant="default" disabled={busy || generatingKey} onClick={onClose}>
+            {stale ? 'Close' : 'Cancel'}
+          </Button>
+          <Button type="submit" loading={busy} disabled={generatingKey || stale}>
+            {existing ? 'Save interface' : 'Add interface'}
+          </Button>
+        </Group>
       </form>
     </Modal>
   );
@@ -1293,16 +1293,16 @@ function PeerModal({
               checked={enabled}
               onChange={(event) => setEnabled(event.currentTarget.checked)}
             />
-            <Group justify="flex-end" gap="xs" mt="xs">
-              <Button variant="default" disabled={busy || generating} onClick={onClose}>
-                {stale ? 'Close' : 'Cancel'}
-              </Button>
-              <Button type="submit" loading={busy} disabled={generating || stale}>
-                {existing ? 'Save peer' : 'Add peer'}
-              </Button>
-            </Group>
           </Stack>
         </Fieldset>
+        <Group justify="flex-end" gap="xs" mt="md">
+          <Button variant="default" disabled={busy || generating} onClick={onClose}>
+            {stale ? 'Close' : 'Cancel'}
+          </Button>
+          <Button type="submit" loading={busy} disabled={generating || stale}>
+            {existing ? 'Save peer' : 'Add peer'}
+          </Button>
+        </Group>
       </form>
     </Modal>
   );
