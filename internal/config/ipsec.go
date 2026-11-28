@@ -194,13 +194,11 @@ func normalizeSwanIdentity(s string) string {
 	lower := strings.ToLower(s)
 	switch {
 	case strings.HasPrefix(lower, "ipv4:"), strings.HasPrefix(lower, "ipv6:"):
-		rest := s[5:]
-		if a, err := netip.ParseAddr(rest); err == nil {
-			return "ip:" + a.String()
-		}
-		return "ip:" + strings.ToLower(rest)
-	case strings.HasPrefix(lower, "fqdn:"):
-		return "fqdn:" + strings.ToLower(s[5:])
+		// A type prefix takes the value as literal text, never a binary address: "ipv4:192.0.2.1" is not "192.0.2.1".
+		return lower[:5] + s[5:]
+	case strings.HasPrefix(lower, "fqdn:"), strings.HasPrefix(lower, "dns:"):
+		_, v, _ := strings.Cut(s, ":")
+		return "fqdn:" + strings.ToLower(v)
 	case strings.HasPrefix(lower, "email:"):
 		return "rfc822:" + strings.ToLower(s[6:])
 	case strings.HasPrefix(lower, "rfc822:"):
@@ -228,6 +226,12 @@ func normalizeSwanIdentity(s string) string {
 		return "rfc822:" + lower
 	}
 	return "fqdn:" + lower
+}
+
+// wildcardSwanIdentity reports identities strongSwan matches against others (ID_ANY, "*" wildcards, ^...$ regexes):
+// as an EAP secret's owner one would hand its password to every user name.
+func wildcardSwanIdentity(s string) bool {
+	return s == "0.0.0.0" || s == "::" || strings.HasPrefix(s, "%") || strings.ContainsAny(s, "*^")
 }
 
 // normalizeDN drops spaces around separators and folds case, as strongSwan's ASN.1 DN parse and comparison do;
@@ -452,6 +456,8 @@ func validateIPsec(d *declaration) []FieldError {
 			up := fmt.Sprintf("%s/eapUsers/%d/username", ap, j)
 			if !swanText(u.Username, 64) {
 				bad(up, "Expected a user name without spaces, quotes, braces, # or backslashes.")
+			} else if wildcardSwanIdentity(u.Username) {
+				bad(up, "A user name cannot be a wildcard or pattern identity.")
 			} else if seenEAP[u.Username] {
 				bad(up, "Another EAP user already has this username.")
 			}

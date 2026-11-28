@@ -554,6 +554,24 @@ func TestIPsecSecurityValidation(t *testing.T) {
 	if errs := validateIPsec(dEAP); len(errs) != 1 || errs[0].Path != "/vpn/ipsec/1/auth/remoteType" {
 		t.Errorf("second enabled EAP connection accepted: %+v", errs)
 	}
+	// dns: is an FQDN; a typed ipv4: value stays literal text, unlike a bare address.
+	if normalizeSwanIdentity("dns:GW.example.com") != normalizeSwanIdentity("gw.example.com") || normalizeSwanIdentity("ipv4:192.0.2.1") == normalizeSwanIdentity("192.0.2.1") {
+		t.Error("typed identities not normalized like strongSwan")
+	}
+	// Wildcard or pattern EAP user names would match every user.
+	for _, name := range []string{"%any", "%any6", "*", "*@example.com", "^a.*$", "0.0.0.0", "::"} {
+		dW := base()
+		dW.VPN.IPsec[0].Mode = "road-warrior"
+		dW.VPN.IPsec[0].RemoteAddress = "%any"
+		dW.VPN.IPsec[0].VirtualPool = []string{"10.99.0.0/24"}
+		dW.VPN.IPsec[0].Auth.RemoteType = "eap-mschapv2"
+		dW.VPN.IPsec[0].Auth.RemoteID = ""
+		dW.VPN.IPsec[0].Auth.PSKRef = &secretReference{Secret: "P"}
+		dW.VPN.IPsec[0].Auth.EAPUsers = []ipsecEAPUser{{Username: name, PasswordRef: secretReference{Secret: "E1"}}}
+		if errs := validateIPsec(dW); len(errs) != 1 || errs[0].Path != "/vpn/ipsec/0/auth/eapUsers/0/username" {
+			t.Errorf("wildcard EAP user %q: %+v", name, errs)
+		}
+	}
 	// DNs that differ only in case or spacing are one strongSwan identity.
 	if normalizeSwanIdentity("C=US, CN=gw") != normalizeSwanIdentity("asn1dn:c=US,cn=gw") {
 		t.Error("DN identities not normalized like strongSwan")
