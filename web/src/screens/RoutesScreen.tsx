@@ -101,11 +101,21 @@ export function RoutesScreen({ api, session, onSaved, onSessionLost }: RoutesScr
             Route IPv4 and IPv6 prefixes through configured network segments or VPN tunnel interfaces.
           </Text>
         </div>
-        {canWrite && (
-          <Button size="sm" disabled={segments.length === 0} onClick={() => setEditor('new')}>
-            Add route
+        <Group gap="xs">
+          <Button
+            size="sm"
+            variant="default"
+            loading={resource.loading && resource.data !== undefined}
+            onClick={() => void resource.reload()}
+          >
+            Refresh
           </Button>
-        )}
+          {canWrite && (
+            <Button size="sm" disabled={segments.length === 0} onClick={() => setEditor('new')}>
+              Add route
+            </Button>
+          )}
+        </Group>
       </Group>
 
       {notice && (

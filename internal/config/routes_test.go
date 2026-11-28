@@ -104,6 +104,16 @@ func TestRouteValidation(t *testing.T) {
 		d := routeFixture(t, routeTo(nil), routeTo(map[string]any{"id": rteB, "name": "again", "destination": "10.20.0.9/24", "gateway": "192.0.2.253"}))
 		refusedWith(t, d, "/routes/1/destination", "Another route has this destination, target and metric.")
 	})
+	t.Run("ipv6 omitted metric collides with 1024", func(t *testing.T) {
+		d := routeFixture(t,
+			routeTo(map[string]any{"destination": "2001:db8:20::/64", "gateway": "fe80::1"}),
+			routeTo(map[string]any{"id": rteB, "name": "explicit-default", "destination": "2001:db8:20::/64", "gateway": "fe80::1", "metric": 1024}),
+		)
+		refusedWith(t, d, "/routes/1/destination", "Another route has this destination, target and metric.")
+	})
+	t.Run("ipv4 omitted metric does not collide with 1024", func(t *testing.T) {
+		accepted(t, routeFixture(t, routeTo(nil), routeTo(map[string]any{"id": rteB, "name": "explicit-1024", "metric": 1024})))
+	})
 	t.Run("same destination, other metric", func(t *testing.T) {
 		accepted(t, routeFixture(t, routeTo(nil), routeTo(map[string]any{"id": rteB, "name": "backup", "metric": 200})))
 	})

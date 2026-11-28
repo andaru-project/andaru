@@ -33,13 +33,20 @@ var routeTargets = map[string]func(d *declaration, id string) bool{
 // pointToPoint target kinds have no next hop on their link, so a route through one names no gateway.
 func pointToPoint(kind string) bool { return kind == "wireguard" || kind == "ipsec" }
 
-// routeTupleKey identifies a route's kernel uniqueness tuple (masked destination, target, metric).
+// ipv6DefaultMetric is the Linux kernel's IP6_RT_PRIO_USER default substituted when an IPv6 route omits Metric=.
+const ipv6DefaultMetric uint32 = 1024
+
+// routeTupleKey identifies a route's kernel uniqueness tuple (masked destination, target, effective metric).
 func routeTupleKey(r *route) string {
 	dest, err := netip.ParsePrefix(r.Destination)
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf("route:%s %s %s %d", dest.Masked(), r.Target.Kind, r.Target.ID, r.Metric)
+	metric := r.Metric
+	if metric == 0 && dest.Addr().Is6() && !dest.Addr().Is4In6() {
+		metric = ipv6DefaultMetric
+	}
+	return fmt.Sprintf("route:%s %s %s %d", dest.Masked(), r.Target.Kind, r.Target.ID, metric)
 }
 
 func validateRoutes(d *declaration) []FieldError {

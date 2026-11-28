@@ -207,4 +207,36 @@ describe('RoutesScreen', () => {
     expect(screen.queryByRole('button', { name: 'Edit route Branch Office' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete route Branch Office' })).not.toBeInTheDocument();
   });
+
+  it('recovers from an initial 503 read failure via Refresh', async () => {
+    const user = userEvent.setup();
+    let failReads = true;
+
+    fetchRoutes({
+      '/api/v1/config/routes': () => {
+        if (failReads) {
+          return jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'Temporarily unavailable.', details: [] } });
+        }
+        return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleRoute] });
+      },
+      '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
+    });
+
+    render(
+      <RoutesScreen
+        api={new ApiClient('csrf')}
+        session={adminSession}
+        onSaved={vi.fn()}
+        onSessionLost={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Temporarily unavailable.');
+    expect(screen.getByRole('button', { name: 'Add route' })).toBeDisabled();
+
+    failReads = false;
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('Branch Office')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add route' })).toBeEnabled();
+  });
 });
