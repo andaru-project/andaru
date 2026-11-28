@@ -2,8 +2,11 @@ package generation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"regexp"
@@ -13,16 +16,17 @@ import (
 )
 
 const (
-	ipsecDir       = "/run/andaru-ipsec"
-	ipsecConf      = ipsecDir + "/swanctl.conf"
-	strongswanUnit = "strongswan.service"
-	swanctl        = "/usr/bin/swanctl"
-	restorecon     = "/usr/sbin/restorecon"
+	ipsecDir           = "/run/andaru-ipsec"
+	ipsecConf          = ipsecDir + "/swanctl.conf"
+	ipsecReloadPending = ipsecDir + "/.reload-pending"
+	strongswanUnit     = "strongswan.service"
+	swanctl            = "/usr/bin/swanctl"
+	restorecon         = "/usr/sbin/restorecon"
 )
 
-// ipsecCredential is a CA or certificate swanctl.conf names, or a certificate's key, in the directories swanctl --file
-// loads beside it.
-var ipsecCredential = regexp.MustCompile(`^` + ipsecDir + `/(x509/crt_` + uuidPattern + `\.pem|x509ca/ca_` + uuidPattern + `\.pem|private/crt_` + uuidPattern + `\.key)$`)
+// ipsecCredential is a CA, intermediate chain certificate, leaf certificate or certificate key in the directories
+// swanctl --file loads beside swanctl.conf.
+var ipsecCredential = regexp.MustCompile(`^` + ipsecDir + `/(x509/crt_` + uuidPattern + `\.pem|x509ca/(ca_` + uuidPattern + `|crt_` + uuidPattern + `-chain-[0-9]+)\.pem|private/crt_` + uuidPattern + `\.key)$`)
 
 const uuidPattern = `[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`
 
@@ -34,22 +38,135 @@ func ValidIPsecConnection(name string) bool { return ipsecConnName.MatchString(n
 
 func isIPsecFile(path string) bool { return path == ipsecConf || ipsecCredential.MatchString(path) }
 
-// ipsecConnections are the connections a rendered swanctl.conf declares: the sections one level into connections.
-func ipsecConnections(conf []byte) []string {
-	var out []string
-	for line := range strings.SplitSeq(string(conf), "\n") {
-		if name, ok := strings.CutSuffix(line, " {"); ok && strings.Count(name, "\t") == 1 && ipsecConnName.MatchString(name[1:]) {
-			out = append(out, name[1:])
+// ipsecConnectionFingerprints returns a per-connection digest covering its swanctl.conf connection, pool and secret
+// blocks plus the contents of any credential files it references, along with each connection's start_action.
+func ipsecConnectionFingerprints(files []placed) (digests map[string]string, startActions map[string]string) {
+	digests = map[string]string{}
+	startActions = map[string]string{}
+	conf, ok := find(files, ipsecConf)
+	if !ok {
+		return digests, startActions
+	}
+	bySHA := map[string]string{}
+	for _, f := range files {
+		if isIPsecFile(f.path) {
+			if f.sha256 != "" {
+				bySHA[f.path] = f.sha256
+			} else {
+				sum := sha256.Sum256(f.data)
+				bySHA[f.path] = hex.EncodeToString(sum[:])
+			}
 		}
 	}
-	return out
+	sections := map[string][]string{}
+	var topSection, blockConn string
+	depth := 0
+	for line := range strings.SplitSeq(string(conf.data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case depth == 0 && strings.HasSuffix(trimmed, " {"):
+			topSection = strings.TrimSuffix(trimmed, " {")
+			depth = 1
+		case depth == 1 && trimmed == "}":
+			topSection = ""
+			depth = 0
+		case depth == 1 && strings.HasSuffix(trimmed, " {"):
+			name := strings.TrimSuffix(trimmed, " {")
+			blockConn = ipsecBlockOwner(topSection, name)
+			depth = 2
+			if blockConn != "" {
+				sections[blockConn] = append(sections[blockConn], topSection+":"+line)
+			}
+		case depth >= 2:
+			if blockConn != "" {
+				sections[blockConn] = append(sections[blockConn], line)
+				if act, ok := strings.CutPrefix(trimmed, "start_action = "); ok {
+					startActions[blockConn] = act
+				}
+			}
+			if strings.HasSuffix(trimmed, " {") {
+				depth++
+			} else if trimmed == "}" {
+				depth--
+				if depth == 1 {
+					blockConn = ""
+				}
+			}
+		}
+	}
+	for id, lines := range sections {
+		h := sha256.New()
+		for _, line := range lines {
+			h.Write([]byte(line))
+			h.Write([]byte{'\n'})
+			trimmed := strings.TrimSpace(line)
+			for _, prefix := range []string{"certs = ", "cacerts = "} {
+				if refPath, ok := strings.CutPrefix(trimmed, prefix); ok {
+					if digest, exists := bySHA[refPath]; exists {
+						h.Write([]byte(refPath + "=" + digest + "\n"))
+					}
+					if certID, ok := strings.CutPrefix(refPath, ipsecDir+"/x509/"); ok {
+						certID = strings.TrimSuffix(certID, ".pem")
+						keyPath := ipsecDir + "/private/" + certID + ".key"
+						if digest, exists := bySHA[keyPath]; exists {
+							h.Write([]byte(keyPath + "=" + digest + "\n"))
+						}
+						for n := 0; ; n++ {
+							chainPath := fmt.Sprintf("%s/x509ca/%s-chain-%d.pem", ipsecDir, certID, n)
+							digest, exists := bySHA[chainPath]
+							if !exists {
+								break
+							}
+							h.Write([]byte(chainPath + "=" + digest + "\n"))
+						}
+					}
+				}
+			}
+		}
+		digests[id] = hex.EncodeToString(h.Sum(nil))
+	}
+	return digests, startActions
 }
 
-// ipsecCredentialDirs makes the directories swanctl --file scans beside swanctl.conf, and labels them for strongSwan
-// where SELinux is installed.
+// ipsecBlockOwner maps a top-level swanctl.conf subsection name back to its ips_<uuid> connection ID.
+func ipsecBlockOwner(section, name string) string {
+	switch section {
+	case "connections":
+		if ipsecConnName.MatchString(name) {
+			return name
+		}
+	case "pools":
+		if i := strings.LastIndexByte(name, '-'); i > 0 && ipsecConnName.MatchString(name[:i]) {
+			return name[:i]
+		}
+	case "secrets":
+		if rest, ok := strings.CutPrefix(name, "ike-"); ok && ipsecConnName.MatchString(rest) {
+			return rest
+		}
+		if rest, ok := strings.CutPrefix(name, "eap-"); ok {
+			if i := strings.LastIndexByte(rest, '-'); i > 0 && ipsecConnName.MatchString(rest[:i]) {
+				return rest[:i]
+			}
+		}
+	}
+	return ""
+}
+
+// ipsecCredentialDirs makes the directories swanctl --file scans beside swanctl.conf, enforces 0700 permissions,
+// and labels them for strongSwan where SELinux is installed.
 func (r Realizer) ipsecCredentialDirs(ctx context.Context) error {
+	if err := os.MkdirAll(r.Root+ipsecDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(r.Root+ipsecDir, 0o700); err != nil {
+		return err
+	}
 	for _, dir := range []string{"x509", "x509ca", "private"} {
-		if err := os.MkdirAll(r.Root+ipsecDir+"/"+dir, 0o700); err != nil {
+		full := r.Root + ipsecDir + "/" + dir
+		if err := os.MkdirAll(full, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(full, 0o700); err != nil {
 			return err
 		}
 	}
@@ -61,10 +178,40 @@ func (r Realizer) ipsecCredentialDirs(ctx context.Context) error {
 	return nil
 }
 
+// removeIPsecRuntimeFiles wipes swanctl.conf, any reload-pending marker, and credential directories under ipsecDir.
+func (r Realizer) removeIPsecRuntimeFiles() error {
+	for _, path := range []string{ipsecConf, ipsecReloadPending} {
+		if err := os.Remove(r.Root + path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	for _, dir := range []string{"x509", "x509ca", "private"} {
+		if err := os.RemoveAll(r.Root + ipsecDir + "/" + dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cleanupIPsecOnTeardownIfPresent stops strongSwan if it is running and wipes /run/andaru-ipsec files during a
+// factory reset when p.Live is nil (for instance after an interrupted first-ever activation), without touching hosts
+// where Andaru never placed IPsec files.
+func (r Realizer) cleanupIPsecOnTeardownIfPresent(ctx context.Context) error {
+	if _, err := os.Stat(r.Root + ipsecDir); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", strongswanUnit); err == nil {
+		if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", strongswanUnit); err != nil {
+			return fmt.Errorf("stop strongSwan: %w", err)
+		}
+	}
+	return r.removeIPsecRuntimeFiles()
+}
+
 // ipsec starts strongSwan on the connections to declares, or reloads them into a running one, and ends the SAs of
-// connections it no longer declares; when to declares none, strongSwan stops and its credentials go.
+// removed or changed connections; when to declares none, strongSwan stops and its credentials go.
 func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
-	conf, want := find(to, ipsecConf)
+	_, want := find(to, ipsecConf)
 	_, had := find(from, ipsecConf)
 	if !want {
 		if !had {
@@ -73,12 +220,7 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", strongswanUnit); err != nil {
 			return fmt.Errorf("stop strongSwan: %w", err)
 		}
-		for _, dir := range []string{"x509", "x509ca", "private"} {
-			if err := os.RemoveAll(r.Root + ipsecDir + "/" + dir); err != nil {
-				return err
-			}
-		}
-		return nil
+		return r.removeIPsecRuntimeFiles()
 	}
 	if err := r.ipsecCredentialDirs(ctx); err != nil {
 		return err
@@ -88,12 +230,15 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", strongswanUnit); err != nil {
 			return fmt.Errorf("start strongSwan: %w", err)
 		}
+		_ = os.Remove(r.Root + ipsecReloadPending)
 		return nil
 	}
 	if _, err := r.Run(ctx, swanctl, "--load-all", "--clear", "--file", ipsecConf, "--noprompt"); err != nil {
 		return fmt.Errorf("load the IPsec connections: %w", err)
 	}
-	// --clear unloads a removed connection, but its SAs stay up until they are ended.
+	_ = os.Remove(r.Root + ipsecReloadPending)
+	// --clear unloads a removed connection and updates changed configs for future handshakes, but live SAs stay up
+	// (including on stale xfrmIfId, shifted reqid, or rotated secrets) until they are ended.
 	out, err := r.Run(ctx, swanctl, "--list-sas", "--pretty")
 	if err != nil {
 		slog.Warn("list the IPsec SAs", "error", err)
@@ -104,14 +249,26 @@ func (r Realizer) ipsec(ctx context.Context, from, to []placed) error {
 		slog.Warn("read the IPsec SAs", "error", err)
 		return nil
 	}
-	keep := ipsecConnections(conf.data)
+	oldFP, _ := ipsecConnectionFingerprints(from)
+	newFP, newStart := ipsecConnectionFingerprints(to)
 	var ended []string
+	var reinit []string
 	for _, sa := range sas {
-		if !slices.Contains(keep, sa.Name) && !slices.Contains(ended, sa.Name) {
+		newDigest, kept := newFP[sa.Name]
+		changed := kept && oldFP[sa.Name] != newDigest
+		if (!kept || changed) && !slices.Contains(ended, sa.Name) {
 			ended = append(ended, sa.Name)
 			if _, err := r.Run(ctx, swanctl, "--terminate", "--ike", sa.Name, "--timeout", "5"); err != nil {
-				slog.Warn("end the SAs of a removed IPsec connection", "connection", sa.Name, "error", err)
+				slog.Warn("end the SAs of a removed or changed IPsec connection", "connection", sa.Name, "error", err)
 			}
+			if changed && newStart[sa.Name] == "start" {
+				reinit = append(reinit, sa.Name)
+			}
+		}
+	}
+	for _, id := range reinit {
+		if _, err := r.Run(ctx, swanctl, "--initiate", "--child", id, "--timeout", "5"); err != nil {
+			slog.Warn("re-initiate a changed IPsec connection", "connection", id, "error", err)
 		}
 	}
 	return nil
@@ -177,6 +334,9 @@ func ReadIPsecStatus(ctx context.Context, run func(ctx context.Context, name str
 		return status, err
 	}
 	for _, event := range conns.kids {
+		if event.name != "list-conn event" {
+			continue
+		}
 		for _, c := range event.kids {
 			status.Connections = append(status.Connections, c.name)
 		}
@@ -196,8 +356,20 @@ type viciNode struct {
 	kids   []*viciNode
 }
 
+// cutViciKV parses "key = value" or an empty-valued "key =" (after TrimSpace stripped the trailing space) before
+// section-header matching so a value containing " {" or " = [" (such as a remote peer's DN) cannot spoof a section.
+func cutViciKV(line string) (key, val string, ok bool) {
+	if k, v, found := strings.Cut(line, " = "); found {
+		return k, v, true
+	}
+	if k, found := strings.CutSuffix(line, " ="); found {
+		return k, "", true
+	}
+	return "", "", false
+}
+
 // parseVici reads swanctl --pretty output: "name {" opens a section and "}" ends it, "key = [" opens a list of one
-// item per line that "]" ends, and "key = value" is a value. Messages are the top-level sections.
+// item per line that "]" ends, and "key = value" (or "key =") is a value. Messages are the top-level sections.
 func parseVici(data []byte) (*viciNode, error) {
 	root := &viciNode{values: map[string]string{}, lists: map[string][]string{}}
 	stack := []*viciNode{root}
@@ -218,19 +390,21 @@ func parseVici(data []byte) (*viciNode, error) {
 				return nil, fmt.Errorf("swanctl output line %d: unbalanced }", n+1)
 			}
 			stack = stack[:len(stack)-1]
-		case strings.HasSuffix(line, " = ["):
-			list = strings.TrimSuffix(line, " = [")
-			top.lists[list] = []string{}
-		case strings.HasSuffix(line, " {"):
-			kid := &viciNode{name: strings.TrimSuffix(line, " {"), values: map[string]string{}, lists: map[string][]string{}}
-			top.kids = append(top.kids, kid)
-			stack = append(stack, kid)
 		default:
-			key, value, ok := strings.Cut(line, " = ")
-			if !ok {
+			if key, val, ok := cutViciKV(line); ok {
+				if val == "[" {
+					list = key
+					top.lists[key] = []string{}
+				} else {
+					top.values[key] = val
+				}
+			} else if name, ok := strings.CutSuffix(line, " {"); ok {
+				kid := &viciNode{name: name, values: map[string]string{}, lists: map[string][]string{}}
+				top.kids = append(top.kids, kid)
+				stack = append(stack, kid)
+			} else {
 				return nil, fmt.Errorf("swanctl output line %d: unexpected %q", n+1, line)
 			}
-			top.values[key] = value
 		}
 	}
 	if len(stack) != 1 || list != "" {

@@ -338,8 +338,14 @@ func (s *Store) CertificateBindings(ctx context.Context, live Version) (consumer
 				}
 			}
 			for _, c := range state.Config.VPN.IPsec {
-				if c.Enabled && c.Auth.LocalCertID != "" {
+				if !c.Enabled {
+					continue
+				}
+				if c.Auth.LocalCertID != "" {
 					consumers = append(consumers, CertificateConsumer{Kind: "ipsec", CertificateID: c.Auth.LocalCertID})
+				}
+				if c.Auth.CAID != "" {
+					consumers = append(consumers, CertificateConsumer{Kind: "ipsec-ca", CertificateID: c.Auth.CAID})
 				}
 			}
 			return nil
@@ -354,7 +360,17 @@ func (s *Store) CertificateBindings(ctx context.Context, live Version) (consumer
 	}
 	err = s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
 		certs := certificateIndex(&state.Config)
+		cas := map[string]*pkiCA{}
+		for i := range state.Config.PKI.CAs {
+			cas[state.Config.PKI.CAs[i].ID] = &state.Config.PKI.CAs[i]
+		}
 		for _, c := range consumers {
+			if c.Kind == "ipsec-ca" {
+				if ca, ok := cas[c.CertificateID]; ok {
+					material[c.CertificateID] = CertificateMaterial{Name: ca.Name, CertPEM: ca.CertPEM}
+				}
+				continue
+			}
 			x, ok := certs[c.CertificateID]
 			if !ok {
 				continue // deleted since: the consumer keeps what it has until an apply

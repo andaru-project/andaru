@@ -52,7 +52,8 @@ func TestIPsecPaths(t *testing.T) {
 		ipsecConf:  "0600",
 		ipsKey:     "0400",
 		ipsCertPEM: "0644",
-		ipsecDir + "/x509ca/ca_00000001-0000-4000-8000-000000000001.pem": "0644",
+		ipsecDir + "/x509ca/ca_00000001-0000-4000-8000-000000000001.pem":   "0644",
+		ipsecDir + "/x509ca/" + ipsCrt + "-chain-0.pem":                   "0644",
 	} {
 		if !allowed(path) || modeFor(path) != mode {
 			t.Errorf("%s: allowed %v mode %s", path, allowed(path), modeFor(path))
@@ -64,8 +65,9 @@ func TestIPsecPaths(t *testing.T) {
 			t.Errorf("%s allowed", path)
 		}
 	}
-	if got := ipsecConnections([]byte(swanctlConf(ipsA, ipsB))); !slices.Equal(got, []string{ipsA, ipsB}) {
-		t.Fatalf("connections %v", got)
+	fps, _ := ipsecConnectionFingerprints([]placed{{path: ipsecConf, data: []byte(swanctlConf(ipsA, ipsB))}})
+	if len(fps) != 2 || fps[ipsA] == "" || fps[ipsB] == "" {
+		t.Fatalf("fingerprints %v", fps)
 	}
 }
 
@@ -80,9 +82,10 @@ func TestIPsecLifecycle(t *testing.T) {
 	if !b.net.strongswan || b.net.ran("systemctl start strongswan.service") != 1 || b.net.ran("swanctl --load-all") != 0 {
 		t.Fatalf("strongSwan not started: %q", b.net.argv)
 	}
-	for _, dir := range []string{"x509", "x509ca", "private"} {
-		if !b.exists(ipsecDir[1:] + "/" + dir) {
-			t.Fatalf("%s/%s missing", ipsecDir, dir)
+	for _, dir := range []string{"", "/x509", "/x509ca", "/private"} {
+		info, err := os.Stat(filepath.Join(b.net.root, ipsecDir+dir))
+		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s%s: info=%v err=%v", ipsecDir, dir, info, err)
 		}
 	}
 	for path, mode := range map[string]os.FileMode{ipsecConf: 0o600, ipsKey: 0o400, ipsCertPEM: 0o644} {
@@ -334,7 +337,7 @@ func TestSyncIPsecCertificates(t *testing.T) {
 	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: files}); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(ran, "swanctl --load-creds --file "+ipsecConf+" --noprompt") {
+	if !slices.Contains(ran, "swanctl --load-all --clear --file "+ipsecConf+" --noprompt") {
 		t.Fatalf("not reloaded: %q", ran)
 	}
 	for path, mode := range map[string]os.FileMode{ipsCertPEM: 0o644, ipsKey: 0o400} {
@@ -348,16 +351,130 @@ func TestSyncIPsecCertificates(t *testing.T) {
 	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: files}); err != nil || len(ran) != 0 {
 		t.Fatalf("unchanged: %q %v", ran, err)
 	}
+	// Transient swanctl failure leaves .reload-pending so next retry reloads even without new file changes.
+	failReload := true
+	r.Run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		command := filepath.Base(name) + " " + strings.Join(args, " ")
+		ran = append(ran, command)
+		if command == "systemctl is-active --quiet strongswan.service" && !running {
+			return nil, errors.New("inactive")
+		}
+		if strings.HasPrefix(command, "swanctl --load-all") && failReload {
+			return nil, errors.New("vici timeout")
+		}
+		return nil, nil
+	}
+	retryFiles := maps.Clone(files)
+	retryFiles["x509ca/"+ipsCrt+"-chain-0.pem"] = "CHAIN1\n"
+	retryFiles["x509ca/ca_00000001-0000-4000-8000-000000000001.pem"] = "CA2\n"
+	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: retryFiles}); err == nil {
+		t.Fatal("expected transient swanctl error")
+	}
+	if _, err := os.Stat(root + ipsecReloadPending); err != nil {
+		t.Fatalf("reload-pending marker missing: %v", err)
+	}
+	failReload = false
+	ran = nil
+	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: retryFiles}); err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+	if !slices.Contains(ran, "swanctl --load-all --clear --file "+ipsecConf+" --noprompt") {
+		t.Fatalf("retry did not reload swanctl: %q", ran)
+	}
+	if _, err := os.Stat(root + ipsecReloadPending); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reload-pending marker not cleared: %v", err)
+	}
+	// Removing chain-0 on renewal deletes stale chain file from disk.
+	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: files}); err != nil {
+		t.Fatalf("chain shrink: %v", err)
+	}
+	if _, err := os.Stat(root + ipsecDir + "/x509ca/" + ipsCrt + "-chain-0.pem"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale chain file not removed: %v", err)
+	}
 	running = false
+	ran = nil
 	changed := maps.Clone(files)
 	changed["private/"+ipsCrt+".key"] = "KEY3\n"
 	if err := r.SyncCertificates(t.Context(), CertSync{IPsec: changed}); err != nil || slices.ContainsFunc(ran, func(c string) bool { return strings.HasPrefix(c, "swanctl") }) {
 		t.Fatalf("stopped: %q %v", ran, err)
 	}
-	for _, bad := range []string{"swanctl.conf", "x509ca/ca_00000001-0000-4000-8000-000000000001.pem", "../x509/" + ipsCrt + ".pem", "private/x.key"} {
+	for _, bad := range []string{"swanctl.conf", "../x509/" + ipsCrt + ".pem", "private/x.key"} {
 		if err := (CertSync{IPsec: map[string]string{bad: "X"}}).Validate(); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestParseViciHostileAndEmpty(t *testing.T) {
+	// Empty value ("remote-id =") and hostile remote peer DN containing " {" or " = [" must not break parsing.
+	raw := "list-sa event {\n" +
+		"  " + ipsA + " {\n" +
+		"    uniqueid = 7\n" +
+		"    state = ESTABLISHED\n" +
+		"    local-host = 203.0.113.1\n" +
+		"    remote-host = 198.51.100.2\n" +
+		"    remote-id = CN=evil { fake = [\n" +
+		"    empty-field = \n" +
+		"    established = 12\n" +
+		"    child-sas {\n" +
+		"      " + ipsA + "-1 {\n" +
+		"        name = " + ipsA + "\n" +
+		"        state = INSTALLED\n" +
+		"        bytes-in = 10\n" +
+		"        bytes-out = 20\n" +
+		"        rekey-time = 300\n" +
+		"        local-ts = [\n" +
+		"          0.0.0.0/0\n" +
+		"        ]\n" +
+		"        remote-ts = [\n" +
+		"          10.0.0.0/8\n" +
+		"        ]\n" +
+		"      }\n" +
+		"    }\n" +
+		"  }\n" +
+		"}\n"
+	sas, err := ParseSwanctlSAs([]byte(raw))
+	if err != nil || len(sas) != 1 || sas[0].UniqueID != "7" || len(sas[0].ChildSAs) != 1 || sas[0].ChildSAs[0].BytesOut != 20 {
+		t.Fatalf("hostile/empty vici: sas=%+v err=%v", sas, err)
+	}
+}
+
+func TestIPsecChangedConnectionTerminatesAndReinitiates(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	conf1 := "connections {\n\t" + ipsA + " {\n\t\tif_id_in = 42\n\t\tchildren {\n\t\t\t" + ipsA + " {\n\t\t\t\tstart_action = start\n\t\t\t}\n\t\t}\n\t}\n}\n"
+	conf2 := "connections {\n\t" + ipsA + " {\n\t\tif_id_in = 43\n\t\tchildren {\n\t\t\t" + ipsA + " {\n\t\t\t\tstart_action = start\n\t\t\t}\n\t\t}\n\t}\n}\n"
+	id1 := b.gen(withIPsec(conf1))
+	if err := b.r.Activate(t.Context(), id1); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id1); err != nil {
+		t.Fatal(err)
+	}
+	b.net.sas = sasOf(ipsA)
+	b.net.argv = nil
+	id2 := b.gen(withIPsec(conf2))
+	if err := b.r.Activate(t.Context(), id2); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("swanctl --terminate --ike "+ipsA+" --timeout 5") != 1 {
+		t.Fatalf("changed connection SA not terminated: %q", b.net.argv)
+	}
+	if b.net.ran("swanctl --initiate --child "+ipsA+" --timeout 5") != 1 {
+		t.Fatalf("changed start_action=start connection not re-initiated: %q", b.net.argv)
+	}
+}
+
+func TestIPsecTeardownWithoutLivePointer(t *testing.T) {
+	b := newBench(t)
+	b.net.strongswan = true
+	writeFile(t, b.net.root+ipsecConf, "connections {\n}\n")
+	writeFile(t, b.net.root+ipsKey, "KEY\n")
+	if err := b.r.Teardown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.strongswan || b.exists(ipsecConf[1:]) || b.exists(ipsKey[1:]) {
+		t.Fatalf("teardown without live pointer left strongSwan/files: active=%v argv=%q", b.net.strongswan, b.net.argv)
 	}
 }
 

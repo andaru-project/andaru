@@ -1,6 +1,7 @@
 package render
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -82,8 +83,14 @@ func TestIPsecFindings(t *testing.T) {
 	}
 }
 
-// Policy-based connections get reqids 100 and up in order, which swanctl.conf and the filter share.
+// Policy-based connections get deterministic non-shifting reqids shared by swanctl.conf and the packet filter, and
+// interface-based zone rules exclude policy-based IPsec packets via meta mark isolation.
 func TestIPsecReqids(t *testing.T) {
+	const id1 = "ips_00000002-0000-4000-8000-000000000002"
+	const id2 = "ips_00000005-0000-4000-8000-000000000005"
+	req1 := ipsecReqid(id1, map[int]bool{})
+	req2 := ipsecReqid(id2, map[int]bool{})
+
 	r := render(t, change(t, fixture(t, "ipsec"), func(d map[string]any) {
 		vpn := d["vpn"].(map[string]any)
 		list := vpn["ipsec"].([]any)
@@ -91,12 +98,57 @@ func TestIPsecReqids(t *testing.T) {
 		for k, v := range list[1].(map[string]any) {
 			second[k] = v
 		}
-		second["id"], second["name"], second["remoteSubnets"] = "ips_00000005-0000-4000-8000-000000000005", "branch-2", []any{"10.31.0.0/16"}
+		second["id"], second["name"], second["remoteSubnets"] = id2, "branch-2", []any{"10.31.0.0/16"}
 		vpn["ipsec"] = append(list, second)
 	}))
 	conf := fileEnding(t, r, "/run/andaru-ipsec/swanctl.conf").Content
 	script := fileEnding(t, r, nftPath).Content
-	if !strings.Contains(conf, "reqid = 100") || !strings.Contains(conf, "reqid = 101") || !strings.Contains(script, "ipsec out reqid 101") {
-		t.Fatalf("reqids:\n%s\n%s", conf, script)
+	want1 := "reqid = " + strconv.Itoa(req1)
+	want2 := "reqid = " + strconv.Itoa(req2)
+	if !strings.Contains(conf, want1) || !strings.Contains(conf, want2) ||
+		!strings.Contains(script, "ipsec out reqid "+strconv.Itoa(req2)) ||
+		!strings.Contains(script, "meta mark set meta mark | "+ipsecPolicyInMark) ||
+		!strings.Contains(script, "meta mark set meta mark | "+ipsecPolicyOutMark) ||
+		!strings.Contains(script, "meta mark & "+ipsecPolicyOutMark+" == 0 oifname @") {
+		t.Fatalf("reqids / zone isolation:\n%s\n%s", conf, script)
+	}
+	// Removing connection 1 must NOT shift connection 2's reqid.
+	onlySecond := render(t, change(t, fixture(t, "ipsec"), func(d map[string]any) {
+		vpn := d["vpn"].(map[string]any)
+		list := vpn["ipsec"].([]any)
+		second := map[string]any{}
+		for k, v := range list[1].(map[string]any) {
+			second[k] = v
+		}
+		second["id"], second["name"], second["remoteSubnets"] = id2, "branch-2", []any{"10.31.0.0/16"}
+		vpn["ipsec"] = []any{second}
+		d["routes"] = []any{}
+	}))
+	if !strings.Contains(fileEnding(t, onlySecond, "/run/andaru-ipsec/swanctl.conf").Content, want2) {
+		t.Fatalf("reqid shifted when earlier connection was removed")
+	}
+}
+
+// Intermediate chain certificates are written as individual PEM files under x509ca/ because strongSwan reads only the
+// first PEM block per file in x509/.
+func TestIPsecCertificateChainSplit(t *testing.T) {
+	const leaf = "-----BEGIN CERTIFICATE-----\nTEVBRg==\n-----END CERTIFICATE-----\n"
+	const inter1 = "-----BEGIN CERTIFICATE-----\nSU5URVIx\n-----END CERTIFICATE-----\n"
+	const inter2 = "-----BEGIN CERTIFICATE-----\nSU5URVIy\n-----END CERTIFICATE-----\n"
+	r := render(t, change(t, fixture(t, "ipsec"), func(d map[string]any) {
+		pki := d["pki"].(map[string]any)
+		crt := pki["certificates"].([]any)[0].(map[string]any)
+		crt["certPem"] = leaf
+		crt["chainPem"] = inter1 + inter2
+	}))
+	const cid = "crt_00000001-0000-4000-8000-000000000001"
+	if got := fileEnding(t, r, "/run/andaru-ipsec/x509/"+cid+".pem").Content; got != leaf {
+		t.Fatalf("leaf x509 file contains chain: %q", got)
+	}
+	if got := fileEnding(t, r, "/run/andaru-ipsec/x509ca/"+cid+"-chain-0.pem").Content; got != inter1 {
+		t.Fatalf("chain-0: %q", got)
+	}
+	if got := fileEnding(t, r, "/run/andaru-ipsec/x509ca/"+cid+"-chain-1.pem").Content; got != inter2 {
+		t.Fatalf("chain-1: %q", got)
 	}
 }

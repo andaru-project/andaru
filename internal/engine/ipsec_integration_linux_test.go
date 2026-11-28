@@ -211,6 +211,24 @@ func TestIPsecRoutes(t *testing.T) {
 			t.Fatalf("%s violates %s: %v", path, view, err)
 		}
 	}
+	// Validate live GET /api/v1/status/vpn/ipsec response against OpenAPI's 200 schema.
+	var openapiDoc map[string]any
+	if err = json.Unmarshal(openAPIDocument, &openapiDoc); err != nil {
+		t.Fatal(err)
+	}
+	statusSchema := openapiDoc["paths"].(map[string]any)["/api/v1/status/vpn/ipsec"].(map[string]any)["get"].(map[string]any)["responses"].(map[string]any)["200"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"]
+	oc := jsonschema.NewCompiler()
+	if err = oc.AddResource("https://andaru.invalid/status.json", statusSchema); err != nil {
+		t.Fatal(err)
+	}
+	statusSch, err := oc.Compile("https://andaru.invalid/status.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusServed, _ := jsonschema.UnmarshalJSON(bytes.NewReader(status.Body.Bytes()))
+	if err = statusSch.Validate(statusServed); err != nil {
+		t.Fatalf("/api/v1/status/vpn/ipsec violates OpenAPI schema: %v", err)
+	}
 	api.status = func(context.Context, string) error { return io.ErrUnexpectedEOF }
 	if w := call("GET", "/api/v1/status/vpn/ipsec", "", ""); w.Code != 503 {
 		t.Fatalf("status without realize %d %s", w.Code, w.Body)

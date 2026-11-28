@@ -338,6 +338,7 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 		}
 		var pkiFinishes []func(audit.Result)
 		var replacedCertIDs []string
+		var replacedCA bool
 		if pkiHandler != nil {
 			for i := range changes.Operations {
 				op := &changes.Operations[i]
@@ -371,6 +372,8 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 					action = audit.ActionCertificateRenewed
 					if op.Collection == "pki.certificates" && target != "" {
 						replacedCertIDs = append(replacedCertIDs, target)
+					} else if op.Collection == "pki.cas" && target != "" {
+						replacedCA = true
 					}
 				case "delete":
 					action = audit.ActionCertificateDeleted
@@ -400,7 +403,7 @@ func newConfigurationHandlerWithPKI(store *config.Store, pkiHandler *pkiAPI) htt
 		for _, fin := range pkiFinishes {
 			fin(audit.ResultSuccess)
 		}
-		if pkiHandler != nil && len(replacedCertIDs) > 0 {
+		if pkiHandler != nil && (len(replacedCertIDs) > 0 || replacedCA) {
 			var pending []pendingRenewal
 			for _, certID := range replacedCertIDs {
 				if obj, err := store.PKIObject(r.Context(), "pki.certificates", certID); err == nil {

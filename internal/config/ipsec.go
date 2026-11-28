@@ -95,17 +95,10 @@ func prepareIPsec(value map[string]any, old any) (string, error) {
 		return "", nil
 	}
 	empty := func(v any) bool { m, ok := v.(map[string]any); return ok && len(m) == 0 }
-	asMap := func(ref *secretReference) map[string]any {
-		m := map[string]any{"secret": ref.Secret}
-		if ref.Unresolved {
-			m["unresolved"] = true
-		}
-		return m
-	}
 	if empty(auth["pskRef"]) {
 		delete(auth, "pskRef")
 		if before != nil && before.Auth.PSKRef != nil {
-			auth["pskRef"] = asMap(before.Auth.PSKRef)
+			auth["pskRef"] = secretRefMap(before.Auth.PSKRef)
 		} else {
 			return "/auth/pskRef", errors.New("No pre-shared key is stored to keep; set one.")
 		}
@@ -124,7 +117,7 @@ func prepareIPsec(value map[string]any, old any) (string, error) {
 		if j < 0 {
 			return fmt.Sprintf("/auth/eapUsers/%d/passwordRef", i), errors.New("No password is stored for this user to keep; set one.")
 		}
-		user["passwordRef"] = asMap(&before.Auth.EAPUsers[j].PasswordRef)
+		user["passwordRef"] = secretRefMap(&before.Auth.EAPUsers[j].PasswordRef)
 	}
 	return "", nil
 }
@@ -136,8 +129,34 @@ func swanText(s string, limit int) bool {
 		return false
 	}
 	return !strings.ContainsFunc(s, func(r rune) bool {
-		return r <= ' ' || r == 0x7f || unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || strings.ContainsRune(`{}"'#\`, r)
+		return unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || strings.ContainsRune(`{}"'#\`, r)
 	})
+}
+
+// validIPsecProposal rejects malformed hyphenated proposals and weak or deprecated algorithms
+// (DES, 3DES, Blowfish, CAST, NULL, MD5, SHA1, MODP768/1024/1536, ECP192, NONE).
+func validIPsecProposal(proposal string) bool {
+	if proposal == "" {
+		return false
+	}
+	tokens := strings.Split(proposal, "-")
+	for _, tok := range tokens {
+		if tok == "" {
+			return false
+		}
+		switch tok {
+		case "des", "3des", "null", "none", "modpnone",
+			"md5", "prfmd5", "sha1", "prfsha1",
+			"modp768", "modp1024", "modp1536", "modp1024s160", "modp2048s224", "modp2048s256", "ecp192":
+			return false
+		}
+		for _, prefix := range []string{"des", "3des", "blowfish", "cast", "null", "md5", "prfmd5", "sha1", "prfsha1"} {
+			if strings.HasPrefix(tok, prefix) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateIPsec(d *declaration) []FieldError {
@@ -161,6 +180,8 @@ func validateIPsec(d *declaration) []FieldError {
 	}
 	certs := certificateIndex(d)
 	seen := map[string]bool{}
+	seenEAP := map[string]bool{}
+	pskPairs := map[string]string{}
 	for i := range d.VPN.IPsec {
 		c := &d.VPN.IPsec[i]
 		p := fmt.Sprintf("/vpn/ipsec/%d", i)
@@ -221,14 +242,24 @@ func validateIPsec(d *declaration) []FieldError {
 				if a.Zone() != "" || a.Is4In6() || !validUnicast(a) {
 					bad(p+"/remoteAddress", "Expected a unicast IPv4 or IPv6 address.")
 				}
-			} else if !validEndpointHost(c.RemoteAddress) || strings.Contains(c.RemoteAddress, ":") {
+			} else if !validEndpointHost(c.RemoteAddress) {
 				bad(p+"/remoteAddress", "Expected an IPv4 or IPv6 address or a DNS name.")
+			}
+		}
+		for j, prop := range c.Proposals {
+			if !validIPsecProposal(prop) {
+				bad(fmt.Sprintf("%s/proposals/%d", p, j), "Weak, deprecated, or malformed IKE proposal.")
+			}
+		}
+		for j, prop := range c.ESPProposals {
+			if !validIPsecProposal(prop) {
+				bad(fmt.Sprintf("%s/espProposals/%d", p, j), "Weak, deprecated, or malformed ESP proposal.")
 			}
 		}
 		if c.Mode == "road-warrior" && c.StartAction != "" && c.StartAction != "none" {
 			bad(p+"/startAction", "A road-warrior connection waits for its clients: its start action is none.")
 		}
-		prefixes := func(field string, list []string, host bool) {
+		prefixes := func(field string, list []string, host, pool bool) {
 			masked := map[netip.Prefix]bool{}
 			for j, s := range list {
 				x, err := netip.ParsePrefix(s)
@@ -239,6 +270,9 @@ func validateIPsec(d *declaration) []FieldError {
 					continue
 				case host && !validUnicast(x.Addr()):
 					bad(fp, "Expected a unicast IPv4 or IPv6 address with its prefix length.")
+					continue
+				case pool && (x.Bits() == 0 || x.Addr().IsLoopback() || x.Addr().IsMulticast() || x.Addr().IsLinkLocalUnicast() || x.Addr().IsLinkLocalMulticast()):
+					bad(fp, "Virtual pool must be a routable non-default unicast prefix.")
 					continue
 				}
 				key := x.Masked()
@@ -252,10 +286,10 @@ func validateIPsec(d *declaration) []FieldError {
 				masked[key] = true
 			}
 		}
-		prefixes("tunnelAddresses", c.TunnelAddresses, true)
-		prefixes("localSubnets", c.LocalSubnets, false)
-		prefixes("remoteSubnets", c.RemoteSubnets, false)
-		prefixes("virtualPool", c.VirtualPool, false)
+		prefixes("tunnelAddresses", c.TunnelAddresses, true, false)
+		prefixes("localSubnets", c.LocalSubnets, false, false)
+		prefixes("remoteSubnets", c.RemoteSubnets, false, false)
+		prefixes("virtualPool", c.VirtualPool, false, true)
 		switch c.Mode {
 		case "policy-based":
 			if len(c.LocalSubnets) == 0 {
@@ -288,6 +322,16 @@ func validateIPsec(d *declaration) []FieldError {
 			bad(ap+"/pskRef", "Pre-shared key authentication needs a pre-shared key.")
 		} else if !psk && a.PSKRef != nil {
 			bad(ap+"/pskRef", "A pre-shared key is used only with psk authentication.")
+		} else if psk && a.LocalID != "" && a.PSKRef != nil {
+			pairKey := a.LocalID + "\x00" + a.RemoteID
+			if prev, exists := pskPairs[pairKey]; exists && prev != a.PSKRef.Secret {
+				field := "/remoteId"
+				if a.RemoteID == "" {
+					field = "/localId"
+				}
+				bad(ap+field, "Another PSK connection already uses this identity pair with a different secret.")
+			}
+			pskPairs[pairKey] = a.PSKRef.Secret
 		}
 		if a.LocalType == "cert" {
 			if a.LocalCertID == "" {
@@ -314,15 +358,14 @@ func validateIPsec(d *declaration) []FieldError {
 		} else if len(a.EAPUsers) > 0 {
 			bad(ap+"/eapUsers", "EAP users are used only with eap-mschapv2 authentication.")
 		}
-		users := map[string]bool{}
 		for j, u := range a.EAPUsers {
 			up := fmt.Sprintf("%s/eapUsers/%d/username", ap, j)
 			if !swanText(u.Username, 64) {
 				bad(up, "Expected a user name without spaces, quotes, braces, # or backslashes.")
-			} else if users[u.Username] {
-				bad(up, "Another user of this connection has this name.")
+			} else if seenEAP[u.Username] {
+				bad(up, "Another EAP user already has this username.")
 			}
-			users[u.Username] = true
+			seenEAP[u.Username] = true
 		}
 	}
 	return out
@@ -372,13 +415,16 @@ func canonicalizeIPsec(c *ipsecConnection) {
 	}
 }
 
-// checkIPsecSecrets refuses an empty pre-shared key or EAP password on a connection written in this batch.
+// checkIPsecSecrets refuses an empty pre-shared key or EAP password on a connection written in this batch
+// (or on every connection when written is nil, as during a backup restore).
 func checkIPsecSecrets(d *declaration, secrets secretDocument, written map[objectKey][]byte) []FieldError {
 	var out []FieldError
 	for i := range d.VPN.IPsec {
 		c := &d.VPN.IPsec[i]
-		if _, ok := written[objectKey{"vpn.ipsec", c.ID}]; !ok {
-			continue
+		if written != nil {
+			if _, ok := written[objectKey{"vpn.ipsec", c.ID}]; !ok {
+				continue
+			}
 		}
 		for _, s := range c.secrets() {
 			if !s.ref.Unresolved && secrets.Scopes["core"][s.ref.Secret].Value == "" {
@@ -412,8 +458,7 @@ func unresolvedIPsec(d *declaration) []FieldError {
 }
 
 // realizedIPsecSecrets are the pre-shared keys and EAP passwords, and the certificate keys, enabled connections render.
-func realizedIPsecSecrets(d *declaration, secrets secretDocument, into map[string]string, keys *map[string]string) {
-	certs := certificateIndex(d)
+func realizedIPsecSecrets(d *declaration, secrets secretDocument, certs map[string]*pkiCertificate, into map[string]string, addCertKey func(id, key string)) {
 	for i := range d.VPN.IPsec {
 		c := &d.VPN.IPsec[i]
 		if !c.Enabled {
@@ -425,10 +470,7 @@ func realizedIPsecSecrets(d *declaration, secrets secretDocument, into map[strin
 			}
 		}
 		if x := certs[c.Auth.LocalCertID]; x != nil && !x.KeyRef.Unresolved {
-			if *keys == nil {
-				*keys = map[string]string{}
-			}
-			(*keys)[x.ID] = secrets.Scopes["core"][x.KeyRef.Secret].Value
+			addCertKey(x.ID, secrets.Scopes["core"][x.KeyRef.Secret].Value)
 		}
 	}
 }
@@ -448,13 +490,4 @@ func (s *Store) IPsecConnections(ctx context.Context) (result []IPsecConnection,
 		return nil
 	})
 	return
-}
-
-// allIPsec names every connection as written, so a restore checks all their secrets.
-func allIPsec(d *declaration) map[objectKey][]byte {
-	out := map[objectKey][]byte{}
-	for _, c := range d.VPN.IPsec {
-		out[objectKey{"vpn.ipsec", c.ID}] = nil
-	}
-	return out
 }

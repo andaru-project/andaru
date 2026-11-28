@@ -269,7 +269,7 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 			if err := json.Unmarshal(raw, &vpn); err != nil {
 				return RestoreDocuments{}, err
 			}
-			reference := func(parent map[string]any, field string) {
+			reference := func(parent map[string]any, field, kind string) {
 				view, ok := parent[field].(map[string]any)
 				if !ok {
 					return
@@ -279,17 +279,15 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 				if _, held := doc.Secrets[name]; !held {
 					ref["unresolved"] = true
 				}
-				if kinds[name] == "" {
-					kinds[name] = "wireguard"
-				}
+				kinds[name] = kind
 				parent[field] = ref
 			}
 			for _, w := range vpn.WireGuard {
-				reference(w, "privateKeyRef")
+				reference(w, "privateKeyRef", "wireguard")
 				peers, _ := w["peers"].([]any)
 				for _, p := range peers {
 					if peer, ok := p.(map[string]any); ok {
-						reference(peer, "presharedKeyRef")
+						reference(peer, "presharedKeyRef", "wireguard")
 					}
 				}
 			}
@@ -308,20 +306,12 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 				if auth == nil {
 					continue
 				}
-				refs := []map[string]any{auth}
+				reference(auth, "pskRef", "ipsec")
 				users, _ := auth["eapUsers"].([]any)
 				for _, u := range users {
 					if user, ok := u.(map[string]any); ok {
-						refs = append(refs, user)
+						reference(user, "passwordRef", "ipsec")
 					}
-				}
-				for i, parent := range refs {
-					field := map[bool]string{true: "pskRef", false: "passwordRef"}[i == 0]
-					if view, ok := parent[field].(map[string]any); ok {
-						name, _ := view["secret"].(string)
-						kinds[name] = "ipsec"
-					}
-					reference(parent, field)
 				}
 			}
 			if d["vpn"], err = json.Marshal(vpn); err != nil {

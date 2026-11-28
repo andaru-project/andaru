@@ -325,7 +325,7 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		return empty, preview, boundaryFault(err)
 	}
 	if decoded.secrets != nil && !decoded.ownSecrets {
-		if errs := slices.Concat(checkAllPKIKeys(&candidate, secrets), checkAllWireGuardKeys(&candidate, secrets), checkIPsecSecrets(&candidate, secrets, allIPsec(&candidate))); len(errs) > 0 {
+		if errs := slices.Concat(checkAllPKIKeys(&candidate, secrets), checkAllWireGuardKeys(&candidate, secrets), checkIPsecSecrets(&candidate, secrets, nil)); len(errs) > 0 {
 			return empty, preview, &Fault{Code: "VALIDATION_FAILED", Details: errs}
 		}
 	}

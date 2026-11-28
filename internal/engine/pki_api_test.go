@@ -142,7 +142,12 @@ func TestCertSyncStagesIPsecCertificates(t *testing.T) {
 	stateDir, runtimeDir := t.TempDir(), t.TempDir()
 	dir := generation.Dir(stateDir)
 	const crt = "crt_00000001-0000-4000-8000-000000000001"
+	const ca = "ca_00000001-0000-4000-8000-000000000001"
+	const leafPEM = "-----BEGIN CERTIFICATE-----\nTEVBRg==\n-----END CERTIFICATE-----\n"
+	const chainPEM = "-----BEGIN CERTIFICATE-----\nQ0hBSU4=\n-----END CERTIFICATE-----\n"
+	const caPEM = "-----BEGIN CERTIFICATE-----\nQ0E=\n-----END CERTIFICATE-----\n"
 	pem := "/run/andaru-ipsec/x509/" + crt + ".pem"
+	caPath := "/run/andaru-ipsec/x509ca/" + ca + ".pem"
 	live := func(files map[string][]byte) {
 		var entries []generation.FileEntry
 		for path := range files {
@@ -158,7 +163,13 @@ func TestCertSyncStagesIPsecCertificates(t *testing.T) {
 		}
 	}
 	bindings := func(context.Context, config.Version) ([]config.CertificateConsumer, map[string]config.CertificateMaterial, error) {
-		return []config.CertificateConsumer{{Kind: "ipsec", CertificateID: crt}}, map[string]config.CertificateMaterial{crt: {CertPEM: "CERT\n", ChainPEM: "CHAIN\n", Key: "KEY"}}, nil
+		return []config.CertificateConsumer{
+				{Kind: "ipsec", CertificateID: crt},
+				{Kind: "ipsec-ca", CertificateID: ca},
+			}, map[string]config.CertificateMaterial{
+				crt: {CertPEM: leafPEM, ChainPEM: chainPEM, Key: "KEY"},
+				ca:  {CertPEM: caPEM},
+			}, nil
 	}
 	var got generation.CertSync
 	c := newCertSync(stateDir, runtimeDir, nil, bindings, func(_ context.Context, file string) error {
@@ -170,11 +181,15 @@ func TestCertSyncStagesIPsecCertificates(t *testing.T) {
 	if err := c.sync(context.Background()); err != nil || got.IPsec != nil {
 		t.Fatalf("staged for a generation without it: %+v %v", got, err)
 	}
-	live(map[string][]byte{pem: []byte("OLD\n")})
+	live(map[string][]byte{pem: []byte("OLD\n"), caPath: []byte("OLDCA\n")})
 	if err := c.sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got.IPsec["x509/"+crt+".pem"] != "CERT\nCHAIN\n" || got.IPsec["private/"+crt+".key"] != "KEY\n" || got.Validate() != nil {
+	if got.IPsec["x509/"+crt+".pem"] != leafPEM ||
+		got.IPsec["x509ca/"+crt+"-chain-0.pem"] != chainPEM ||
+		got.IPsec["x509ca/"+ca+".pem"] != caPEM ||
+		got.IPsec["private/"+crt+".key"] != "KEY\n" ||
+		got.Validate() != nil {
 		t.Fatalf("staged %+v", got.IPsec)
 	}
 }

@@ -405,4 +405,93 @@ describe('IPsecScreen', () => {
     expect(screen.getByText('ESTABLISHED')).toBeInTheDocument();
     expect(screen.getByText(/RX 2\.0 KiB \/ TX 4\.0 KiB/)).toBeInTheDocument();
   });
+
+  it('creates a policy-based connection preserving PSK whitespace and flags unresolved certificate private keys', async () => {
+    const user = userEvent.setup();
+    let createdBody: unknown;
+    const unresolvedCert = {
+      ...sampleCert,
+      value: {
+        ...sampleCert.value,
+        keyRef: { secret: 'pki_cert_gw', isSet: false, version: '1', unresolved: true },
+      },
+    };
+    const certConn = {
+      version: '1',
+      value: {
+        id: 'ips_cert',
+        name: 'Cert Tunnel',
+        enabled: true,
+        mode: 'policy-based',
+        zone: 'zon_vpn',
+        localSegment: 'seg_wan',
+        localAddress: '203.0.113.5',
+        remoteAddress: '198.51.100.55',
+        localSubnets: ['10.0.0.0/24'],
+        remoteSubnets: ['10.20.0.0/24'],
+        ikeVersion: 2,
+        auth: {
+          localType: 'cert',
+          remoteType: 'cert',
+          localId: 'gw.example.com',
+          localCertId: 'crt_gw',
+          caId: 'ca_corp',
+        },
+      },
+    };
+
+    fetchRoutes({
+      '/api/v1/config/vpn/ipsec': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [certConn] }),
+      '/api/v1/config/zones': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleZone] }),
+      '/api/v1/config/segments': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleSegment] }),
+      '/api/v1/config/pki/cas': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [sampleCA] }),
+      '/api/v1/config/pki/certificates': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [unresolvedCert] }),
+      '/api/v1/status/vpn/ipsec': () => jsonResponse(200, { serviceActive: true, items: [] }),
+      'POST /api/v1/config/vpn/ipsec': (init) => {
+        createdBody = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(201, {
+          state: 'saved',
+          savedVersion: '6',
+          version: '1',
+          value: { id: 'ips_pol', ...(createdBody as Record<string, unknown>) },
+        });
+      },
+    });
+
+    render(
+      <IPsecScreen
+        api={new ApiClient('csrf')}
+        session={adminSession}
+        onSaved={vi.fn()}
+        onSessionLost={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('Cert Tunnel')).toBeInTheDocument();
+    expect(screen.getByText('Unresolved secret')).toBeInTheDocument();
+    expect(screen.getByText('WAN (203.0.113.5)')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Add connection' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add IPsec connection' });
+    fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: 'Branch Policy' } });
+    await user.click(within(dialog).getByLabelText(/^Connection mode/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'Policy-based tunnel' }));
+    fireEvent.change(within(dialog).getByLabelText(/^Remote peer address/), { target: { value: '198.51.100.33' } });
+    fireEvent.change(within(dialog).getByLabelText(/^Local subnets/), { target: { value: '10.1.0.0/24' } });
+    fireEvent.change(within(dialog).getByLabelText(/^Remote subnets/), { target: { value: '10.2.0.0/24' } });
+    fireEvent.change(within(dialog).getByLabelText(/^Local IKE identity/), { target: { value: 'gw.example.com' } });
+    fireEvent.change(within(dialog).getByLabelText(/^Pre-shared key/), { target: { value: ' padded-psk ' } });
+    await user.click(within(dialog).getByRole('button', { name: 'Add connection' }));
+
+    await waitFor(() => expect(createdBody).toMatchObject({
+      name: 'Branch Policy',
+      mode: 'policy-based',
+      remoteAddress: '198.51.100.33',
+      localSubnets: ['10.1.0.0/24'],
+      remoteSubnets: ['10.2.0.0/24'],
+      auth: {
+        pskRef: { set: ' padded-psk ', expectedVersion: '0' },
+      },
+    }));
+  });
 });

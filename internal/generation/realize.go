@@ -231,7 +231,13 @@ func (r Realizer) live(p Pointers) ([]placed, error) {
 	out := make([]placed, 0, len(g.Files))
 	for _, f := range g.Files {
 		if allowed(f.Path) && f.Path != filterEntry {
-			out = append(out, placed{path: f.Path, sha256: f.SHA256})
+			p := placed{path: f.Path, sha256: f.SHA256}
+			if f.Path == ipsecConf {
+				if data, err := g.content(r.dir(), f); err == nil {
+					p.data = data
+				}
+			}
+			out = append(out, p)
 		}
 	}
 	return out, nil
@@ -266,6 +272,11 @@ func (r Realizer) place(from, to []placed) error {
 		dirMode := fs.FileMode(0o755)
 		if strings.HasPrefix(f.path, addonRuntimeDir) {
 			if err := os.MkdirAll(r.Root+strings.TrimSuffix(addonRuntimeDir, "/"), 0o700); err != nil {
+				return err
+			}
+			dirMode = 0o700
+		} else if strings.HasPrefix(f.path, ipsecDir+"/") {
+			if err := os.MkdirAll(r.Root+ipsecDir, 0o700); err != nil {
 				return err
 			}
 			dirMode = 0o700

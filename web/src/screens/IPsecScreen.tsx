@@ -20,7 +20,7 @@ import {
 } from '@mantine/core';
 import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
-import { bytes, duration } from '../format';
+import { bytes, duration, plural } from '../format';
 import type {
   IPsecConnection,
   IPsecConnectionWrite,
@@ -122,10 +122,10 @@ function buildSecretWrite(
   existing: SecretView | undefined,
   prefix: string,
 ): SecretWrite | Record<string, never> {
-  if (typed.trim() !== '') {
+  if (typed !== '') {
     return {
       secret: existing?.secret || newSecretName(prefix),
-      set: typed.trim(),
+      set: typed,
       expectedVersion: existing?.version || '0',
     };
   }
@@ -140,8 +140,9 @@ function saStateColor(state: string): string {
   return 'gray';
 }
 
-function hasUnresolvedSecrets(conn: IPsecConnection): boolean {
+function hasUnresolvedSecrets(conn: IPsecConnection, certsById: Map<string, PKICertificate>): boolean {
   if (conn.auth.pskRef?.unresolved) return true;
+  if (conn.auth.localCertId && certsById.get(conn.auth.localCertId)?.keyRef?.unresolved) return true;
   return (conn.auth.eapUsers ?? []).some((u) => u.passwordRef?.unresolved);
 }
 
@@ -417,7 +418,7 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
             const zonesById = new Map(zones.map((z) => [z.id, z.name]));
             const segmentsById = new Map(segments.map((s) => [s.id, s.name]));
             const casById = new Map(cas.map((c) => [c.id, c.name]));
-            const certsById = new Map(certificates.map((c) => [c.id, c.name]));
+            const certsById = new Map(certificates.map((c) => [c.id, c]));
             const sorted = [...connections].sort((a, b) =>
               a.value.name.localeCompare(b.value.name, undefined, { sensitivity: 'base' })
               || a.value.id.localeCompare(b.value.id));
@@ -440,16 +441,20 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
                   const ikeSAs = live?.ikeSAs ?? [];
                   const establishedCount = ikeSAs.filter((sa) => sa.state.toUpperCase() === 'ESTABLISHED').length;
                   const applied = live !== undefined && live.applied !== false;
-                  const unresolved = hasUnresolvedSecrets(conn);
-                  const canControlConn = canControl && conn.enabled && serviceActive && applied;
+                  const unresolved = hasUnresolvedSecrets(conn, certsById);
+                  const canControlConn = canControl && conn.enabled && (!canReadStatus || (serviceActive && applied));
                   const localAuthDesc = conn.auth.localType === 'cert'
-                    ? `Cert (${conn.auth.localCertId ? (certsById.get(conn.auth.localCertId) ?? conn.auth.localCertId) : 'unset'})`
+                    ? `Cert (${conn.auth.localCertId ? (certsById.get(conn.auth.localCertId)?.name ?? conn.auth.localCertId) : 'unset'})`
                     : 'PSK';
                   const remoteAuthDesc = conn.auth.remoteType === 'cert'
                     ? `Cert (CA: ${conn.auth.caId ? (casById.get(conn.auth.caId) ?? conn.auth.caId) : 'unset'})`
                     : conn.auth.remoteType === 'eap-mschapv2'
-                      ? `EAP-MSCHAPv2 (${(conn.auth.eapUsers ?? []).length} ${(conn.auth.eapUsers ?? []).length === 1 ? 'user' : 'users'})`
+                      ? `EAP-MSCHAPv2 (${plural((conn.auth.eapUsers ?? []).length, 'user')})`
                       : 'PSK';
+                  const localSegName = conn.localSegment ? (segmentsById.get(conn.localSegment) ?? conn.localSegment) : '';
+                  const localEndpoint = localSegName && conn.localAddress
+                    ? `${localSegName} (${conn.localAddress})`
+                    : localSegName || conn.localAddress || 'Any';
 
                   return (
                     <Card key={conn.id} withBorder padding="md">
@@ -480,7 +485,7 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
                                   <Badge size="xs" color="yellow" variant="light">Not applied</Badge>
                                 ) : establishedCount > 0 ? (
                                   <Badge size="xs" color="green" variant="light">
-                                    {establishedCount} {establishedCount === 1 ? 'SA established' : 'SAs established'}
+                                    {plural(establishedCount, 'SA')} established
                                   </Badge>
                                 ) : (
                                   <Badge size="xs" color="gray" variant="light">Idle</Badge>
@@ -555,9 +560,7 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
                             Zone: <Text span c="var(--mantine-color-text)">{conn.zone ? (zonesById.get(conn.zone) ?? conn.zone) : 'None'}</Text>
                           </Text>
                           <Text size="xs" c="dimmed">
-                            Local: <Text span ff="monospace" c="var(--mantine-color-text)">
-                              {conn.localSegment ? (segmentsById.get(conn.localSegment) ?? conn.localSegment) : (conn.localAddress || 'Any')}
-                            </Text>
+                            Local: <Text span ff="monospace" c="var(--mantine-color-text)">{localEndpoint}</Text>
                           </Text>
                           <Text size="xs" c="dimmed">
                             Remote: <Text span ff="monospace" c="var(--mantine-color-text)">{conn.remoteAddress || '%any'}</Text>
@@ -576,15 +579,15 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
                           </Text>
                         </Group>
 
-                        {conn.mode === 'route-based' && (conn.tunnelAddresses ?? []).length > 0 && (
+                        {(conn.mode === 'route-based' || conn.mode === 'road-warrior') && (conn.tunnelAddresses ?? []).length > 0 && (
                           <Text size="xs" c="dimmed">
                             Tunnel addresses: <Text span ff="monospace" c="var(--mantine-color-text)">{(conn.tunnelAddresses ?? []).join(', ')}</Text>
                           </Text>
                         )}
-                        {conn.mode === 'policy-based' && (
+                        {(conn.mode === 'policy-based' || ((conn.localSubnets ?? []).length > 0 || (conn.remoteSubnets ?? []).length > 0)) && (
                           <Text size="xs" c="dimmed">
                             Subnets: <Text span ff="monospace" c="var(--mantine-color-text)">
-                              {(conn.localSubnets ?? []).join(', ') || '—'} ↔ {(conn.remoteSubnets ?? []).join(', ') || '—'}
+                              {(conn.localSubnets ?? []).join(', ') || '0.0.0.0/0, ::/0'} ↔ {conn.mode === 'road-warrior' ? 'dynamic' : ((conn.remoteSubnets ?? []).join(', ') || '0.0.0.0/0, ::/0')}
                             </Text>
                           </Text>
                         )}
@@ -638,7 +641,7 @@ export function IPsecScreen({ api, session, onSaved, onSessionLost }: IPsecScree
                               <Badge size="xs" color="yellow" variant="light">Not applied</Badge>
                             ) : establishedCount > 0 ? (
                               <Badge size="xs" color="green" variant="light">
-                                {establishedCount} {establishedCount === 1 ? 'SA established' : 'SAs established'}
+                                {plural(establishedCount, 'SA')} established
                               </Badge>
                             ) : (
                               <Badge size="xs" color="gray" variant="light">Idle</Badge>
@@ -843,22 +846,16 @@ function IPsecModal({
   function handleModeChange(nextMode: IPsecMode) {
     setMode(nextMode);
     if (nextMode === 'road-warrior') {
-      if (!existing) {
-        setRemoteAddress('%any');
-      }
+      if (!remoteAddress.trim()) setRemoteAddress('%any');
       setStartAction('none');
-      if (!ifname.trim()) setIfname(nextIfname(allConnections));
-      if (xfrmIfId === '') setXfrmIfId(nextXfrmIfId(allConnections));
-    } else if (nextMode === 'route-based') {
-      if (!existing && remoteAddress === '%any') setRemoteAddress('');
-      if (!existing && startAction === 'none') setStartAction('trap');
-      if (!ifname.trim()) setIfname(nextIfname(allConnections));
-      if (xfrmIfId === '') setXfrmIfId(nextXfrmIfId(allConnections));
-      if (remoteType === 'eap-mschapv2') setRemoteType('psk');
     } else {
-      if (!existing && remoteAddress === '%any') setRemoteAddress('');
-      if (!existing && startAction === 'none') setStartAction('trap');
+      if (remoteAddress.trim() === '%any') setRemoteAddress('');
+      if (startAction === 'none') setStartAction('trap');
       if (remoteType === 'eap-mschapv2') setRemoteType('psk');
+    }
+    if (nextMode !== 'policy-based') {
+      if (!ifname.trim()) setIfname(nextIfname(allConnections));
+      if (xfrmIfId === '') setXfrmIfId(nextXfrmIfId(allConnections));
     }
   }
 
@@ -903,7 +900,8 @@ function IPsecModal({
       nextErrors.set('virtualPool', 'Enter at least one virtual IP pool CIDR for road-warrior clients.');
     }
     if (!trimmedLocalId) nextErrors.set('auth/localId', 'Enter a local IKE identity.');
-    if (usesPsk && !psk.trim() && !initial?.auth.pskRef?.isSet) {
+    const canKeepExistingPsk = Boolean(initial?.auth.pskRef?.isSet || (!enabled && initial?.auth.pskRef?.unresolved));
+    if (usesPsk && psk === '' && !canKeepExistingPsk) {
       nextErrors.set('auth/pskRef', 'Enter a pre-shared key.');
     }
     if (localType === 'cert' && !localCertId) {
@@ -928,8 +926,10 @@ function IPsecModal({
             break;
           }
           seenUsers.add(uname);
-          const canKeepExisting = u.existing?.username === uname && u.existing.passwordRef?.isSet;
-          if (!u.password.trim() && !canKeepExisting) {
+          const canKeepExisting =
+            u.existing?.username === uname
+            && Boolean(u.existing.passwordRef?.isSet || (!enabled && u.existing.passwordRef?.unresolved));
+          if (u.password === '' && !canKeepExisting) {
             nextErrors.set('auth/eapUsers', `Enter a password for EAP user "${uname}".`);
             break;
           }
@@ -969,7 +969,7 @@ function IPsecModal({
       mode,
       ...(usesXfrm ? { ifname: trimmedIfname, xfrmIfId: parsedXfrmId } : {}),
       ...(zone ? { zone } : {}),
-      ...(mode === 'route-based' && parsedTunnelAddrs.length > 0 ? { tunnelAddresses: parsedTunnelAddrs } : {}),
+      ...(usesXfrm && parsedTunnelAddrs.length > 0 ? { tunnelAddresses: parsedTunnelAddrs } : {}),
       ...(localSegment ? { localSegment } : {}),
       ...(localAddress.trim() ? { localAddress: localAddress.trim() } : {}),
       remoteAddress: mode === 'road-warrior' ? (remoteAddress.trim() || '%any') : remoteAddress.trim(),
@@ -986,10 +986,10 @@ function IPsecModal({
         ...(remoteType === 'cert' && caId ? { caId } : {}),
         ...(remoteType === 'eap-mschapv2' ? { eapUsers: eapPayload } : {}),
       },
-      ...(mode === 'policy-based' || (mode === 'road-warrior' && parsedLocalSubnets.length > 0)
-        ? { localSubnets: parsedLocalSubnets }
+      ...(mode === 'policy-based' || parsedLocalSubnets.length > 0 ? { localSubnets: parsedLocalSubnets } : {}),
+      ...(mode === 'policy-based' || (mode === 'route-based' && parsedRemoteSubnets.length > 0)
+        ? { remoteSubnets: parsedRemoteSubnets }
         : {}),
-      ...(mode === 'policy-based' ? { remoteSubnets: parsedRemoteSubnets } : {}),
       ...(mode === 'road-warrior' ? { virtualPool: parsedVirtualPool } : {}),
       dpdDelaySeconds: parsedDpd,
       startAction: mode === 'road-warrior' ? 'none' : startAction,
@@ -1150,7 +1150,7 @@ function IPsecModal({
                 onChange={(e) => setRemoteAddress(e.currentTarget.value)}
               />
 
-              {mode === 'route-based' && (
+              {usesXfrm && (
                 <Textarea
                   label="Tunnel addresses (optional)"
                   description="IPv4 or IPv6 interface CIDRs assigned to the XFRM interface (one per line or comma-separated)."
@@ -1165,14 +1165,14 @@ function IPsecModal({
                 />
               )}
 
-              {mode === 'policy-based' && (
+              {(mode === 'policy-based' || mode === 'route-based') && (
                 <Group grow align="flex-start">
                   <Textarea
-                    label="Local subnets"
-                    description="Local CIDRs exposed through the tunnel."
+                    label={mode === 'policy-based' ? 'Local subnets' : 'Local traffic selectors (optional)'}
+                    description={mode === 'policy-based' ? 'Local CIDRs exposed through the tunnel.' : 'Leave empty for 0.0.0.0/0, ::/0.'}
                     placeholder="10.0.0.0/24"
                     classNames={{ input: 'mono-input' }}
-                    required
+                    required={mode === 'policy-based'}
                     autosize
                     minRows={2}
                     maxRows={4}
@@ -1181,11 +1181,11 @@ function IPsecModal({
                     onChange={(e) => setLocalSubnets(e.currentTarget.value)}
                   />
                   <Textarea
-                    label="Remote subnets"
-                    description="Remote CIDRs reachable through the tunnel."
+                    label={mode === 'policy-based' ? 'Remote subnets' : 'Remote traffic selectors (optional)'}
+                    description={mode === 'policy-based' ? 'Remote CIDRs reachable through the tunnel.' : 'Leave empty for 0.0.0.0/0, ::/0.'}
                     placeholder="10.20.0.0/24"
                     classNames={{ input: 'mono-input' }}
-                    required
+                    required={mode === 'policy-based'}
                     autosize
                     minRows={2}
                     maxRows={4}
@@ -1415,11 +1415,7 @@ function IPsecModal({
                   label="Start action"
                   allowDeselect={false}
                   disabled={mode === 'road-warrior'}
-                  data={[
-                    { value: 'trap', label: 'On demand (trap)' },
-                    { value: 'start', label: 'Initiate on start' },
-                    { value: 'none', label: 'Responder only (none)' },
-                  ]}
+                  data={(Object.entries(startActionLabels) as Array<[IPsecStartAction, string]>).map(([value, label]) => ({ value, label }))}
                   value={mode === 'road-warrior' ? 'none' : startAction}
                   error={errors.get('startAction')}
                   onChange={(val) => {

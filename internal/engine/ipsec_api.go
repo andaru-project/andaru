@@ -58,23 +58,13 @@ func (a *ipsecAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 }
 
-type ipsecChildStatus struct {
-	Name     string   `json:"name"`
-	State    string   `json:"state"`
-	LocalTS  []string `json:"localTs"`
-	RemoteTS []string `json:"remoteTs"`
-	BytesIn  uint64   `json:"bytesIn"`
-	BytesOut uint64   `json:"bytesOut"`
-	RekeySec int64    `json:"rekeySec"`
-}
-
 type ipsecSAStatus struct {
-	UniqueID       string             `json:"uniqueId"`
-	State          string             `json:"state"`
-	LocalHost      string             `json:"localHost"`
-	RemoteHost     string             `json:"remoteHost"`
-	EstablishedSec int64              `json:"establishedSec"`
-	ChildSAs       []ipsecChildStatus `json:"childSAs"`
+	UniqueID       string                    `json:"uniqueId"`
+	State          string                    `json:"state"`
+	LocalHost      string                    `json:"localHost"`
+	RemoteHost     string                    `json:"remoteHost"`
+	EstablishedSec int64                     `json:"establishedSec"`
+	ChildSAs       []generation.IPsecChildSA `json:"childSAs"`
 }
 
 type ipsecStatus struct {
@@ -113,10 +103,11 @@ func (a *ipsecAPI) statusView(w http.ResponseWriter, r *http.Request) {
 			if sa.Name != c.ID {
 				continue
 			}
-			s := ipsecSAStatus{UniqueID: sa.UniqueID, State: sa.State, LocalHost: sa.LocalHost, RemoteHost: sa.RemoteHost, EstablishedSec: sa.EstablishedSec, ChildSAs: []ipsecChildStatus{}}
-			for _, child := range sa.ChildSAs {
-				s.ChildSAs = append(s.ChildSAs, ipsecChildStatus(child))
+			children := sa.ChildSAs
+			if children == nil {
+				children = []generation.IPsecChildSA{}
 			}
+			s := ipsecSAStatus{UniqueID: sa.UniqueID, State: sa.State, LocalHost: sa.LocalHost, RemoteHost: sa.RemoteHost, EstablishedSec: sa.EstablishedSec, ChildSAs: children}
 			item.Active = item.Active || sa.State == "ESTABLISHED"
 			item.IKESAs = append(item.IKESAs, s)
 		}

@@ -204,6 +204,9 @@ func (r Realizer) Teardown(ctx context.Context) error {
 		}
 	}
 	if p.Live == nil {
+		if err := r.cleanupIPsecOnTeardownIfPresent(ctx); err != nil {
+			return err
+		}
 		return r.cleanupAddonsOnTeardownIfPresent(ctx)
 	}
 	// Paths only, so a live generation whose stored files are damaged still comes off.

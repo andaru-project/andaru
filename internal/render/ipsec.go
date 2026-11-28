@@ -2,7 +2,10 @@ package render
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/pem"
 	"fmt"
 	"slices"
 	"strings"
@@ -13,11 +16,6 @@ const IPsecDir = "/run/andaru-ipsec/"
 
 // IPsecConfig is the swanctl.conf of the enabled IPsec connections.
 const IPsecConfig = IPsecDir + "swanctl.conf"
-
-type ipsecRef struct {
-	Secret     string `json:"secret"`
-	Unresolved bool   `json:"unresolved"`
-}
 
 type ipsecConnection struct {
 	ID              string   `json:"id"`
@@ -33,16 +31,16 @@ type ipsecConnection struct {
 	Proposals       []string `json:"proposals"`
 	ESPProposals    []string `json:"espProposals"`
 	Auth            struct {
-		LocalType   string    `json:"localType"`
-		RemoteType  string    `json:"remoteType"`
-		LocalID     string    `json:"localId"`
-		RemoteID    string    `json:"remoteId"`
-		PSKRef      *ipsecRef `json:"pskRef"`
-		LocalCertID string    `json:"localCertId"`
-		CAID        string    `json:"caId"`
+		LocalType   string     `json:"localType"`
+		RemoteType  string     `json:"remoteType"`
+		LocalID     string     `json:"localId"`
+		RemoteID    string     `json:"remoteId"`
+		PSKRef      *secretRef `json:"pskRef"`
+		LocalCertID string     `json:"localCertId"`
+		CAID        string     `json:"caId"`
 		EAPUsers    []struct {
-			Username    string   `json:"username"`
-			PasswordRef ipsecRef `json:"passwordRef"`
+			Username    string    `json:"username"`
+			PasswordRef secretRef `json:"passwordRef"`
 		} `json:"eapUsers"`
 	} `json:"auth"`
 	LocalSubnets    []string `json:"localSubnets"`
@@ -55,16 +53,58 @@ type ipsecConnection struct {
 
 func (c ipsecConnection) xfrm() bool { return c.Mode == "route-based" || c.Mode == "road-warrior" }
 
-// ipsecs are the enabled connections, with the reqid each policy-based one's kernel policies carry: 100 and up, in
-// the declaration's order, so the packet filter names the same policies swanctl.conf installs.
+func swanAuth(t string) string {
+	if t == "cert" {
+		return "pubkey"
+	}
+	return t
+}
+
+// ipsecReqid returns a deterministic, collision-free policy-based reqid derived from the connection's ID, well above
+// charon's auto-allocated range so adding, removing or toggling another connection never shifts this one's reqid.
+func ipsecReqid(id string, used map[int]bool) int {
+	const base = 100_000
+	const span = 2_000_000_000
+	sum := sha256.Sum256([]byte(id))
+	n := base + int(binary.BigEndian.Uint32(sum[:4])%span)
+	for used[n] {
+		n++
+		if n >= base+span {
+			n = base
+		}
+	}
+	used[n] = true
+	return n
+}
+
+// SplitPEMCertificates splits a PEM bundle into individual normalized CERTIFICATE PEM blocks.
+// strongSwan reads only the first PEM block from each file in x509/ and x509ca/, so intermediate CA chains must
+// be written one certificate per file under x509ca/.
+func SplitPEMCertificates(pemData string) []string {
+	var out []string
+	rest := []byte(pemData)
+	for {
+		var blk *pem.Block
+		blk, rest = pem.Decode(rest)
+		if blk == nil {
+			break
+		}
+		out = append(out, strings.TrimRight(string(pem.EncodeToMemory(blk)), "\n")+"\n")
+	}
+	return out
+}
+
+// ipsecs are the enabled connections, with the deterministic reqid each policy-based one's kernel policies carry,
+// so the packet filter names the same policies swanctl.conf installs.
 func (r *renderer) ipsecs() (out []ipsecConnection, reqids map[string]int) {
 	reqids = map[string]int{}
+	used := map[int]bool{}
 	for _, c := range r.d.VPN.IPsec {
 		if !c.Enabled || c.xfrm() && r.taken(c.Ifname, "xfrm") {
 			continue
 		}
 		if !c.xfrm() {
-			reqids[c.ID] = 100 + len(reqids)
+			reqids[c.ID] = ipsecReqid(c.ID, used)
 		}
 		out = append(out, c)
 	}
@@ -74,21 +114,24 @@ func (r *renderer) ipsecs() (out []ipsecConnection, reqids map[string]int) {
 // ipsec renders each enabled connection's XFRM interface and, when any is enabled, swanctl.conf with the credentials
 // it names. The interface's routes are networkd's: charon installs none (install_routes_xfrmi = no).
 func (r *renderer) ipsec() {
-	conns, reqids := r.ipsecs()
-	for i, c := range r.d.VPN.IPsec {
-		if c.Enabled && c.xfrm() && r.taken(c.Ifname, "xfrm") {
-			r.find("error", "NAME_COLLISION", fmt.Sprintf("/vpn/ipsec/%d/ifname", i), "Another device already has the interface name "+c.Ifname+".")
-		}
-	}
-	if len(conns) == 0 {
-		return
-	}
 	var connections, pools, secrets, shown []string
 	secret := false
 	credentials := map[string]bool{}
-	for _, c := range conns {
-		i := slices.IndexFunc(r.d.VPN.IPsec, func(x ipsecConnection) bool { return x.ID == c.ID })
+	usedReqids := map[int]bool{}
+	for i, c := range r.d.VPN.IPsec {
+		if !c.Enabled {
+			continue
+		}
 		path := fmt.Sprintf("/vpn/ipsec/%d", i)
+		if c.xfrm() && r.taken(c.Ifname, "xfrm") {
+			r.find("error", "NAME_COLLISION", path+"/ifname", "Another device already has the interface name "+c.Ifname+".")
+			continue
+		}
+		if c.LocalSegment != "" {
+			if s, ok := r.segmentByID(c.LocalSegment); !ok || !r.usable[s.Link] {
+				r.find("error", "DEPENDENCY_UNAVAILABLE", path+"/localSegment", "Local segment "+c.LocalSegment+" is unavailable; enable its link or clear localSegment.")
+			}
+		}
 		if c.xfrm() {
 			r.xfrmInterface(c, path)
 		}
@@ -103,6 +146,9 @@ func (r *renderer) ipsec() {
 		if c.DPDDelaySeconds != nil && *c.DPDDelaySeconds > 0 {
 			conn = append(conn, fmt.Sprintf("dpd_delay = %ds", *c.DPDDelaySeconds))
 		}
+		if c.NATTraversal != nil && !*c.NATTraversal {
+			conn = append(conn, "mobike = no")
+		}
 		if c.xfrm() {
 			conn = append(conn, fmt.Sprintf("if_id_in = %d", c.XFRMIfID), fmt.Sprintf("if_id_out = %d", c.XFRMIfID))
 		}
@@ -115,11 +161,11 @@ func (r *renderer) ipsec() {
 		if len(poolNames) > 0 {
 			conn = append(conn, "pools = "+strings.Join(poolNames, ","))
 		}
-		local := []string{"auth = " + map[string]string{"psk": "psk", "cert": "pubkey"}[c.Auth.LocalType], "id = " + quote(c.Auth.LocalID)}
+		local := []string{"auth = " + swanAuth(c.Auth.LocalType), "id = " + quote(c.Auth.LocalID)}
 		if c.Auth.LocalType == "cert" {
 			local = append(local, "certs = "+r.ipsecCertificate(c.Auth.LocalCertID, path, credentials))
 		}
-		remote := []string{"auth = " + map[string]string{"psk": "psk", "cert": "pubkey", "eap-mschapv2": "eap-mschapv2"}[c.Auth.RemoteType]}
+		remote := []string{"auth = " + swanAuth(c.Auth.RemoteType)}
 		if c.Auth.RemoteID != "" {
 			remote = append(remote, "id = "+quote(c.Auth.RemoteID))
 		}
@@ -144,14 +190,22 @@ func (r *renderer) ipsec() {
 		if len(c.ESPProposals) > 0 {
 			child = append(child, "esp_proposals = "+strings.Join(c.ESPProposals, ","))
 		}
-		if reqid, ok := reqids[c.ID]; ok {
-			child = append(child, fmt.Sprintf("reqid = %d", reqid))
+		if !c.xfrm() {
+			child = append(child, fmt.Sprintf("reqid = %d", ipsecReqid(c.ID, usedReqids)))
 		}
-		child = append(child, "start_action = "+c.StartAction, "dpd_action = "+map[string]string{"trap": "trap", "start": "restart", "none": "clear"}[c.StartAction])
+		startAction := c.StartAction
+		if startAction == "" {
+			if c.Mode == "road-warrior" {
+				startAction = "none"
+			} else {
+				startAction = "trap"
+			}
+		}
+		child = append(child, "start_action = "+startAction, "dpd_action = "+map[string]string{"trap": "trap", "start": "restart", "none": "clear"}[startAction])
 		conn = append(conn, block("local", local...), block("remote", remote...), block("children", block(c.ID, child...)))
 		connections = append(connections, block(c.ID, conn...))
 
-		add := func(name, field string, ref ipsecRef, ids ...string) {
+		add := func(name, field string, ref secretRef, ids ...string) {
 			secret = true
 			value, ok := r.in.Secrets[ref.Secret]
 			if !ok || ref.Unresolved {
@@ -172,6 +226,9 @@ func (r *renderer) ipsec() {
 		for j, u := range c.Auth.EAPUsers {
 			add(fmt.Sprintf("eap-%s-%d", c.ID, j), fmt.Sprintf("/auth/eapUsers/%d/passwordRef", j), u.PasswordRef, "id = "+quote(u.Username))
 		}
+	}
+	if len(connections) == 0 {
+		return
 	}
 	head := "# Generated by Andaru; swanctl --load-all --clear --file " + IPsecConfig + " loads it.\n"
 	conf := func(secrets []string) string {
@@ -213,7 +270,8 @@ func (r *renderer) xfrmInterface(c ipsecConnection, path string) {
 	r.file(base+".network", "0644", ini(append(sections, static...)...), sources)
 }
 
-// ipsecCertificate renders a local certificate with its chain, and its key, once, and returns the certificate's path.
+// ipsecCertificate renders a local leaf certificate in x509/, each intermediate chain certificate as its own file in
+// x509ca/ (strongSwan reads only the first PEM block per file), and its private key in private/, once.
 func (r *renderer) ipsecCertificate(id, path string, done map[string]bool) string {
 	file := IPsecDir + "x509/" + id + ".pem"
 	if done[file] {
@@ -226,11 +284,10 @@ func (r *renderer) ipsecCertificate(id, path string, done map[string]bool) strin
 		return file
 	}
 	c := r.d.PKI.Certificates[i]
-	pem := strings.TrimRight(c.CertPEM, "\n") + "\n"
-	if strings.TrimSpace(c.ChainPEM) != "" {
-		pem += strings.TrimRight(c.ChainPEM, "\n") + "\n"
+	r.file(file, "0644", strings.TrimRight(c.CertPEM, "\n")+"\n", []string{"/pki"})
+	for n, blk := range SplitPEMCertificates(c.ChainPEM) {
+		r.file(fmt.Sprintf("%sx509ca/%s-chain-%d.pem", IPsecDir, id, n), "0644", blk, []string{"/pki"})
 	}
-	r.file(file, "0644", pem, []string{"/pki"})
 	key, ok := r.in.CertificateKeys[id]
 	if !ok {
 		r.find("error", "SECRET_UNAVAILABLE", path+"/auth/localCertId", "The private key of certificate "+id+" is not available; set it before applying.")
@@ -295,15 +352,3 @@ func block(name string, lines ...string) string {
 
 // quote is a swanctl.conf string; validation keeps quotes, braces and backslashes out of what it quotes.
 func quote(s string) string { return `"` + s + `"` }
-
-// ipsecPolicies are, by zone, the reqids of its policy-based connections: their traffic arrives and leaves on an
-// uplink, so what puts it in its zone is the kernel policy it matches.
-func ipsecPolicies(conns []ipsecConnection, reqids map[string]int) map[string][]int {
-	out := map[string][]int{}
-	for _, c := range conns {
-		if reqid, ok := reqids[c.ID]; ok {
-			out[c.Zone] = append(out[c.Zone], reqid)
-		}
-	}
-	return out
-}

@@ -605,10 +605,7 @@ func realized(value json.RawMessage) []byte {
 		vpn.WireGuard = slices.DeleteFunc(vpn.WireGuard, disabled)
 		vpn.IPsec = slices.DeleteFunc(vpn.IPsec, disabled)
 		secretBinding := func(raw json.RawMessage) json.RawMessage {
-			var ref struct {
-				Secret     string `json:"secret"`
-				Unresolved bool   `json:"unresolved,omitempty"`
-			}
+			var ref secretReference
 			if json.Unmarshal(raw, &ref) != nil || ref.Secret == "" {
 				return raw
 			}
@@ -766,8 +763,14 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 			}
 		}
 		realizedWireGuardSecrets(&state.Config, state.Secrets, result.Secrets)
-		realizedIPsecSecrets(&state.Config, state.Secrets, result.Secrets, &result.CertificateKeys)
 		certs := certificateIndex(&state.Config)
+		addCertKey := func(id, key string) {
+			if result.CertificateKeys == nil {
+				result.CertificateKeys = map[string]string{}
+			}
+			result.CertificateKeys[id] = key
+		}
+		realizedIPsecSecrets(&state.Config, state.Secrets, certs, result.Secrets, addCertKey)
 		for i := range state.Config.Addons {
 			a := &state.Config.Addons[i]
 			if !a.Enabled {
@@ -775,10 +778,7 @@ func (s *Store) realizationInput(ctx context.Context, version *Version, held boo
 			}
 			for _, id := range addonCertificateRefs(a) {
 				if c, ok := certs[id]; ok && !c.KeyRef.Unresolved {
-					if result.CertificateKeys == nil {
-						result.CertificateKeys = map[string]string{}
-					}
-					result.CertificateKeys[id] = state.Secrets.Scopes["core"][c.KeyRef.Secret].Value
+					addCertKey(id, state.Secrets.Scopes["core"][c.KeyRef.Secret].Value)
 				}
 			}
 			scoped := state.Secrets.Scopes[addonSecretScope(a.ID)]

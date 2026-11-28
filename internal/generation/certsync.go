@@ -83,7 +83,7 @@ func (s CertSync) Validate() error {
 		}
 	}
 	for name := range s.IPsec {
-		if !ipsecCredential.MatchString(ipsecDir+"/"+name) || strings.HasPrefix(name, "x509ca/") {
+		if !ipsecCredential.MatchString(ipsecDir + "/" + name) {
 			return fmt.Errorf("cert-sync: invalid IPsec credential %q", name)
 		}
 	}
@@ -274,17 +274,37 @@ func writeOwned(path string, data []byte, uid, gid int, labelFrom string) (bool,
 	return true, syncDir(filepath.Dir(path))
 }
 
-// syncIPsecCertificates rewrites the IPsec certificates and keys that changed, while a generation runs strongSwan, and
-// has a running charon load them again.
+// syncIPsecCertificates rewrites IPsec leaf certs, intermediate chains, CAs, and private keys that changed while a
+// generation runs strongSwan, persists a reload-pending marker across transient failures, and reloads strongSwan with
+// swanctl --load-all --clear so updated local.certs and CA chains take effect without dropping live SAs.
 func (r Realizer) syncIPsecCertificates(ctx context.Context, files map[string]string) error {
 	if len(files) == 0 {
 		return nil
 	}
-	if _, err := os.Lstat(r.Root + ipsecConf); errors.Is(err, fs.ErrNotExist) {
-		return nil
+	if _, err := os.Lstat(r.Root + ipsecConf); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", ipsecConf, err)
+	}
+	for _, dir := range []string{ipsecDir, ipsecDir + "/x509", ipsecDir + "/x509ca", ipsecDir + "/private"} {
+		info, err := os.Lstat(r.Root + dir)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("stat %s: %w", dir, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("cert-sync: %s is not a real directory", dir)
+		}
 	}
 	changed := false
+	syncedCertIDs := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(files)) {
+		if rest, ok := strings.CutPrefix(name, "x509/"); ok && strings.HasSuffix(rest, ".pem") {
+			syncedCertIDs[strings.TrimSuffix(rest, ".pem")] = true
+		}
 		path, mode := r.Root+ipsecDir+"/"+name, fs.FileMode(0o644)
 		if strings.HasPrefix(name, "private/") {
 			mode = 0o400
@@ -300,17 +320,47 @@ func (r Realizer) syncIPsecCertificates(ctx context.Context, files map[string]st
 		}
 		changed = true
 	}
-	if !changed {
+	// Remove stale intermediate chain files when a synced certificate's chain shrank.
+	if len(syncedCertIDs) > 0 {
+		entries, err := os.ReadDir(r.Root + ipsecDir + "/x509ca")
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if idx := strings.Index(name, "-chain-"); idx > 0 {
+				certID := name[:idx]
+				rel := "x509ca/" + name
+				if syncedCertIDs[certID] && files[rel] == "" {
+					if err := os.Remove(r.Root + ipsecDir + "/" + rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+						return err
+					}
+					changed = true
+				}
+			}
+		}
+	}
+	pendingPath := r.Root + ipsecReloadPending
+	_, pendingErr := os.Lstat(pendingPath)
+	reloadPending := pendingErr == nil
+	if !changed && !reloadPending {
 		return nil
 	}
 	if err := r.ipsecCredentialDirs(ctx); err != nil {
 		return err
 	}
 	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", strongswanUnit); err != nil {
+		_ = os.Remove(pendingPath)
 		return nil // a charon that starts later loads them itself
 	}
-	if _, err := r.Run(ctx, swanctl, "--load-creds", "--file", ipsecConf, "--noprompt"); err != nil {
+	if err := writeAtomic(pendingPath, []byte("1\n"), 0o600); err != nil {
+		return fmt.Errorf("mark IPsec reload pending: %w", err)
+	}
+	if _, err := r.Run(ctx, swanctl, "--load-all", "--clear", "--file", ipsecConf, "--noprompt"); err != nil {
 		return fmt.Errorf("reload the IPsec credentials: %w", err)
+	}
+	if err := os.Remove(pendingPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	return nil
 }

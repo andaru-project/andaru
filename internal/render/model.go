@@ -10,6 +10,11 @@ import (
 )
 
 // The structs below decode the public snapshot JSON; the served JSON Schema is the contract.
+type secretRef struct {
+	Secret     string `json:"secret"`
+	Unresolved bool   `json:"unresolved"`
+}
+
 type link struct {
 	ID                 string   `json:"id"`
 	Kind               string   `json:"kind"`
@@ -31,11 +36,8 @@ type link struct {
 	TransmitHashPolicy string   `json:"transmitHashPolicy"`
 	LLDP               string   `json:"lldp"`
 	EmitLLDP           string   `json:"emitLldp"`
-	Username           string   `json:"username"`
-	Password           *struct {
-		Secret     string `json:"secret"`
-		Unresolved bool   `json:"unresolved"`
-	} `json:"password"`
+	Username           string     `json:"username"`
+	Password           *secretRef `json:"password"`
 	// Offloads holds only the offloads the operator set; the device default stands for the rest.
 	Offloads map[string]bool `json:"offloads"`
 }

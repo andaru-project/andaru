@@ -649,25 +649,21 @@ func prepareChangesWithCatalog(current *savedState, input Changes, next Version,
 				}
 				reference := map[string]any{"secret": name}
 				if pw["unresolved"] == true && !setting { // a set resolves it
-					// Only a restore leaves a channel's or add-on's secret unresolved, which a client may echo back
+					// Only a restore leaves a secret unresolved, which a client may echo back
 					// unchanged; a new unresolved one would skip secret checks.
-					if op.Collection == "notifications.channels" && !heldUnresolved(before[key], f.path, name) {
-						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A notification channel's secret must be set or exist.")
+					unresolvedLabel := map[string]string{
+						"notifications.channels": "A notification channel's secret",
+						"addons":                 "An add-on secret",
+						"vpn.wireguard":          "A WireGuard key",
+						"vpn.ipsec":              "An IPsec secret",
+					}[op.Collection]
+					if unresolvedLabel == "" && slices.Contains(pkiCollections, op.Collection) {
+						unresolvedLabel = "A private key"
+					} else if unresolvedLabel == "" && slices.Contains(acmeCollections, op.Collection) {
+						unresolvedLabel = "An ACME secret"
 					}
-					if op.Collection == "addons" && !heldUnresolved(before[key], f.path, name) {
-						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "An add-on secret must be set or exist.")
-					}
-					if slices.Contains(pkiCollections, op.Collection) && !heldUnresolved(before[key], f.path, name) {
-						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A private key must be set or exist.")
-					}
-					if slices.Contains(acmeCollections, op.Collection) && !heldUnresolved(before[key], f.path, name) {
-						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "An ACME secret must be set or exist.")
-					}
-					if op.Collection == "vpn.wireguard" && !heldUnresolved(before[key], f.path, name) {
-						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A WireGuard key must be set or exist.")
-					}
-					if op.Collection == "vpn.ipsec" && !heldUnresolved(before[key], f.path, name) {
-						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "An IPsec secret must be set or exist.")
+					if unresolvedLabel != "" && !heldUnresolved(before[key], f.path, name) {
+						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), unresolvedLabel+" must be set or exist.")
 					}
 					reference["unresolved"] = true
 				}
@@ -1100,6 +1096,10 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 	case "vpn.ipsec":
 		resolve(v, "zone")
 		resolve(v, "localSegment")
+		if auth, ok := v["auth"].(map[string]any); ok {
+			resolve(auth, "localCertId")
+			resolve(auth, "caId")
+		}
 	}
 	if col == "segments" {
 		resolve(v, "link")

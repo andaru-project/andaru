@@ -355,14 +355,17 @@ func TestIPsecUnresolvedApply(t *testing.T) {
 			t.Errorf("%s: blocked at %q", c.name, got)
 		}
 	}
-	into, keys := map[string]string{}, map[string]string(nil)
+	into, keys := map[string]string{}, map[string]string{}
+	addKey := func(id, key string) { keys[id] = key }
 	secrets := secretDocument{Scopes: map[string]map[string]secretEntry{"core": {"P": {Value: "p"}, "E": {Value: "e"}, "K": {Value: "k"}}}}
-	realizedIPsecSecrets(d(true, false, false, false), secrets, into, &keys)
+	enabledDecl := d(true, false, false, false)
+	realizedIPsecSecrets(enabledDecl, secrets, certificateIndex(enabledDecl), into, addKey)
 	if into["P"] != "p" || into["E"] != "e" || keys[ipsCrt] != "k" {
 		t.Fatalf("realized %v %v", into, keys)
 	}
-	into, keys = map[string]string{}, nil
-	realizedIPsecSecrets(d(false, false, false, false), secrets, into, &keys)
+	into, keys = map[string]string{}, map[string]string{}
+	disabledDecl := d(false, false, false, false)
+	realizedIPsecSecrets(disabledDecl, secrets, certificateIndex(disabledDecl), into, addKey)
 	if len(into)+len(keys) != 0 {
 		t.Fatalf("a disabled connection's secrets are realized: %v %v", into, keys)
 	}
@@ -398,7 +401,7 @@ func TestIPsecSameRealization(t *testing.T) {
 
 func TestKeptRecoveryKeepsIPsec(t *testing.T) {
 	psk := ipsecConn(map[string]any{"auth": authWith(map[string]any{"pskRef": map[string]any{"secret": "IPSEC_A", "isSet": true, "version": "3"}})})
-	warrior := warriorConn(map[string]any{"id": ipsB, "name": "road", "auth": authWith(map[string]any{"remoteType": "eap-mschapv2", "pskRef": map[string]any{"secret": "IPSEC_W", "isSet": true, "version": "3"},
+	warrior := warriorConn(map[string]any{"id": ipsB, "name": "road", "auth": authWith(map[string]any{"localId": "rw.example.com", "remoteType": "eap-mschapv2", "pskRef": map[string]any{"secret": "IPSEC_W", "isSet": true, "version": "3"},
 		"eapUsers": []any{map[string]any{"username": "alice", "passwordRef": map[string]any{"secret": "IPSEC_ALICE", "isSet": true, "version": "3"}}}})})
 	cert := policyConn(map[string]any{"id": "ips_00000003-0000-4000-8000-000000000003", "name": "branch", "auth": authWith(map[string]any{"localType": "cert", "remoteType": "cert", "pskRef": nil, "localCertId": ipsCrt, "caId": ipsCA})})
 	d := ipsecPKI(t, ipsecFixture(t, psk, warrior, cert))
@@ -430,7 +433,7 @@ func TestKeptRecoveryKeepsIPsec(t *testing.T) {
 func TestIPsecRebasedCollisions(t *testing.T) {
 	s := seededState(t)
 	create := func(id, name, ifname string, xfrm int, next Version) {
-		body := `{"name":"` + name + `","enabled":true,"mode":"route-based","ifname":"` + ifname + `","xfrmIfId":` + strconv.Itoa(xfrm) + `,"zone":"` + lanZone + `","remoteAddress":"198.51.100.7","ikeVersion":2,"auth":{"localType":"psk","remoteType":"psk","localId":"gw","pskRef":{"secret":"P_` + name + `","set":"k","expectedVersion":"0"}}}`
+		body := `{"name":"` + name + `","enabled":true,"mode":"route-based","ifname":"` + ifname + `","xfrmIfId":` + strconv.Itoa(xfrm) + `,"zone":"` + lanZone + `","remoteAddress":"198.51.100.7","ikeVersion":2,"auth":{"localType":"psk","remoteType":"psk","localId":"gw-` + name + `","pskRef":{"secret":"P_` + name + `","set":"k","expectedVersion":"0"}}}`
 		c, _ := ObjectChange("create", "vpn.ipsec", "", nil, []byte(body))
 		_ = c.AssignID(0, id)
 		p, err := prepareChanges(&s, c, next, fixedTime)
@@ -443,13 +446,94 @@ func TestIPsecRebasedCollisions(t *testing.T) {
 	create(ipsB, "b", "ipsec1", 2, "9")
 	vA := s.Versions[objectKey{"vpn.ipsec", ipsA}].Version
 	for field, body := range map[string]string{
-		"/ifname":   `{"name":"a","enabled":true,"mode":"route-based","ifname":"ipsec1","xfrmIfId":1,"zone":"` + lanZone + `","remoteAddress":"198.51.100.7","ikeVersion":2,"auth":{"localType":"psk","remoteType":"psk","localId":"gw","pskRef":{}}}`,
-		"/xfrmIfId": `{"name":"a","enabled":true,"mode":"route-based","ifname":"ipsec0","xfrmIfId":2,"zone":"` + lanZone + `","remoteAddress":"198.51.100.7","ikeVersion":2,"auth":{"localType":"psk","remoteType":"psk","localId":"gw","pskRef":{}}}`,
+		"/ifname":   `{"name":"a","enabled":true,"mode":"route-based","ifname":"ipsec1","xfrmIfId":1,"zone":"` + lanZone + `","remoteAddress":"198.51.100.7","ikeVersion":2,"auth":{"localType":"psk","remoteType":"psk","localId":"gw-a","pskRef":{}}}`,
+		"/xfrmIfId": `{"name":"a","enabled":true,"mode":"route-based","ifname":"ipsec0","xfrmIfId":2,"zone":"` + lanZone + `","remoteAddress":"198.51.100.7","ikeVersion":2,"auth":{"localType":"psk","remoteType":"psk","localId":"gw-a","pskRef":{}}}`,
 	} {
 		c, _ := ObjectChange("replace", "vpn.ipsec", ipsA, &vA, []byte(body))
 		_, err := prepareChanges(&s, c, "10", fixedTime)
 		if f := requireFault(t, err, "VALIDATION_FAILED"); len(f.Details) != 1 || f.Details[0].Path != field {
 			t.Fatalf("%s: %+v", field, f)
 		}
+	}
+}
+
+func TestIPsecSecurityValidation(t *testing.T) {
+	base := func() *declaration {
+		return &declaration{
+			Zones: []zone{{identity: identity{ID: lanZone, Name: "lan"}}},
+			VPN: vpnSettings{IPsec: []ipsecConnection{{
+				identity:      identity{ID: ipsA, Name: "site-a"},
+				Enabled:       true,
+				Mode:          "route-based",
+				Ifname:        "ipsec0",
+				XFRMIfID:      1,
+				Zone:          lanZone,
+				RemoteAddress: "198.51.100.1",
+				IKEVersion:    2,
+				Auth: ipsecAuth{
+					LocalType:  "psk",
+					RemoteType: "psk",
+					LocalID:    "gw.example.com",
+					RemoteID:   "peer-a.example.com",
+					PSKRef:     &secretReference{Secret: "P_A"},
+				},
+			}}},
+		}
+	}
+	// Weak/deprecated IKE & ESP proposals rejected.
+	for _, prop := range []string{"3des-md5-modp1024", "aes128-sha1-modp2048", "blowfish128-sha256-ecp256", "null-sha256", "aes256--ecp256", "aes256-sha256-modp768"} {
+		d := base()
+		d.VPN.IPsec[0].Proposals = []string{prop}
+		if errs := validateIPsec(d); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/0/proposals/0" {
+			t.Errorf("weak IKE proposal %q accepted: %+v", prop, errs)
+		}
+		d2 := base()
+		d2.VPN.IPsec[0].ESPProposals = []string{prop}
+		if errs := validateIPsec(d2); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/0/espProposals/0" {
+			t.Errorf("weak ESP proposal %q accepted: %+v", prop, errs)
+		}
+	}
+	// Strong modern proposals accepted.
+	dGood := base()
+	dGood.VPN.IPsec[0].Proposals = []string{"aes256gcm16-prfsha384-ecp384", "chacha20poly1305-prfsha256-curve25519"}
+	dGood.VPN.IPsec[0].ESPProposals = []string{"aes256gcm16-ecp384-esn"}
+	if errs := validateIPsec(dGood); len(errs) != 0 {
+		t.Fatalf("modern proposals rejected: %+v", errs)
+	}
+	// Unusable virtualPool prefixes rejected.
+	for _, badPool := range []string{"0.0.0.0/0", "::/0", "127.0.0.0/8", "224.0.0.0/4", "fe80::/64"} {
+		d := base()
+		d.VPN.IPsec[0].Mode = "road-warrior"
+		d.VPN.IPsec[0].RemoteAddress = "%any"
+		d.VPN.IPsec[0].VirtualPool = []string{badPool}
+		if errs := validateIPsec(d); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/0/virtualPool/0" {
+			t.Errorf("bad virtualPool %q accepted: %+v", badPool, errs)
+		}
+	}
+	// Cross-connection PSK (localId, remoteId) collision with distinct secrets rejected.
+	dPSK := base()
+	dup := dPSK.VPN.IPsec[0]
+	dup.ID, dup.Name, dup.Ifname, dup.XFRMIfID = ipsB, "site-b", "ipsec1", 2
+	dup.Auth.PSKRef = &secretReference{Secret: "P_B"}
+	dPSK.VPN.IPsec = append(dPSK.VPN.IPsec, dup)
+	if errs := validateIPsec(dPSK); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/1/auth/remoteId" {
+		t.Errorf("PSK identity collision accepted: %+v", errs)
+	}
+	// Cross-connection EAP username collision rejected.
+	dEAP := base()
+	dEAP.VPN.IPsec[0].Mode = "road-warrior"
+	dEAP.VPN.IPsec[0].RemoteAddress = "%any"
+	dEAP.VPN.IPsec[0].VirtualPool = []string{"10.99.0.0/24"}
+	dEAP.VPN.IPsec[0].Auth.RemoteType = "eap-mschapv2"
+	dEAP.VPN.IPsec[0].Auth.RemoteID = ""
+	dEAP.VPN.IPsec[0].Auth.EAPUsers = []ipsecEAPUser{{Username: "alice", PasswordRef: secretReference{Secret: "E1"}}}
+	rw2 := dEAP.VPN.IPsec[0]
+	rw2.ID, rw2.Name, rw2.Ifname, rw2.XFRMIfID = ipsB, "rw-2", "ipsec1", 2
+	rw2.Auth.LocalID = "gw2.example.com"
+	rw2.Auth.PSKRef = &secretReference{Secret: "P_B"}
+	rw2.Auth.EAPUsers = []ipsecEAPUser{{Username: "alice", PasswordRef: secretReference{Secret: "E2"}}}
+	dEAP.VPN.IPsec = append(dEAP.VPN.IPsec, rw2)
+	if errs := validateIPsec(dEAP); len(errs) == 0 || errs[0].Path != "/vpn/ipsec/1/auth/eapUsers/0/username" {
+		t.Errorf("cross-connection EAP username collision accepted: %+v", errs)
 	}
 }

@@ -38,6 +38,7 @@ connections {
 		version = 2
 		local_addrs = 203.0.113.2
 		remote_addrs = branch.example.net
+		mobike = no
 		local {
 			auth = pubkey
 			id = "CN=gw.example.com"
@@ -52,7 +53,7 @@ connections {
 			ips_00000002-0000-4000-8000-000000000002 {
 				local_ts = 192.0.2.0/24
 				remote_ts = 10.30.0.0/16,fd00:30::/64
-				reqid = 100
+				reqid = 1084142763
 				start_action = start
 				dpd_action = restart
 			}
@@ -140,6 +141,7 @@ connections {
 		version = 2
 		local_addrs = 203.0.113.2
 		remote_addrs = branch.example.net
+		mobike = no
 		local {
 			auth = pubkey
 			id = "CN=gw.example.com"
@@ -154,7 +156,7 @@ connections {
 			ips_00000002-0000-4000-8000-000000000002 {
 				local_ts = 192.0.2.0/24
 				remote_ts = 10.30.0.0/16,fd00:30::/64
-				reqid = 100
+				reqid = 1084142763
 				start_action = start
 				dpd_action = restart
 			}
@@ -214,11 +216,13 @@ secrets {
 -----BEGIN CERTIFICATE-----
 TEVBRgo=
 -----END CERTIFICATE-----
+
+### /run/andaru-ipsec/x509ca/ca_00000001-0000-4000-8000-000000000001.pem 0644 secret=false sources=/pki
 -----BEGIN CERTIFICATE-----
 Q0EK
 -----END CERTIFICATE-----
 
-### /run/andaru-ipsec/x509ca/ca_00000001-0000-4000-8000-000000000001.pem 0644 secret=false sources=/pki
+### /run/andaru-ipsec/x509ca/crt_00000001-0000-4000-8000-000000000001-chain-0.pem 0644 secret=false sources=/pki
 -----BEGIN CERTIFICATE-----
 Q0EK
 -----END CERTIFICATE-----
@@ -366,7 +370,7 @@ IPv6AcceptRA=no
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:d4300ef5c78f3da00186f813f759e081a87753ca31843e75c9efa2f6c695d268"
+	comment "sha256:6910c3eb5a2a652c4660ffedf8ec1b36227b0726081343e0edb4439801532477"
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set zon_00000003_0000_4000_8000_000000000003 { type ifname; elements = { "ipsec0", "ipsec1" }; }
@@ -387,20 +391,23 @@ table inet andaru {
 		iifname @uplinks ip protocol esp accept
 		iifname @uplinks ip6 nexthdr esp accept
 		iifname @uplinks udp dport { 500, 4500 } accept
-		iifname @zon_00000004_0000_4000_8000_000000000004 icmp type { echo-request } accept comment "rul_00000003-0000-4000-8000-000000000003"
-		meta ipsec exists ipsec in reqid 100 icmp type { echo-request } accept comment "rul_00000003-0000-4000-8000-000000000003"
+		meta ipsec exists ipsec in reqid 1084142763 meta mark set meta mark | 0x10000000
+		meta mark & 0x10000000 == 0 iifname @zon_00000004_0000_4000_8000_000000000004 icmp type { echo-request } accept comment "rul_00000003-0000-4000-8000-000000000003"
+		meta ipsec exists ipsec in reqid 1084142763 icmp type { echo-request } accept comment "rul_00000003-0000-4000-8000-000000000003"
 	}
 	chain forward {
 		type filter hook forward priority filter; policy drop;
 		ct state established,related accept
 		ct state invalid drop
-		iifname @zon_00000003_0000_4000_8000_000000000003 oifname @zon_00000002_0000_4000_8000_000000000002 accept comment "rul_00000001-0000-4000-8000-000000000001"
-		iifname @zon_00000002_0000_4000_8000_000000000002 oifname @zon_00000004_0000_4000_8000_000000000004 accept comment "rul_00000002-0000-4000-8000-000000000002"
-		iifname @zon_00000002_0000_4000_8000_000000000002 ipsec out reqid 100 accept comment "rul_00000002-0000-4000-8000-000000000002"
+		meta ipsec exists ipsec in reqid 1084142763 meta mark set meta mark | 0x10000000
+		ipsec out reqid 1084142763 meta mark set meta mark | 0x20000000
+		meta mark & 0x10000000 == 0 iifname @zon_00000003_0000_4000_8000_000000000003 meta mark & 0x20000000 == 0 oifname @zon_00000002_0000_4000_8000_000000000002 accept comment "rul_00000001-0000-4000-8000-000000000001"
+		meta mark & 0x10000000 == 0 iifname @zon_00000002_0000_4000_8000_000000000002 meta mark & 0x20000000 == 0 oifname @zon_00000004_0000_4000_8000_000000000004 accept comment "rul_00000002-0000-4000-8000-000000000002"
+		meta mark & 0x10000000 == 0 iifname @zon_00000002_0000_4000_8000_000000000002 ipsec out reqid 1084142763 accept comment "rul_00000002-0000-4000-8000-000000000002"
 	}
 	chain postrouting {
 		type nat hook postrouting priority srcnat;
-		ipsec out reqid 100 accept
+		ipsec out reqid 1084142763 accept
 		fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade
 	}
 }
