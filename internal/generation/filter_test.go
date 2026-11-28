@@ -40,6 +40,7 @@ func (b *bench) lastIndex(prefix string) int {
 
 func TestActivateLoadsFilterFirst(t *testing.T) {
 	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, ipv4Forwarding), "0\n")
 	id := b.gen(filtered(one, "aa"))
 	var told []string // the state each time Activating was called
 	b.r.Activating = func(got int) { told = append(told, fmt.Sprint(got, " ", b.read(got).State.State)) }
@@ -55,12 +56,50 @@ func TestActivateLoadsFilterFirst(t *testing.T) {
 	if b.net.table != "sha256:aa" || b.read(id).State.State != Awaiting {
 		t.Fatalf("table %q state %+v", b.net.table, b.read(id).State)
 	}
-	// networkd's per-interface IPv6Forwarding= does not route IPv6; only the global switch does.
-	if b.forwarding() != "1\n" {
-		t.Fatalf("IPv6 forwarding %q with the filter loaded", b.forwarding())
+	// Both global IPv4 and IPv6 forwarding switches must be enabled while table inet andaru is loaded
+	// so unmanaged add-on interfaces (e.g. tailscale0) forward without needing container sysctl writes.
+	v4, _ := os.ReadFile(filepath.Join(b.net.root, ipv4Forwarding))
+	if b.forwarding() != "1\n" || string(v4) != "1\n" {
+		t.Fatalf("forwarding v6=%q v4=%q with the filter loaded, want 1", b.forwarding(), v4)
 	}
 	if b.exists(netDir + "/andaru") {
 		t.Fatal("the filter entry was placed as a file")
+	}
+}
+
+func TestLoadFilterRevertsIPv4ForwardingWhenIPv6Fails(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		initialV4 string
+		wantV4    string
+	}{
+		{name: "reverts newly enabled ipv4 forwarding", initialV4: "0\n", wantV4: "0\n"},
+		{name: "preserves already active ipv4 forwarding", initialV4: "1\n", wantV4: "1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t)
+			writeFile(t, filepath.Join(b.net.root, ipv4Forwarding), tc.initialV4)
+			v6Path := filepath.Join(b.net.root, ipv6Forwarding)
+			if err := os.Remove(v6Path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(v6Path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			id := b.gen(filtered(one, "aa"))
+			g := b.read(id)
+			path, comment, ok, err := b.r.filter(g)
+			if err != nil || !ok {
+				t.Fatalf("filter(%d): ok=%v err=%v", id, ok, err)
+			}
+			if err := b.r.loadFilter(t.Context(), path, comment); err == nil {
+				t.Fatal("expected loadFilter error when ipv6Forwarding write fails")
+			}
+			v4, _ := os.ReadFile(filepath.Join(b.net.root, ipv4Forwarding))
+			if string(v4) != tc.wantV4 {
+				t.Fatalf("ipv4Forwarding = %q after ipv6Forwarding failure, want %q", v4, tc.wantV4)
+			}
+		})
 	}
 }
 

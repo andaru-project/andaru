@@ -667,7 +667,6 @@ func (a *addonsAPI) beginAddonAudit(w http.ResponseWriter, r *http.Request, acti
 		if err := a.coordinator.audits.Finish(auditCtx, audit.Outcome{
 			OperationID: opID,
 			Result:      result,
-			Target:      slug,
 		}); err != nil {
 			slog.Warn("addons: finish audit outcome", "action", action, "slug", slug, "operationId", opID, "error", err)
 		}

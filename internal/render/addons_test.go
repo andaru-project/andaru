@@ -263,9 +263,10 @@ func TestRenderAddonBlockingFindingsAndNoBusMountWhenDenied(t *testing.T) {
 			sec = `{"secret":"auth_key","unresolved":true}`
 		}
 		return json.RawMessage(`{
-			"links": [],
-			"segments": [],
-			"zones": [{"id":"zon_vpn"}],
+			"links": [{"id":"lnk_lan","kind":"ethernet","enabled":true,"permanentMac":"02:00:00:00:00:01"}],
+			"segments": [{"id":"seg_lan","link":"lnk_lan","zone":"zon_lan","addressing":{"ipv4":{"mode":"static","addresses":["192.168.10.1/24"]}}}],
+			"zones": [{"id":"zon_lan"},{"id":"zon_vpn"}],
+			"management": {"segment":"seg_lan"},
 			"addons": [{
 				"id": "org.andaru.tailscale",
 				"enabled": ` + en + `,
@@ -275,9 +276,10 @@ func TestRenderAddonBlockingFindingsAndNoBusMountWhenDenied(t *testing.T) {
 			}]
 		}`)
 	}
+	links := []host.LinkStatus{{IfIndex: 2, Name: "eth0", LinkType: "ether", MTU: 1500, OperState: "UP", PermanentAddress: "02:00:00:00:00:01"}}
 
 	// Disabled add-on renders no files and emits no staging/secret findings.
-	disabledRes, err := Network(Input{Declaration: baseDecl(false, true), Catalog: cat, Facts: allFacts})
+	disabledRes, err := Network(Input{Declaration: baseDecl(false, true), Links: links, Catalog: cat, Facts: allFacts})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +293,7 @@ func TestRenderAddonBlockingFindingsAndNoBusMountWhenDenied(t *testing.T) {
 	}
 
 	// Enabled add-on with missing Podman, unstaged image, and unresolved secret emits all 3 blocking findings.
-	blockedRes, err := Network(Input{Declaration: baseDecl(true, true), Catalog: cat, Facts: allFacts})
+	blockedRes, err := Network(Input{Declaration: baseDecl(true, true), Links: links, Catalog: cat, Facts: allFacts})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,6 +316,7 @@ func TestRenderAddonBlockingFindingsAndNoBusMountWhenDenied(t *testing.T) {
 	facts.StagedImages = []string{renderTestTailscaleDigest}
 	okRes, err := Network(Input{
 		Declaration:  baseDecl(true, false),
+		Links:        links,
 		AddonSecrets: map[string]map[string]string{"org.andaru.tailscale": {"auth_key": "ok"}},
 		Catalog:      cat,
 		Facts:        facts,
@@ -361,7 +364,7 @@ func TestRenderAddonHardeningNewlineLiteralEnvEntrypointAndHealthCmd(t *testing.
 		wantPath string
 	}{
 		{name: "env newline", settings: `{"hostname": "good\nINJECTED=evil"}`, wantPath: "/addons/0/settings/hostname"},
-		{name: "arg newline", settings: `{"tags": ["ok\n[Service]\nExecStart=/bin/sh"]}`, wantPath: "/addons/0/settings/tags"},
+		{name: "arg newline", settings: `{"tags": ["ok\n[Service]\nExecStart=/bin/sh"]}`, wantPath: "/addons/0/settings/tags/0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			decl := json.RawMessage(`{"links":[],"segments":[],"zones":[{"id":"zon_vpn"}],"addons":[{"id":"org.andaru.tailscale","enabled":true,"settings":` + tc.settings + `}]}`)

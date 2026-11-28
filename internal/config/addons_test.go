@@ -1,7 +1,13 @@
 package config
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/andaru-project/andaru/internal/addon"
 )
 
 func TestValidSecretScope(t *testing.T) {
@@ -95,5 +101,109 @@ func TestValidateBackupDocumentsRejectsSecretWriteInAddonSettings(t *testing.T) 
 	raw := []byte(`{"schemaVersion":4,"links":[],"segments":[],"zones":[],"addons":[{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":"auth_key","set":"plaintext"}}}]}`)
 	if err := ValidateBackupDocuments(RestoreDocuments{Configuration: raw}); err == nil {
 		t.Fatal("expected ValidateBackupDocuments to reject plaintext secret write in restored add-on settings")
+	}
+}
+
+func TestShippedTailscaleCatalogConfigValidation(t *testing.T) {
+	catalogDir := filepath.Join("..", "..", "image", "files", "usr", "share", "andaru", "addons")
+	if _, err := os.Stat(catalogDir); errors.Is(err, os.ErrNotExist) {
+		t.Skip("no source tree:", err)
+	}
+	cat, err := addon.LoadCatalog(catalogDir)
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	zoneID := "zon_01234567-89ab-4def-8123-456789abcdef"
+
+	// Enabled without required tailscale0 zone binding must be rejected.
+	dNoZone := &declaration{
+		Zones: []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{{
+			ID:      "org.andaru.tailscale",
+			Enabled: true,
+		}},
+	}
+	if errs := validateAddonsAgainstCatalog(cat, dNoZone, nil, nil); len(errs) == 0 {
+		t.Fatal("expected rejection when enabled Tailscale has no zone bound to tailscale0")
+	}
+
+	// Enabled with zone bound succeeds and materializes default routingMode with --netfilter-mode=off.
+	dValid := &declaration{
+		Zones: []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{{
+			ID:         "org.andaru.tailscale",
+			Enabled:    true,
+			Interfaces: []addonInterface{{Name: "tailscale0", Zone: zoneID}},
+		}},
+	}
+	if errs := validateAddonsAgainstCatalog(cat, dValid, nil, nil); len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %+v", errs)
+	}
+	rm, ok := addon.ToStringSlice(dValid.Addons[0].Settings["routingMode"])
+	const wantDefaultRouting = "--netfilter-mode=off --accept-routes=false --advertise-exit-node=false"
+	if !ok || len(rm) != 1 || rm[0] != wantDefaultRouting {
+		t.Fatalf("materialized routingMode = %#v, want [%s]", dValid.Addons[0].Settings["routingMode"], wantDefaultRouting)
+	}
+
+	// Invalid CIDR in advertiseRoutes must be rejected.
+	dBadCIDR := &declaration{
+		Zones: []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{{
+			ID:         "org.andaru.tailscale",
+			Enabled:    true,
+			Settings:   map[string]any{"advertiseRoutes": []string{"not-a-cidr"}},
+			Interfaces: []addonInterface{{Name: "tailscale0", Zone: zoneID}},
+		}},
+	}
+	if errs := validateAddonsAgainstCatalog(cat, dBadCIDR, nil, nil); len(errs) == 0 {
+		t.Fatal("expected rejection for invalid advertiseRoutes CIDR")
+	}
+
+	// Backup restoration must validate cataloged enabled add-ons fail-closed without mutating input,
+	// while still permitting retired/disabled add-ons and schema upgrades (ownSecrets=true).
+	current := &savedState{
+		Version:  "1",
+		Config:   declaration{SchemaVersion: 4},
+		Versions: map[objectKey]objectVersion{},
+		Secrets:  emptySecrets(),
+	}
+	for _, badRouting := range []any{[]string{}, []string{"--netfilter-mode=on"}} {
+		badDecl := &declaration{
+			SchemaVersion: 4,
+			Zones:         []zone{{ID: zoneID, Name: "VPN"}},
+			Addons: []addonConfig{{
+				ID:         "org.andaru.tailscale",
+				Enabled:    true,
+				Settings:   map[string]any{"routingMode": badRouting},
+				Interfaces: []addonInterface{{Name: "tailscale0", Zone: zoneID}},
+			}},
+		}
+		if _, _, err := prepareRestoration(current, decodedBackup{configuration: badDecl}, "2", time.Now().UTC(), cat, nil); err == nil {
+			t.Fatalf("prepareRestoration unexpectedly accepted hostile routingMode %#v", badRouting)
+		}
+	}
+	// Cross-version backup with a retired/unknown add-on and a disabled add-on restores cleanly.
+	crossVer := &declaration{
+		SchemaVersion: 4,
+		Zones:         []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{
+			{ID: "org.andaru.retired", Enabled: true},
+			{ID: "org.andaru.tailscale", Enabled: false, Settings: map[string]any{"routingMode": []string{"--netfilter-mode=on"}}},
+		},
+	}
+	if _, _, err := prepareRestoration(current, decodedBackup{configuration: crossVer}, "2", time.Now().UTC(), cat, nil); err != nil {
+		t.Fatalf("prepareRestoration rejected retired/disabled add-ons in backup: %v", err)
+	}
+	// Schema upgrade (ownSecrets=true) must never deadlock on retired or manifest-changed add-ons.
+	upgradeDecl := &declaration{
+		SchemaVersion: 4,
+		Zones:         []zone{{ID: zoneID, Name: "VPN"}},
+		Addons: []addonConfig{
+			{ID: "org.andaru.retired", Enabled: true},
+			{ID: "org.andaru.tailscale", Enabled: true, Settings: map[string]any{"routingMode": []string{"--netfilter-mode=on"}}},
+		},
+	}
+	if _, _, err := prepareRestoration(current, decodedBackup{configuration: upgradeDecl, ownSecrets: true}, "2", time.Now().UTC(), cat, nil); err != nil {
+		t.Fatalf("prepareRestoration(ownSecrets=true) deadlocked upgrade: %v", err)
 	}
 }
