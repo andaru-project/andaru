@@ -361,3 +361,76 @@ it('allows addons.read-only users to view detail and logs with zero /api/v1/conf
   const calledUrls = fetchMock.mock.calls.map(([input]) => String(input));
   expect(calledUrls.some((url) => url.startsWith('/api/v1/config'))).toBe(false);
 });
+
+it('loads managed certificates and saves certificate-reference properties as plain cert IDs', async () => {
+  const user = userEvent.setup();
+  let savedPayload: unknown;
+  const detail = makeDetail();
+  detail.manifest.properties = [
+    { name: 'tlsCert', type: 'certificate-reference', required: true, title: 'TLS Certificate' },
+  ];
+  detail.saved = { id: 'org.andaru.sample', enabled: true, settings: {} };
+
+  fetchRoutes({
+    '/api/v1/addons/sample': detail,
+    '/api/v1/addons/sample/logs/runtime?lines=200': { name: 'runtime', format: 'text', lines: [], truncated: false },
+    '/api/v1/config/zones': { state: 'saved', savedVersion: '1', items: [] },
+    '/api/v1/config/addons/org.andaru.sample': { state: 'saved', savedVersion: '1', version: '3', value: detail.saved },
+    '/api/v1/config/pki/certificates': {
+      state: 'saved',
+      savedVersion: '1',
+      items: [
+        {
+          state: 'saved',
+          savedVersion: '1',
+          version: '1',
+          value: {
+            id: 'crt_edge',
+            name: 'Edge TLS',
+            subject: 'CN=edge.example.com',
+            serial: '01',
+            fingerprintSha256: '1234',
+            notBefore: '2026-01-01T00:00:00Z',
+            notAfter: '2027-01-01T00:00:00Z',
+            certPem: '-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----',
+            keyRef: { secret: 'crt_edge', isSet: true, version: '1' },
+            keyAlgorithm: 'ecdsa-p256',
+          },
+        },
+      ],
+    },
+    'PUT /api/v1/config/addons/org.andaru.sample': (init) => {
+      savedPayload = JSON.parse(String(init?.body ?? '{}'));
+      return { state: 'saved', savedVersion: '2', version: '4', value: savedPayload };
+    },
+  });
+
+  render(
+    <MemoryRouter initialEntries={['/system/addons/sample']}>
+      <Routes>
+        <Route
+          path="/system/addons/:slug"
+          element={
+            <AddonDetailScreen
+              api={new ApiClient('csrf-tok')}
+              session={session(['addons.read', 'addons.manage', 'configuration.read', 'configuration.write'])}
+              onSaved={() => {}}
+              onSessionLost={noopSessionLost}
+            />
+          }
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  const select = await screen.findByLabelText(/^TLS Certificate/, { selector: 'input' });
+  await user.click(select);
+  await user.click(await screen.findByRole('option', { name: /Edge TLS/ }));
+  await user.click(screen.getByRole('button', { name: 'Save settings' }));
+
+  await vi.waitFor(() => expect(savedPayload).toMatchObject({
+    id: 'org.andaru.sample',
+    enabled: true,
+    settings: { tlsCert: 'crt_edge' },
+  }));
+});

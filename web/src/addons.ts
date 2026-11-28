@@ -101,6 +101,7 @@ export function initialPropertyDraft(
         values[prop.name] = stringArray(raw, prop.default).join('\n');
         break;
       case 'zone-reference':
+      case 'certificate-reference':
         values[prop.name] = typeof raw === 'string' ? raw : '';
         break;
       case 'secret-reference':
@@ -175,7 +176,8 @@ export function buildSettingsPayload(
         }
         break;
       }
-      case 'zone-reference': {
+      case 'zone-reference':
+      case 'certificate-reference': {
         const id = typeof draft.values[prop.name] === 'string' ? (draft.values[prop.name] as string).trim() : '';
         if (id) settings[prop.name] = id;
         break;

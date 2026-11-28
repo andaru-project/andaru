@@ -521,6 +521,78 @@ export interface Zone {
 export interface ManagementConfig {
   segment: string;
   allowedSources?: string[];
+  certificate?: string;
+}
+
+export type PkiKeyAlgorithm = 'ecdsa-p256' | 'ecdsa-p384' | 'rsa-2048' | 'rsa-4096';
+
+export interface PKICA {
+  id: string;
+  name: string;
+  subject: string;
+  serial: string;
+  fingerprintSha256: string;
+  notBefore: string;
+  notAfter: string;
+  certPem: string;
+  keyRef?: SecretView;
+}
+
+export interface PKICertificate {
+  id: string;
+  name: string;
+  caId?: string;
+  subject: string;
+  sans?: string[];
+  serial: string;
+  fingerprintSha256: string;
+  notBefore: string;
+  notAfter: string;
+  certPem: string;
+  chainPem?: string;
+  keyRef: SecretView;
+  keyAlgorithm: PkiKeyAlgorithm;
+}
+
+export interface TlsCryptKey {
+  id: string;
+  name: string;
+  keyRef: SecretView;
+}
+
+export interface GenerateCARequest {
+  name: string;
+  commonName: string;
+  organization?: string;
+  keyAlgorithm: PkiKeyAlgorithm;
+  validDays: number;
+  parentCaId?: string;
+}
+
+export interface GenerateCertificateRequest {
+  name: string;
+  caId: string;
+  commonName: string;
+  sans?: string[];
+  usage: 'server' | 'client' | 'both';
+  keyAlgorithm: PkiKeyAlgorithm;
+  validDays: number;
+}
+
+export interface ImportCertificateRequest {
+  name: string;
+  certPem: string;
+  chainPem?: string;
+  privateKeyPem: string;
+}
+
+export interface GenerateTlsCryptKeyRequest {
+  name: string;
+}
+
+export interface PemDownload {
+  blob: Blob;
+  filename: string;
 }
 
 export interface Snapshot {
@@ -536,6 +608,11 @@ export interface Snapshot {
     dhcp6?: Dhcp6Entry[];
     dns?: DnsService;
     virtualAddresses?: VirtualAddress[];
+    pki?: {
+      cas?: PKICA[];
+      certificates?: PKICertificate[];
+      tlsCryptKeys?: TlsCryptKey[];
+    };
     aliases?: {
       addresses: Array<Partial<AddressAlias> & { id: string; name: string }>;
       ports: Array<Partial<PortAlias> & { id: string; name: string }>;
@@ -969,7 +1046,8 @@ export type AddonPropertyType =
   | 'enum'
   | 'string-list'
   | 'zone-reference'
-  | 'secret-reference';
+  | 'secret-reference'
+  | 'certificate-reference';
 
 export interface AddonProperty {
   name: string;

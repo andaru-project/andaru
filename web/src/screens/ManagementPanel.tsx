@@ -16,7 +16,14 @@ interface ManagementPanelProps {
   onSessionLost(): void;
 }
 
-const fieldPattern = /^\/(?:management\/)?(segment|allowedSources)(?:\/|$)/;
+const fieldPattern = /^\/(?:management\/)?(segment|allowedSources|certificate)(?:\/|$)/;
+
+function CertificatesLink({ children }: { children: string }) {
+  const inRouter = useInRouterContext();
+  return inRouter
+    ? <Anchor component={Link} to="/system/certificates" size="sm">{children}</Anchor>
+    : <Anchor href="/system/certificates" size="sm">{children}</Anchor>;
+}
 
 function AliasesLink({ children }: { children: string }) {
   const inRouter = useInRouterContext();
@@ -57,6 +64,7 @@ interface ManagementEditorProps {
 function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh, onAbandoned, onSessionLost }: ManagementEditorProps) {
   const [segmentId, setSegmentId] = useState(initial?.value.segment ?? '');
   const [allowedSources, setAllowedSources] = useState<string[]>(() => Array.from(new Set(initial?.value.allowedSources ?? [])));
+  const [certificateId, setCertificateId] = useState(initial?.value.certificate ?? '');
   const [errors, setErrors] = useState(new Map<string, string>());
   const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
@@ -87,6 +95,13 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
   const addressOptions = (snapshot.value.aliases?.addresses ?? [])
     .filter((a) => !isDynamicAddressAlias(a) || allowedSources.includes(a.id))
     .map((a) => ({ value: a.id, label: a.name }));
+  const certificateOptions = (snapshot.value.pki?.certificates ?? []).map((cert) => ({
+    value: cert.id,
+    label: cert.subject ? `${cert.name} (${cert.subject})` : cert.name,
+  }));
+  if (certificateId && !certificateOptions.some((o) => o.value === certificateId)) {
+    certificateOptions.push({ value: certificateId, label: `${certificateId} (missing)` });
+  }
 
   const selectedSegment = snapshot.value.segments.find((s) => s.id === segmentId);
   const movingSegment = Boolean(initial?.value.segment && segmentId && initial.value.segment !== segmentId);
@@ -126,6 +141,7 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
     const payload: ManagementConfig = {
       segment: segmentId,
       ...(uniqueSources.length > 0 ? { allowedSources: uniqueSources } : {}),
+      ...(certificateId ? { certificate: certificateId } : {}),
     };
     try {
       await api.saveManagement(payload, initial?.version ?? '0');
@@ -226,6 +242,21 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
                 Need a new address alias?{' '}
                 <Anchor href="/firewall/aliases" target="_blank" rel="noopener noreferrer" size="xs">Open Firewall ▸ Aliases in a new tab</Anchor>.
               </Text>
+              <Select
+                label="HTTPS certificate"
+                description="Certificate served by the Andaru web UI. Leave empty to use the built-in self-signed bootstrap certificate. Changes take effect on Apply within the rollback window."
+                placeholder="Built-in bootstrap certificate"
+                searchable
+                clearable
+                data={certificateOptions}
+                value={certificateId || null}
+                error={errors.get('certificate')}
+                onChange={(value) => setCertificateId(value ?? '')}
+              />
+              <Text size="xs" c="dimmed">
+                Manage certificates under{' '}
+                <Anchor href="/system/certificates" target="_blank" rel="noopener noreferrer" size="xs">System ▸ Certificates</Anchor>.
+              </Text>
             </Stack>
           </Fieldset>
           <Group justify="flex-end" gap="xs" className="drawer-actions">
@@ -253,9 +284,11 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
   const segmentsById = new Map((snapshot?.value.segments ?? []).map((s) => [s.id, s]));
   const zonesById = new Map((snapshot?.value.zones ?? []).map((z) => [z.id, z]));
   const aliasesById = new Map((snapshot?.value.aliases?.addresses ?? []).map((a) => [a.id, a.name]));
+  const certificatesById = new Map((snapshot?.value.pki?.certificates ?? []).map((c) => [c.id, c]));
 
   const mgmtSegment = mgmt ? segmentsById.get(mgmt.segment) : undefined;
   const mgmtZone = mgmtSegment ? zonesById.get(mgmtSegment.zone) : undefined;
+  const mgmtCert = mgmt?.certificate ? certificatesById.get(mgmt.certificate) : undefined;
   const sources = mgmt?.allowedSources ?? [];
 
   async function openEditor() {
@@ -348,6 +381,17 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
                       <AliasesLink>Manage aliases</AliasesLink>
                     </>
                   )}
+                </Group>
+                <Group gap="xs" wrap="wrap">
+                  <Text size="sm" c="dimmed">HTTPS certificate:</Text>
+                  {!mgmt.certificate ? (
+                    <Text size="sm">Built-in bootstrap certificate</Text>
+                  ) : mgmtCert ? (
+                    <Text size="sm" fw={600}>{mgmtCert.name}</Text>
+                  ) : (
+                    <Text size="sm" className="error-text" ff="monospace">{mgmt.certificate} (missing)</Text>
+                  )}
+                  <CertificatesLink>Manage certificates</CertificatesLink>
                 </Group>
               </Stack>
             )}

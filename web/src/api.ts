@@ -26,7 +26,11 @@ import type {
   DynamicAliasStatus,
   ErrorDetail,
   Finding,
+  GenerateCARequest,
+  GenerateCertificateRequest,
+  GenerateTlsCryptKeyRequest,
   History,
+  ImportCertificateRequest,
   LeaseView,
   LinkStatus,
   LldpNeighbor,
@@ -37,9 +41,11 @@ import type {
   OneToOneNat,
   OrderedList,
   OutboundNat,
-  PortForward,
-  SetupBootstrapRequest,
+  PKICA,
+  PKICertificate,
   Page,
+  PemDownload,
+  PortForward,
   PrefixView,
   Preferences,
   Preview,
@@ -50,8 +56,10 @@ import type {
   SavedList,
   SavedObject,
   Session,
+  SetupBootstrapRequest,
   Snapshot,
   SystemInfo,
+  TlsCryptKey,
   Token,
   TokenIssueResponse,
   Traffic,
@@ -807,6 +815,93 @@ export class ApiClient {
       method: 'DELETE',
       headers: { 'If-Match': `"${id}.${version}"` },
     }, true);
+  }
+
+  pkiCAs() {
+    return this.request<SavedList<PKICA>>('/api/v1/config/pki/cas');
+  }
+
+  pkiCertificates() {
+    return this.request<SavedList<PKICertificate>>('/api/v1/config/pki/certificates');
+  }
+
+  pkiTlsCryptKeys() {
+    return this.request<SavedList<TlsCryptKey>>('/api/v1/config/pki/tls-crypt-keys');
+  }
+
+  generatePkiCA(body: GenerateCARequest) {
+    return this.request<SavedObject<PKICA>>('/api/v1/pki/cas/generate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  generatePkiCertificate(body: GenerateCertificateRequest) {
+    return this.request<SavedObject<PKICertificate>>('/api/v1/pki/certificates/generate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  importPkiCertificate(body: ImportCertificateRequest) {
+    return this.request<SavedObject<PKICertificate>>('/api/v1/pki/certificates/import', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  generatePkiTlsCryptKey(body: GenerateTlsCryptKeyRequest) {
+    return this.request<SavedObject<TlsCryptKey>>('/api/v1/pki/tls-crypt-keys/generate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  deletePkiCA(id: string, version: string) {
+    return this.request<void>(`/api/v1/config/pki/cas/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  deletePkiCertificate(id: string, version: string) {
+    return this.request<void>(`/api/v1/config/pki/certificates/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  deletePkiTlsCryptKey(id: string, version: string) {
+    return this.request<void>(`/api/v1/config/pki/tls-crypt-keys/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  async downloadPkiCAPem(id: string): Promise<PemDownload> {
+    const { blob, headers } = await this.requestBlob(
+      `/api/v1/pki/cas/${encodeURIComponent(id)}/pem`,
+      {},
+      false,
+      'application/x-pem-file',
+    );
+    return {
+      blob,
+      filename: filenameFromDisposition(headers.get('Content-Disposition'), `${id}.pem`),
+    };
+  }
+
+  async downloadPkiCertificatePem(id: string): Promise<PemDownload> {
+    const { blob, headers } = await this.requestBlob(
+      `/api/v1/pki/certificates/${encodeURIComponent(id)}/pem`,
+      {},
+      false,
+      'application/x-pem-file',
+    );
+    return {
+      blob,
+      filename: filenameFromDisposition(headers.get('Content-Disposition'), `${id}.pem`),
+    };
   }
 
   private async requestBlob(

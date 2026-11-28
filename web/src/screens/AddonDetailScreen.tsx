@@ -35,6 +35,7 @@ import type {
   AddonSavedBusGrants,
   AddonSavedEntry,
   AddonSavedInterface,
+  PKICertificate,
   SavedObject,
   Session,
   Zone,
@@ -53,6 +54,7 @@ interface LoadedAddonDetail {
   detail: AddonDetailResponse;
   savedObject?: SavedObject<AddonSavedEntry>;
   zones: Zone[];
+  certificates: PKICertificate[];
 }
 
 const busGrantOptions = [
@@ -84,16 +86,19 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
   const load = useCallback(async (): Promise<LoadedAddonDetail> => {
     const detail = await api.addon(slug);
     if (!canReadConfig) {
-      return { detail, zones: [] };
+      return { detail, zones: [], certificates: [] };
     }
-    const [zonesList, savedObject] = await Promise.all([
+    const needsCerts = (detail.manifest.properties ?? []).some((prop) => prop.type === 'certificate-reference');
+    const [zonesList, savedObject, certsList] = await Promise.all([
       api.zones(),
       detail.installed ? api.addonConfig(detail.id) : Promise.resolve(undefined),
+      needsCerts ? api.pkiCertificates() : Promise.resolve(undefined),
     ]);
     return {
       detail,
       savedObject,
       zones: zonesList.items.map((item) => item.value),
+      certificates: certsList?.items.map((item) => item.value) ?? [],
     };
   }, [api, slug, canReadConfig]);
 
@@ -521,6 +526,7 @@ export function AddonDetailScreen({ api, session, onSaved, onSessionLost }: Addo
                           properties={manifest.properties ?? []}
                           draft={propDraft}
                           zones={loaded?.zones ?? []}
+                          certificates={loaded?.certificates ?? []}
                           readOnly={!canWriteConfig || saving}
                           errors={propErrors}
                           onChange={setPropDraft}
